@@ -1,4 +1,4 @@
-SOURCES = types.vhd ray_sphere_intersect.vhd
+SOURCES = types.vhd util.vhd ray_sphere_intersect.vhd
 TESTBENCHES = ray_sphere_intersect_tb.vhd
 WAVEFORM = waveform.ghw
 

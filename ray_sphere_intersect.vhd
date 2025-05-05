@@ -14,6 +14,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 
 use work.types.all;
+use work.util.all;
 
 entity RaySphereIntersect is
     port (
@@ -25,60 +26,6 @@ entity RaySphereIntersect is
 end RaySphereIntersect;
 
 architecture behavioral of RaySphereIntersect is
-
-    pure function add(u : Vec3; v : Vec3) return Vec3 is
-    begin
-        return (
-            x => u.x + v.x,
-            y => u.y + v.y,
-            z => u.z + v.z
-        );
-    end function;
-
-    pure function sub(u : Vec3; v : Vec3) return Vec3 is
-    begin
-        return (
-            x => u.x - v.x,
-            y => u.y - v.y,
-            z => u.z - v.z
-        );
-    end function;
-
-    pure function dot(u : Vec3; v : Vec3) return real is
-    begin
-        return u.x * v.x + u.y * v.y + u.z * v.z;
-    end function;
-
-    pure function mul(s : real; v : Vec3) return Vec3 is
-    begin
-        return (
-            x => s * v.x,
-            y => s * v.y,
-            z => s * v.z
-        );
-    end function;
-
-    pure function norm(v : Vec3) return real is
-    begin
-        return sqrt(dot(v, v));
-    end function;
-
-    pure function normalize(v : Vec3) return Vec3 is
-        variable n : real;
-    begin
-        n := norm(v);
-        if n > 0.0 then
-            return mul(1.0 / n, v);
-        else
-            return v;
-        end if;
-    end function;
-
-    procedure print_vec3(v : Vec3) is
-    begin
-        report "(" & to_string(v.x) & ", " & to_string(v.y) & ", " & to_string(v.z) & ")";
-    end procedure;
-
 
 begin
 
@@ -97,6 +44,9 @@ begin
         variable normal : Vec3;
     
     begin
+        -- Only perform calculation once all inputs are initialized, otherwise
+        -- will lead to a bound check error due to uninitialized floats having
+        -- extremely large values.
         if rising_edge(clock) then
 
             -- vector from ray origin to sphere center
