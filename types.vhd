@@ -6,13 +6,27 @@ use ieee.math_real.all;
 
 package types is
 
+type Vector is record
+    x : real;
+    y : real;
+    z : real;
+    a : real;
+end record;
+
+constant VEC_ZERO : Vector := (
+    x => 0.0,
+    y => 0.0,
+    z => 0.0,
+    a => 0.0
+);
+
 type Vec3 is record
     x : real;
     y : real;
     z : real;
 end record;
 
-constant VEC_ZERO : Vec3 := (
+constant VEC3_ZERO : Vec3 := (
     x => 0.0,
     y => 0.0,
     z => 0.0

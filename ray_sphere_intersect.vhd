@@ -62,8 +62,8 @@ begin
             if discriminant < 0.0 then
                 data_out <= (
                     hit => '0',
-                    position => VEC_ZERO,
-                    normal => VEC_ZERO
+                    position => VEC3_ZERO,
+                    normal => VEC3_ZERO
                 );
             else
                 t1 := (-b - sqrt(discriminant)) / (2.0 * a);
@@ -87,8 +87,8 @@ begin
                 else
                     data_out <= (
                         hit => '0',
-                        position => VEC_ZERO,
-                        normal => VEC_ZERO
+                        position => VEC3_ZERO,
+                        normal => VEC3_ZERO
                     );
                 end if;
             end if;
