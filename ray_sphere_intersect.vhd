@@ -50,11 +50,24 @@ begin
         if rising_edge(clock) then
 
             -- vector from ray origin to sphere center
+            --  LDS.QW R0, ray_in.origin
+            --  LDS.QW R1, sphere_in.center
+            --  SUB R0, R1, R2
             oc := sub(ray_in.origin, sphere_in.center);
 
             -- quadratic equation coeffs
+            --  LDS.QW R3, ray_in.direction
+            --  DOT R3, R3, R4
             a := dot(ray_in.direction, ray_in.direction);
+
+            --  DOT R2, R3, R5
+            --  SCALEI 2.0, R5, R6
             b := 2.0 * dot(oc, ray_in.direction);
+
+            --  LDS.W sphere_in_radius, R7
+            --  MUL R7, R7, R7
+            --  DOT R2, R2, R2
+            --  SUB R2, R7, R7
             c := dot(oc, oc) - sphere_in.radius * sphere_in.radius;
 
             discriminant := b * b - 4.0 * a * c;

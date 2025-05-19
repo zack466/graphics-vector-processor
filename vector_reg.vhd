@@ -62,6 +62,13 @@ begin
         z => to_real(to_float(RegA(63 downto 32))),
         a => to_real(to_float(RegA(31 downto 0)))
     );
+
+    VecB <= (
+        x => to_real(to_float(RegB(127 downto 96))),
+        y => to_real(to_float(RegB(95 downto 64))),
+        z => to_real(to_float(RegB(63 downto 32))),
+        a => to_real(to_float(RegB(31 downto 0)))
+    );
     
     internal_array: entity work.RegArray
     generic map (

@@ -1,5 +1,5 @@
-SOURCES = types.vhd util.vhd reg.vhd vector_reg.vhd ray_sphere_intersect.vhd
-TESTBENCHES = ray_sphere_intersect_tb.vhd
+SOURCES = types.vhd util.vhd reg.vhd vector_reg.vhd ray_sphere_intersect.vhd core.vhd core_alu.vhd
+TESTBENCHES = ray_sphere_intersect_tb.vhd core_alu_tb.vhd
 WAVEFORM = waveform.ghw
 
 BUILDFLAGS = --std=08

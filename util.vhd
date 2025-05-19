@@ -16,6 +16,7 @@ package util is
     pure function normalize(v : Vec3) return Vec3;
     pure function cross(u : Vec3; v : Vec3) return Vec3;
     pure function vec3_to_string(v : Vec3) return string;
+    pure function vector_to_string(v : Vector) return string;
 
 end package util;
 
@@ -89,6 +90,11 @@ package body util is
     pure function vec3_to_string(v : Vec3) return string is
     begin
         return "(" & to_string(v.x) & ", " & to_string(v.y) & ", " & to_string(v.z) & ")";
+    end function;
+
+    pure function vector_to_string(v : Vector) return string is
+    begin
+        return "(" & to_string(v.x) & ", " & to_string(v.y) & ", " & to_string(v.z) & ", " & to_string(v.a) & ")";
     end function;
 
 
