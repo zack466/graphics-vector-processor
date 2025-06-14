@@ -21,13 +21,12 @@ entity Core is
         clock       : in  std_logic;    -- system clock
         reset       : in  std_logic;    -- system reset
 
-        -- Program data/address bus
-        program_ab  : out std_logic_vector(31 downto 0);
-        program_db  : in  std_logic_vector(31 downto 0);
-
         -- Data data/address bus + read/write signals
-        data_ab     : out std_logic_vector(31 downto 0);
-        data_db     : inout std_logic_vector(127 downto 0);
+        ab          : out std_logic_vector(31 downto 0);
+        db_in       : in  std_logic_vector(127 downto 0);
+        db_out      : out std_logic_vector(127 downto 0);
+        mem_rdy     : in  std_logic;
+
         rd          : out std_logic;
         wr          : out std_logic 
     );
@@ -38,31 +37,8 @@ end Core;
 
 architecture structural of Core is
 
-    signal VecIn      : Vector;
-    signal VecInSel   : integer  range NUM_REGS - 1 downto 0;
-    signal VecStore   : std_logic;
-    signal VecASel    : integer  range NUM_REGS - 1 downto 0;
-    signal VecBSel    : integer  range NUM_REGS - 1 downto 0;
-    signal VecA       : Vector;
-    signal VecB       : Vector;
-
 begin
 
-    registers: entity work.VectorRegArray
-    generic map (
-        regcnt => NUM_REGS
-    )
-    port map (
-        VecIn => VecIn,
-        VecInSel => VecInSel,
-        VecStore => VecStore,
-        VecASel => VecASel,
-        VecBSel => VecBSel,
-        clock => clock,
-        reset => reset,
-        VecA => VecA,
-        VecB => VecB
-    );
 
 end structural;
 

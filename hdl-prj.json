@@ -39,6 +39,10 @@
       "library": "work"
     },
     {
+      "file": "reg_tb.vhd",
+      "library": "work"
+    },
+    {
       "file": "types.vhd",
       "library": "work"
     },

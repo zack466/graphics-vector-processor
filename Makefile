@@ -1,6 +1,6 @@
-SOURCES = types.vhd util.vhd sdram.vhd reg.vhd vector_reg.vhd ray_sphere_intersect.vhd core.vhd core_alu.vhd fpu.vhd
-TESTBENCH_SOURCES = ray_sphere_intersect_tb.vhd core_alu_tb.vhd sdram_tb.vhd fpu_tb.vhd
-TESTBENCHES = ray_sphere_intersect_tb core_alu_tb sdram_agent_tb sdram_host_tb FloatAddSub_tb FloatMul_tb FPU_tb
+SOURCES = types.vhd util.vhd sdram.vhd reg.vhd ray_sphere_intersect.vhd core.vhd core_alu.vhd fpu.vhd
+TESTBENCH_SOURCES = ray_sphere_intersect_tb.vhd core_alu_tb.vhd sdram_tb.vhd fpu_tb.vhd reg_tb.vhd
+TESTBENCHES = ray_sphere_intersect_tb core_alu_tb sdram_agent_tb sdram_host_tb FloatAddSub_tb FloatMul_tb FPU_tb reg_tb
 WAVEFORM = waveform.ghw
 
 # Directory for build files
@@ -48,6 +48,6 @@ view:
 
 clean:
 	ghdl --clean --workdir=$(WORKDIR) --std=08
-	Rm -rf $(WORKDIR)
+	rm -rf $(WORKDIR)
 
 .PHONY: test test-all test-% clean build view
