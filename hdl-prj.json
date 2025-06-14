@@ -49,6 +49,18 @@
     {
       "file": "vector_reg.vhd",
       "library": "work"
+    },
+    {
+      "file": "sdram.vhd",
+      "library": "work"
+    },
+    {
+      "file": "fpu.vhd",
+      "library": "work"
+    },
+    {
+      "file": "fpu_tb.vhd",
+      "library": "work"
     }
   ]
 }
