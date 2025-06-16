@@ -5,7 +5,7 @@
 --
 --  Revision History:
 --     2025 Jun 02      Initial revision
---     2025 Jun 13      Testing full FPU
+--     2025 Jun 13      Testing full pipelined FPU
 --
 ------------------------------------------------------------------------------
 

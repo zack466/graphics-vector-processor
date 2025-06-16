@@ -51,10 +51,6 @@
       "library": "work"
     },
     {
-      "file": "vector_reg.vhd",
-      "library": "work"
-    },
-    {
       "file": "sdram.vhd",
       "library": "work"
     },

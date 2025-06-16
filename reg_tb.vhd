@@ -15,6 +15,9 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use std.textio.all;
 
+use work.types.all;
+use work.util.all;
+
 entity reg_tb is
 end reg_tb;
 
@@ -84,7 +87,7 @@ begin
         begin
             RegASel <= rn;
             RegBSel <= rm;
-            wait for 5 ns;  -- propagation delay
+            wait for 5 ns;  -- wait for signal to propagate
         end procedure;
 
         -- Write single register
@@ -106,7 +109,7 @@ begin
         ) is
         begin
             RegQSel <= q;
-            wait for 5 ns;  -- propagation delay
+            wait for 5 ns;  -- wait for signal to propagate
         end procedure;
 
         -- Write quad register
@@ -128,6 +131,8 @@ begin
         variable expected   : std_logic_vector(WORDSIZE - 1 downto 0);
         variable modified   : std_logic_vector(WORDSIZE - 1 downto 0);
 
+        variable vec : Vector;
+        variable temp : std_logic_vector(31 downto 0);
     begin
         -- Initialize control signals
         RegStore <= '0';
@@ -219,8 +224,8 @@ begin
 
         -- Read R20, add 1, and write back in single clock
         RegASel <= 20;                                          -- setup read
-        wait for 5 ns;                                          -- propagation delay
-        modified := std_logic_vector(unsigned(RegA) + 1);      -- modify value
+        wait for 5 ns;                                          -- wait for signal to propagate
+        modified := std_logic_vector(unsigned(RegA) + 1);       -- modify value
         RegInSel <= 20;                                         -- setup write
         RegIn <= modified;
         RegStore <= '1';
@@ -241,7 +246,7 @@ begin
         -- Read R30 and R31, add them, write result to R32 in single clock
         RegASel <= 30;                                          -- setup read A
         RegBSel <= 31;                                          -- setup read B
-        wait for 5 ns;                                          -- propagation delay
+        wait for 5 ns;                                          -- wait for signal to propagate
         modified := std_logic_vector(unsigned(RegA) + unsigned(RegB));  -- add values
         RegInSel <= 32;                                         -- setup write
         RegIn <= modified;
@@ -253,6 +258,39 @@ begin
         ReadSingle(32, 0);
         assert RegA = x"00000155"
             report "Two-operand read-modify-write failed: expected 0x00000155, got " & to_hstring(RegA)
+            severity error;
+
+        -- Simulate an example sequence of operations that work on vectors
+        vec := (x => 1.0, y => 2.0, z => 2.5, a => -2.1);
+        WriteQuad(0, vector_to_slv(vec));
+
+        vec := (x => 2.0, y => 3.0, z => 0.5, a => -4.1);
+        WriteQuad(1, vector_to_slv(vec));
+
+        -- Perform four component-wise adds (adding V0 and V1)
+        ReadSingle(0, 4);
+        WriteSingle(4, real_to_slv(slv_to_real(RegA) + slv_to_real(RegB)));
+        ReadSingle(1, 5);
+        WriteSingle(5, real_to_slv(slv_to_real(RegA) + slv_to_real(RegB)));
+        ReadSingle(2, 6);
+        WriteSingle(6, real_to_slv(slv_to_real(RegA) + slv_to_real(RegB)));
+        ReadSingle(3, 7);
+        WriteSingle(7, real_to_slv(slv_to_real(RegA) + slv_to_real(RegB)));
+
+        ReadQuad(1);
+        vec := slv_to_vector(RegQ);
+
+        assert relatively_equal(vec.x, 3.0, 0.00001)
+            report "Expected x value to be 3.0, got " & to_string(real_to_slv(vec.x))
+            severity error;
+        assert relatively_equal(vec.y, 5.0, 0.00001)
+            report "Expected y value to be 5.0, got " & to_string(real_to_slv(vec.y))
+            severity error;
+        assert relatively_equal(vec.z, 3.0, 0.00001)
+            report "Expected z value to be 3.0, got " & to_string(real_to_slv(vec.z))
+            severity error;
+        assert relatively_equal(vec.a, -6.2, 0.00001)
+            report "Expected a value to be -6.2, got " & to_string(real_to_slv(vec.a))
             severity error;
 
         report "All tests completed successfully!";

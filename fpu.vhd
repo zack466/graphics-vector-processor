@@ -4,7 +4,8 @@
 --
 --  Revision History:
 --     2025 Jun 02      Initial revision
---     2025 Jun 13      Added all float operations, general purpose FPU
+--     2025 Jun 13      Added all float operations, implemented general purpose
+--                      pipelined FPU
 --
 ------------------------------------------------------------------------------
 
@@ -23,6 +24,7 @@ package fpu_constants is
     constant OP_INVSQRT : std_logic_vector(3 downto 0) := "0111";
     constant OP_LOG     : std_logic_vector(3 downto 0) := "1000";
     constant OP_ABS     : std_logic_vector(3 downto 0) := "1001";
+    constant OP_NONE    : std_logic_vector(3 downto 0) := "1111";
     
     function op_to_string(op : std_logic_vector) return string;
 

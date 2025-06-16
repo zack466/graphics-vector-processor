@@ -3,6 +3,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use ieee.math_real.all;
+use ieee.float_pkg.all;
 
 use work.types.all;
 
@@ -25,6 +26,12 @@ package util is
     end protected rng;
 
     function relatively_equal(a, b, epsilon : real) return boolean;
+
+    function real_to_slv(r : real) return std_logic_vector;
+    function slv_to_real(slv : std_logic_vector(31 downto 0)) return real;
+
+    function vector_to_slv(r : Vector) return std_logic_vector;
+    function slv_to_vector(x : std_logic_vector(127 downto 0)) return Vector;
 end package util;
 
 
@@ -147,6 +154,31 @@ package body util is
         else -- Relative error
             return abs(a - b) / (abs(a) + abs(b)) < epsilon;
         end if;
+    end function;
+
+    pure function real_to_slv(r : real) return std_logic_vector is
+    begin
+        return to_slv(to_float(r, 8, 23));
+    end function;
+
+    pure function slv_to_real(slv : std_logic_vector(31 downto 0)) return real is
+    begin
+        return to_real(to_float(slv, 8, 23));
+    end function;
+
+    function vector_to_slv(r : Vector) return std_logic_vector is
+    begin
+        return real_to_slv(r.x) & real_to_slv(r.y) & real_to_slv(r.z) & real_to_slv(r.a);
+    end function;
+
+    function slv_to_vector(x : std_logic_vector(127 downto 0)) return Vector is
+    begin
+        return (
+            x => slv_to_real(x(127 downto 96)),
+            y => slv_to_real(x(95 downto 64)),
+            z => slv_to_real(x(63 downto 32)),
+            a => slv_to_real(x(31 downto 0))
+        );
     end function;
 
 end package body;
