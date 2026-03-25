@@ -2,3 +2,5 @@
 *.cf
 *_tb
 *.ppm
+.envrc
+.direnv

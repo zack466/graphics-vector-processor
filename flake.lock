@@ -1,0 +1,62 @@
+{
+  "nodes": {
+    "ghdl-custom": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "lastModified": 1774425246,
+        "narHash": "sha256-0XWhW3+UZy42LbUtTH2FF28YO2nl68HzhG8Vp0Z2G9o=",
+        "ref": "refs/heads/master",
+        "rev": "f63d99b04884243ee3292fa194cdc4f73f36c7ca",
+        "revCount": 10856,
+        "type": "git",
+        "url": "file:/Users/zack4/forks/ghdl"
+      },
+      "original": {
+        "type": "git",
+        "url": "file:/Users/zack4/forks/ghdl"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1774243609,
+        "narHash": "sha256-6sB2IYqXYwoQS11Ev0u3b0lpAleTpvNv5iv4iqiCCR8=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "4724d5647207377bede08da3212f809cbd94a648",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_2": {
+      "locked": {
+        "lastModified": 1774273680,
+        "narHash": "sha256-a++tZ1RQsDb1I0NHrFwdGuRlR5TORvCEUksM459wKUA=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "fdc7b8f7b30fdbedec91b71ed82f36e1637483ed",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "ghdl-custom": "ghdl-custom",
+        "nixpkgs": "nixpkgs_2"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
