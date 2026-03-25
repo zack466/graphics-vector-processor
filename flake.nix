@@ -5,8 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     
     # local GHDL flake
-    ghdl-custom.url = "git+file:/Users/zack4/forks/ghdl"; # doesn't work???
-    # ghdl-custom.url = "git+file:/Users/zack4/ghdl";  # works???
+    ghdl-custom.url = "git+file:/Users/zack4/forks/ghdl";
   };
 
   outputs = { self, nixpkgs, ghdl-custom }: 
