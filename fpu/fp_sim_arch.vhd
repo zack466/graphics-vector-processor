@@ -1,0 +1,357 @@
+---------------------------------------------------------
+-- Pipeline Architectures
+---------------------------------------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.math_real.all;
+
+architecture dataflow of Pipeline is
+    signal pipe : real_vector(0 to latency - 1);
+begin
+    pipeline_input: process(clock)
+    begin
+        if rising_edge(clock) then
+            if en = '1' then
+                pipe(0) <= data_in;
+            end if;
+        end if;
+    end process;
+    
+    pipeline_iter: for i in 1 to latency - 1 generate
+        process(clock)
+        begin
+            if rising_edge(clock) then
+                if en = '1' then
+                    pipe(i) <= pipe(i - 1);
+                end if;
+            end if;
+        end process;
+    end generate pipeline_iter;
+
+    data_out <= pipe(latency - 1);
+end architecture dataflow;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+architecture dataflow of Pipeline_sl is
+    signal pipe : std_logic_vector(0 to latency - 1) := (others => '0');
+begin
+    process(clock)
+    begin
+        if rising_edge(clock) then
+            if en = '1' then
+                pipe(0) <= data_in;
+                for i in 1 to latency - 1 loop
+                    pipe(i) <= pipe(i - 1);
+                end loop;
+            end if;
+        end if;
+    end process;
+
+    data_out <= pipe(latency - 1) when latency > 0 else data_in;
+end architecture dataflow;
+
+---------------------------------------------------------
+-- Floating Point Arithmetic Architectures
+---------------------------------------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_addsub is
+    signal sum : real;
+    signal difference : real;
+    signal result_sum : real;
+    signal result_difference : real;
+begin
+    sum <= to_real(to_float(a)) + to_real(to_float(b));
+    difference <= to_real(to_float(a)) - to_real(to_float(b));
+
+    pipeline_add: entity work.Pipeline
+    generic map(latency => 11)
+    port map(clock => clk, en => en, data_in => sum, data_out => result_sum);
+
+    pipeline_sub: entity work.Pipeline
+    generic map(latency => 11)
+    port map(clock => clk, en => en, data_in => difference, data_out => result_difference);
+
+    q <= to_slv(to_float(result_sum));
+    s <= to_slv(to_float(result_difference));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_mult_add is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= (to_real(to_float(a)) * to_real(to_float(b))) + to_real(to_float(c));
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_div is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= to_real(to_float(a)) / to_real(to_float(b));
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_sqrt is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= sqrt(to_real(to_float(a)));
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_rsqrt is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= 1.0 / sqrt(to_real(to_float(a)));
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+use work.fp_sim_types.all;
+
+architecture sim of fp_scalar_product is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= (to_real(to_float(a(0))) * to_real(to_float(b(0)))) +
+                (to_real(to_float(a(1))) * to_real(to_float(b(1)))) +
+                (to_real(to_float(a(2))) * to_real(to_float(b(2)))) +
+                (to_real(to_float(a(3))) * to_real(to_float(b(3))));
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_min is
+    signal real_a, real_b, math_res, pipelined_res : real;
+begin
+    real_a <= to_real(to_float(a));
+    real_b <= to_real(to_float(b));
+    math_res <= real_a when real_a < real_b else real_b;
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_max is
+    signal real_a, real_b, math_res, pipelined_res : real;
+begin
+    real_a <= to_real(to_float(a));
+    real_b <= to_real(to_float(b));
+    math_res <= real_a when real_a > real_b else real_b;
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_sin is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= sin(to_real(to_float(a)));
+    
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_cos is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= cos(to_real(to_float(a)));
+    
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_log2 is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= log2(to_real(to_float(a)));
+    
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_exp2 is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= 2.0 ** to_real(to_float(a));
+    
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_less_than is
+    signal logic_res : std_logic;
+begin
+    logic_res <= '1' when to_real(to_float(a)) < to_real(to_float(b)) else '0';
+
+    pipe_inst: entity work.Pipeline_sl
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => logic_res, data_out => q);
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_equal is
+    signal logic_res : std_logic;
+begin
+    logic_res <= '1' when to_real(to_float(a)) = to_real(to_float(b)) else '0';
+
+    pipe_inst: entity work.Pipeline_sl
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => logic_res, data_out => q);
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_fix2float is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= real(to_integer(signed(a)));
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_float2fix is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= to_real(to_float(a));
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= std_logic_vector(to_signed(integer(pipelined_res), 32));
+end architecture;
