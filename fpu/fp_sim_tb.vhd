@@ -15,6 +15,9 @@ architecture behavior of fp_sim_tb is
 
     -- Signals for fp_mult_add (Latency 14)
     signal ma_a, ma_b, ma_c, ma_q : std_logic_vector(31 downto 0) := (others => '0');
+
+    -- Signals for fp_addsub (Latency 14)
+    signal as_q, as_s : std_logic_vector(31 downto 0) := (others => '0');
     
     -- Signals for fp_sqrt (Latency 28)
     signal sqrt_a, sqrt_q : std_logic_vector(31 downto 0) := (others => '0');
@@ -22,6 +25,11 @@ architecture behavior of fp_sim_tb is
 begin
     -- 100MHz Clock Generation
     clk <= not clk after clk_period / 2;
+
+    -- Device Under Test: Add/Sub
+    dut_addsub: entity work.fp_addsub
+        generic map (latency => 11)
+        port map (clk => clk, en => en, a => ma_a, b => ma_b, q => as_q, s => as_s);
 
     -- Device Under Test: Multiply Add
     dut_mult_add: entity work.fp_mult_add
@@ -49,14 +57,27 @@ begin
         ma_b <= to_slv(to_float(4.0, 8, 23));
         ma_c <= to_slv(to_float(10.0, 8, 23));
 
-        -- Wait exactly 14 clock cycles for the pipeline
-        for i in 1 to 14 loop
+        -- Wait exactly 12 clock cycles for the pipeline. We do 1 + 11,
+        -- since the first clock will clock the inputs into the pipeline, and
+        -- the 11th clock after that is when the results are available.
+        for i in 1 to 12 loop
+            wait until rising_edge(clk);
+        end loop;
+
+        -- Verify the result
+        assert to_real(to_float(as_q)) = 6.5
+            report "Add Test Failed! Expected 6.5, Got: " & real'image(to_real(to_float(as_q)))
+            severity error;
+
+        assert to_real(to_float(as_s)) = -1.5
+            report "Add Test Failed! Expected -1.5, Got: " & real'image(to_real(to_float(as_s)))
+            severity error;
+
+        -- Wait another 3 clock cycles to reach 14 from 11
+        for i in 13 to 15 loop
             wait until rising_edge(clk);
         end loop;
         
-        -- Wait 1 ns for the delta cycle to update the output signal
-        wait for 1 ns;
-
         -- Verify the result
         assert to_real(to_float(ma_q)) = 20.0
             report "Multiply Add Test Failed! Expected 20.0, Got: " & real'image(to_real(to_float(ma_q)))
@@ -72,12 +93,10 @@ begin
         -- Feed input
         sqrt_a <= to_slv(to_float(144.0, 8, 23));
 
-        -- Wait exactly 28 clock cycles for the pipeline
-        for i in 1 to 28 loop
+        -- Wait 1 + 28 clock cycles for the pipeline
+        for i in 1 to 29 loop
             wait until rising_edge(clk);
         end loop;
-        
-        wait for 1 ns;
 
         -- Verify the result
         assert to_real(to_float(sqrt_q)) = 12.0

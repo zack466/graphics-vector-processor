@@ -44,6 +44,7 @@ use ieee.std_logic_1164.all;
 use work.fp_sim_types.all;
 
 entity fp_addsub is
+    generic( latency : integer := 11 );
     port (
         clk    : in  std_logic                     := '0';
         areset : in  std_logic                     := '0';
