@@ -5,3 +5,5 @@
 .envrc
 .direnv
 *.ghw
+work/
+.DS_STORE
