@@ -9,9 +9,6 @@ TODO:
 * add immediate FPU instructions, don't support things like swizzling or mask, but allow encoding low-precision immediate constants, for things like scalar multiplication, negation, etc
   * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
 * finish memory controller, test with real DDR3 memory as well
-* update full execution integration test to include predicate / logic operations
-
-This design document has been updated to reflect the critical advancements we've made in instruction storage, predicate logic, and enhanced SIMT control flow.
 
 ## Graphics Vector Processor Design Document
 
@@ -28,7 +25,7 @@ The execution stage utilizes a parallel, dual-path topology for standard math an
 
 **2.1. Standard FPU Lanes (4x Independent)**
 Each lane contains a Unified Multiply-Add (MADD) datapath and transcendental units.
-* **Predicate Logic ALU:** Integrated directly into the FPU lanes to allow bitwise operations (`PAND`, `POR`, `PXOR`) on predicate masks. This allows complex boolean trees (e.g., `if (A && B)`) to be calculated in the math pipeline rather than the branch unit.
+* **Predicate Logic ALU & Swizzling:** Integrated directly into the FPU lanes to allow bitwise operations (`PAND`, `POR`, `PXOR`) on predicate masks. A pre-swizzle multiplexer injects PRF data into the datapath *before* the swizzle network, natively supporting cross-lane boolean operations (e.g., `POR p2, p0.xxxx, p1.yyyy`).
 * **Comparison Modifiers:** Native support for `Swap Operands` and `Invert Result` on comparison instructions. This allows the hardware to evaluate all six algebraic relations ($=, \neq, <, \leq, >, \geq$) using only `Equal` and `Less Than` hardware cores.
 
 **2.2. Parallel Vector Reduction Unit**
@@ -59,15 +56,21 @@ The processor utilizes a structured reconvergence model to handle `if/else` bloc
 `BRA_Z` and `BRA_NZ` allow the PC to jump over entire blocks of code if the warp is "unanimous," bypassing the stack entirely to save cycles.
 
 ### 5. Pipeline and Hazard Management
-The processor trades logic complexity for high maximum clock frequencies ($F_{max}$) through a rigid timing model.
+The processor trades logic complexity for high maximum clock frequencies ($F_{max}$) through a rigid timing model, heavily decoupled into distinct stages to prevent phase-shift bugs.
 
 **5.1. Barrel Scheduling & RAW Hazards**
 * The Instruction Issue stage operates a round-robin scheduler across the 32 threads.
 * **Math RAW Hazards:** Inherently avoided for vector math because the 32-cycle loop is shorter than the 37-cycle pipe, meaning a thread's result is almost ready before it executes again.
 * **Control RAW Hazards (Software Delay Slot):** Because comparison results take 37 cycles to reach the PRF, a branch cannot immediately follow a comparison for the same thread. The compiler must insert one unrelated instruction (or a `NOP`) between a `FCMP` and a dependent `BRA`.
 
-**5.2. Latency Padding**
-All math operations are stretched via shift-register delay lines to exactly 37 cycles. Logic operations (0-latency) are injected into the start of the pipeline, while math core outputs are injected as they complete, ensuring a unified, collision-free writeback stage.
+**5.2. The Writeback Controller & Latency Padding**
+* All math operations are stretched via shift-register delay lines to exactly 37 cycles to prevent structural writeback hazards.
+* **Dedicated Module:** The massive 37-cycle delay line for all control signals (Destination Address, Write Mask, Write Enables, Mux Selects) is abstracted into a dedicated `Writeback Controller` module. This keeps top-level routing clean and synthesizes efficiently into shift-register LUTs (SRLs).
+* **Non-Stalling Backend:** If the Instruction Fetcher stalls, the Writeback Controller continues ticking, automatically shifting `NOPs` (Write Enable = 0) into the pipe. This allows the up to 37 instructions already "in-flight" to safely complete and write to the register files without colliding.
+
+**5.3. Synchronous/Asynchronous Pipeline Alignment**
+* Strict pipeline isolation registers separate Stage 0 (Issue) from Stage 1 (Read).
+* Because the Vector Register File (M10K) has a 1-cycle synchronous read latency and the Predicate Register File has a 0-cycle asynchronous read latency, the hardware explicitly latches the PRF output. This aligns the data and prevents "Phase Shift" bugs where combinational logic accidentally evaluates PRF data for the *next* thread's address.
 
 ### 6. Memory Subsystem
 Accesses external DDR3 memory using a multi-cycle, coalescing memory controller.

@@ -31,13 +31,18 @@ architecture sim of tb_issuer_writeback_integration is
     signal iss_rs3_addr    : std_logic_vector(6 downto 0);
     signal iss_rd_addr     : std_logic_vector(6 downto 0);
     signal iss_mask        : std_logic_vector(3 downto 0);
-    signal iss_we          : std_logic;
     signal iss_valid       : std_logic;
+    signal iss_wb_mux      : std_logic_vector(1 downto 0);
     
-    -- Extracted Control Signals for Predicates (Now native to Issuer)
     signal iss_cmp_invert  : std_logic;
     signal iss_cmp_swap    : std_logic;
+    signal iss_is_logic_op : std_logic;
+    signal iss_vrf_we      : std_logic;
     signal iss_prf_we      : std_logic;
+    
+    -- FIXED: Extracted Swizzle Selectors
+    signal iss_swiz_a      : swizzle_sel_t;
+    signal iss_swiz_b      : swizzle_sel_t;
 
     -- ========================================================================
     -- STAGE 1: REG FILE READS (1 Cycle Latency)
@@ -45,18 +50,19 @@ architecture sim of tb_issuer_writeback_integration is
     signal vrf_rs1_data, vrf_rs2_data, vrf_rs3_data : vector_t;
     signal prf_rs1_data, prf_rs2_data               : std_logic_vector(3 downto 0);
     
-    -- Delay registers to align control signals with VRF/PRF data output
-    signal s1_opcode     : std_logic_vector(5 downto 0);
-    signal s1_valid      : std_logic;
-    signal s1_cmp_inv    : std_logic;
-    signal s1_cmp_swap   : std_logic;
+    signal s1_opcode       : std_logic_vector(5 downto 0);
+    signal s1_valid        : std_logic;
+    signal s1_cmp_inv      : std_logic;
+    signal s1_cmp_swap     : std_logic;
+    signal s1_is_logic_op  : std_logic;
     
-    -- Multiplexed FPU Inputs (Injects PRF data if opcode is a logic op)
-    signal is_logic_op   : std_logic;
-    signal op_a_x, op_b_x, op_c_x : word_t;
-    signal op_a_y, op_b_y, op_c_y : word_t;
-    signal op_a_z, op_b_z, op_c_z : word_t;
-    signal op_a_w, op_b_w, op_c_w : word_t;
+    -- FIXED: Stage 1 isolated Swizzle and PRF Registers
+    signal s1_swiz_a       : swizzle_sel_t;
+    signal s1_swiz_b       : swizzle_sel_t;
+    signal s1_prf_rs1      : std_logic_vector(3 downto 0) := "0000";
+    signal s1_prf_rs2      : std_logic_vector(3 downto 0) := "0000";
+    
+    signal swiz_a_out, swiz_b_out                   : vector_t;
 
     -- ========================================================================
     -- STAGE 2: FPU LANES (FPU_MAX_LATENCY = 37 Cycles)
@@ -68,15 +74,11 @@ architecture sim of tb_issuer_writeback_integration is
     signal vrf_wb_data : vector_t;
     signal prf_wb_data : std_logic_vector(3 downto 0);
 
-    -- Massive delay line to carry writeback control signals alongside FPU math
-    type addr_pipe_t is array (0 to FPU_MAX_LATENCY) of std_logic_vector(6 downto 0);
-    type mask_pipe_t is array (0 to FPU_MAX_LATENCY) of std_logic_vector(3 downto 0);
-    type we_pipe_t   is array (0 to FPU_MAX_LATENCY) of std_logic;
-    
-    signal s2_rd_addr_pipe : addr_pipe_t := (others => (others => '0'));
-    signal s2_mask_pipe    : mask_pipe_t := (others => "0000");
-    signal s2_vrf_we_pipe  : we_pipe_t   := (others => '0');
-    signal s2_prf_we_pipe  : we_pipe_t   := (others => '0');
+    signal wb_rd_addr  : std_logic_vector(6 downto 0);
+    signal wb_mask     : std_logic_vector(3 downto 0);
+    signal wb_mux_sel  : std_logic_vector(1 downto 0);
+    signal wb_vrf_we   : std_logic;
+    signal wb_prf_we   : std_logic;
 
     -- ========================================================================
     -- MCU / IFU VERIFICATION PORTS
@@ -98,10 +100,6 @@ begin
         clk <= '1'; wait for CLK_PERIOD / 2;
     end process;
 
-    -- Dynamically route Write Enable based on opcode type
-    iss_prf_we <= '1' when (iss_opcode = OP_FCMP_LT or iss_opcode = OP_FCMP_EQ or 
-                            iss_opcode = OP_PAND or iss_opcode = OP_POR or iss_opcode = OP_PXOR) else '0';
-
     -- ========================================================================
     -- INSTANTIATIONS
     -- ========================================================================
@@ -111,9 +109,25 @@ begin
             current_thread => current_thread, opcode_out => iss_opcode,
             rs1_addr_global => iss_rs1_addr, rs2_addr_global => iss_rs2_addr, 
             rs3_addr_global => iss_rs3_addr, rd_addr_global => iss_rd_addr,
-            inst_write_mask => iss_mask, reg_we => iss_we, issue_valid => iss_valid,
-            cmp_invert => iss_cmp_invert, cmp_swap => iss_cmp_swap,
-            swiz_sel_a => open, swiz_sel_b => open, swiz_sel_c => open, wb_mux_sel => open
+            inst_write_mask => iss_mask, issue_valid => iss_valid,
+            cmp_invert => iss_cmp_invert, cmp_swap => iss_cmp_swap, is_logic_op => iss_is_logic_op,
+            vrf_we => iss_vrf_we, prf_we => iss_prf_we,
+            swiz_sel_a => iss_swiz_a, swiz_sel_b => iss_swiz_b, swiz_sel_c => open, wb_mux_sel => iss_wb_mux
+        );
+
+    u_wb_ctrl: entity work.writeback_controller
+        port map (
+            clk         => clk, reset => reset,
+            iss_rd_addr => iss_rd_addr,
+            iss_mask    => iss_mask,
+            iss_wb_mux  => iss_wb_mux,
+            iss_vrf_we  => (iss_vrf_we and iss_valid),
+            iss_prf_we  => (iss_prf_we and iss_valid),
+            wb_rd_addr  => wb_rd_addr,
+            wb_mask     => wb_mask,
+            wb_mux_sel  => wb_mux_sel,
+            wb_vrf_we   => wb_vrf_we,
+            wb_prf_we   => wb_prf_we
         );
 
     u_vrf: entity work.vector_reg_file
@@ -121,10 +135,8 @@ begin
             clk => clk, reset => reset,
             rs1_addr => iss_rs1_addr, rs2_addr => iss_rs2_addr, rs3_addr => iss_rs3_addr,
             rs1_data => vrf_rs1_data, rs2_data => vrf_rs2_data, rs3_data => vrf_rs3_data,
-            -- Port A (Writeback from FPU)
-            rd_addr_A => s2_rd_addr_pipe(FPU_MAX_LATENCY), rd_data_A => vrf_wb_data,
-            write_mask_A => s2_mask_pipe(FPU_MAX_LATENCY), we_A => s2_vrf_we_pipe(FPU_MAX_LATENCY),
-            -- Port B (MCU)
+            rd_addr_A => wb_rd_addr, rd_data_A => vrf_wb_data,
+            write_mask_A => wb_mask, we_A => wb_vrf_we,
             rd_addr_B => mcu_rd_addr, rd_data_B => mcu_rd_data,
             wr_addr_B => mcu_wr_addr, wr_data_B => mcu_wr_data,
             write_mask_B => mcu_mask, we_B => mcu_we
@@ -135,32 +147,32 @@ begin
             clk => clk, reset => reset,
             rs1_addr => iss_rs1_addr, rs2_addr => iss_rs2_addr,
             rs1_data => prf_rs1_data, rs2_data => prf_rs2_data,
-            -- Writeback Port
-            wr_addr => s2_rd_addr_pipe(FPU_MAX_LATENCY), wr_data => prf_wb_data,
-            we => s2_prf_we_pipe(FPU_MAX_LATENCY), wr_mask => s2_mask_pipe(FPU_MAX_LATENCY),
-            -- IFU Interface
+            wr_addr => wb_rd_addr, wr_data => prf_wb_data,
+            we => wb_prf_we, wr_mask => wb_mask,
             ifu_pred_sel => ifu_pred_sel, ifu_pred_mod => ifu_pred_mod, ifu_mask_out => ifu_mask_out
         );
 
-    -- ========================================================================
-    -- PIPELINE SYNCHRONIZATION & FPU MUXING
-    -- ========================================================================
-    is_logic_op <= '1' when (s1_opcode = OP_PAND or s1_opcode = OP_POR or s1_opcode = OP_PXOR) else '0';
+    u_swizzle: entity work.swizzle_network
+        port map (
+            is_logic_op => s1_is_logic_op,
+            vec_a_in    => vrf_rs1_data, 
+            prf_a_in    => s1_prf_rs1,     -- Using correctly aligned S1 PRF data
+            swiz_sel_a  => s1_swiz_a,      -- Using pipelined swizzle selectors
+            vec_a_out   => swiz_a_out,
+            
+            vec_b_in    => vrf_rs2_data, 
+            prf_b_in    => s1_prf_rs2,     -- Using correctly aligned S1 PRF data
+            swiz_sel_b  => s1_swiz_b,      -- Using pipelined swizzle selectors
+            vec_b_out   => swiz_b_out
+        );
 
-    -- Override LSBs with PRF data if doing a logic operation
-    op_a_x <= x"0000000" & "000" & prf_rs1_data(0) when is_logic_op = '1' else vrf_rs1_data(0);
-    op_b_x <= x"0000000" & "000" & prf_rs2_data(0) when is_logic_op = '1' else vrf_rs2_data(0);
-    op_a_y <= x"0000000" & "000" & prf_rs1_data(1) when is_logic_op = '1' else vrf_rs1_data(1);
-    op_b_y <= x"0000000" & "000" & prf_rs2_data(1) when is_logic_op = '1' else vrf_rs2_data(1);
-    op_a_z <= x"0000000" & "000" & prf_rs1_data(2) when is_logic_op = '1' else vrf_rs1_data(2);
-    op_b_z <= x"0000000" & "000" & prf_rs2_data(2) when is_logic_op = '1' else vrf_rs2_data(2);
-    op_a_w <= x"0000000" & "000" & prf_rs1_data(3) when is_logic_op = '1' else vrf_rs1_data(3);
-    op_b_w <= x"0000000" & "000" & prf_rs2_data(3) when is_logic_op = '1' else vrf_rs2_data(3);
-
-    u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>op_a_x, op_b=>op_b_x, op_c=>vrf_rs3_data(0), result=>fpu_res_x, valid_out=>fpu_valid_x, comp_flag=>comp_flag_x, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
-    u_lane_y: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>op_a_y, op_b=>op_b_y, op_c=>vrf_rs3_data(1), result=>fpu_res_y, valid_out=>open,        comp_flag=>comp_flag_y, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
-    u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>op_a_z, op_b=>op_b_z, op_c=>vrf_rs3_data(2), result=>fpu_res_z, valid_out=>open,        comp_flag=>comp_flag_z, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
-    u_lane_w: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>op_a_w, op_b=>op_b_w, op_c=>vrf_rs3_data(3), result=>fpu_res_w, valid_out=>open,        comp_flag=>comp_flag_w, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
+    -- ========================================================================
+    -- FPU PIPELINE INSTANTIATION
+    -- ========================================================================
+    u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>swiz_a_out(0), op_b=>swiz_b_out(0), op_c=>vrf_rs3_data(0), result=>fpu_res_x, valid_out=>fpu_valid_x, comp_flag=>comp_flag_x, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
+    u_lane_y: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>swiz_a_out(1), op_b=>swiz_b_out(1), op_c=>vrf_rs3_data(1), result=>fpu_res_y, valid_out=>open,        comp_flag=>comp_flag_y, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
+    u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>swiz_a_out(2), op_b=>swiz_b_out(2), op_c=>vrf_rs3_data(2), result=>fpu_res_z, valid_out=>open,        comp_flag=>comp_flag_z, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
+    u_lane_w: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>swiz_a_out(3), op_b=>swiz_b_out(3), op_c=>vrf_rs3_data(3), result=>fpu_res_w, valid_out=>open,        comp_flag=>comp_flag_w, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
 
     vrf_wb_data <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_w);
     prf_wb_data <= comp_flag_w & comp_flag_z & comp_flag_y & comp_flag_x;
@@ -170,27 +182,19 @@ begin
         if rising_edge(clk) then
             if reset = '1' then
                 s1_valid <= '0';
-                s2_vrf_we_pipe <= (others => '0');
-                s2_prf_we_pipe <= (others => '0');
             else
-                -- Stage 1: Delay math control signals 1 cycle to align with Register File Outputs
-                s1_opcode   <= iss_opcode;
-                s1_valid    <= iss_valid;
-                s1_cmp_inv  <= iss_cmp_invert;
-                s1_cmp_swap <= iss_cmp_swap;
-
-                -- Writeback Delay Line Setup
-                s2_rd_addr_pipe(0) <= iss_rd_addr;
-                s2_mask_pipe(0)    <= iss_mask;
-                s2_vrf_we_pipe(0)  <= iss_we and iss_valid and (not iss_prf_we);
-                s2_prf_we_pipe(0)  <= iss_prf_we and iss_valid;
+                -- Latch control signals into Stage 1
+                s1_opcode      <= iss_opcode;
+                s1_valid       <= iss_valid;
+                s1_cmp_inv     <= iss_cmp_invert;
+                s1_cmp_swap    <= iss_cmp_swap;
+                s1_is_logic_op <= iss_is_logic_op;
                 
-                for i in 1 to FPU_MAX_LATENCY loop
-                    s2_rd_addr_pipe(i) <= s2_rd_addr_pipe(i-1);
-                    s2_mask_pipe(i)    <= s2_mask_pipe(i-1);
-                    s2_vrf_we_pipe(i)  <= s2_vrf_we_pipe(i-1);
-                    s2_prf_we_pipe(i)  <= s2_prf_we_pipe(i-1);
-                end loop;
+                -- FIXED: Latch Swizzle and Async PRF data to align with Sync VRF data
+                s1_swiz_a      <= iss_swiz_a;
+                s1_swiz_b      <= iss_swiz_b;
+                s1_prf_rs1     <= prf_rs1_data;
+                s1_prf_rs2     <= prf_rs2_data;
             end if;
         end if;
     end process;
@@ -201,12 +205,18 @@ begin
     -- ========================================================================
     stim_proc: process
     begin
-        -- Default Issuer Record
+        -- Base Initialization matching Decoder Defaults
         fpu_ctrl_in.opcode <= OP_NOP; fpu_ctrl_in.rs1_addr_local <= "00"; fpu_ctrl_in.rs2_addr_local <= "00";
         fpu_ctrl_in.rs3_addr_local <= "00"; fpu_ctrl_in.rd_addr_local <= "00"; fpu_ctrl_in.write_mask <= "0000";
-        fpu_ctrl_in.swiz_sel_a <= ("00", "00", "00", "00"); fpu_ctrl_in.swiz_sel_b <= ("00", "00", "00", "00");
-        fpu_ctrl_in.swiz_sel_c <= ("00", "00", "00", "00"); fpu_ctrl_in.wb_mux_sel <= "00"; fpu_ctrl_in.reg_we <= '0';
+        
+        -- FIXED: Default to Identity Swizzle (X->X, Y->Y, Z->Z, W->W)
+        fpu_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        fpu_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        fpu_ctrl_in.swiz_sel_c <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        
+        fpu_ctrl_in.wb_mux_sel <= "00"; 
         fpu_ctrl_in.cmp_invert <= '0'; fpu_ctrl_in.cmp_swap <= '0';
+        fpu_ctrl_in.is_logic_op <= '0'; fpu_ctrl_in.vrf_we <= '0'; fpu_ctrl_in.prf_we <= '0';
 
         wait until rising_edge(clk);
         reset <= '0';
@@ -241,7 +251,12 @@ begin
         fpu_ctrl_in.rs2_addr_local <= "01"; -- v1
         fpu_ctrl_in.rd_addr_local  <= "10"; -- Store in v2
         fpu_ctrl_in.write_mask     <= "1111";
-        fpu_ctrl_in.reg_we         <= '1';
+        
+        -- MOCKING DECODER FLAGS
+        fpu_ctrl_in.vrf_we         <= '1';
+        fpu_ctrl_in.prf_we         <= '0';
+        fpu_ctrl_in.is_logic_op    <= '0';
+        
         valid_in <= '1';
         wait until rising_edge(clk);
         valid_in <= '0'; 
@@ -258,7 +273,12 @@ begin
         fpu_ctrl_in.rs2_addr_local <= "01"; -- v1
         fpu_ctrl_in.rd_addr_local  <= "00"; -- Store in predicate p0
         fpu_ctrl_in.write_mask     <= "1111";
-        fpu_ctrl_in.reg_we         <= '0';  -- Disabled for VRF, handled by logic
+        
+        -- MOCKING DECODER FLAGS (Compares route purely to PRF)
+        fpu_ctrl_in.vrf_we         <= '0';
+        fpu_ctrl_in.prf_we         <= '1';
+        fpu_ctrl_in.is_logic_op    <= '0';
+        
         valid_in <= '1';
         wait until rising_edge(clk);
         valid_in <= '0'; 
@@ -297,25 +317,21 @@ begin
         -- 1. Test ALL Modifier
         ifu_pred_mod <= PRED_MOD_ALL;
         wait until rising_edge(clk); wait until falling_edge(clk);
-        -- Expecting only Threads 0 and 1 to be fully true.
         assert ifu_mask_out = x"00000003" report "PRED_MOD_ALL Failed! Expected Threads 0,1" severity error;
 
         -- 2. Test ANY Modifier
         ifu_pred_mod <= PRED_MOD_ANY;
         wait until rising_edge(clk); wait until falling_edge(clk);
-        -- Expecting Threads 0, 1, and 2 to have at least one true component.
         assert ifu_mask_out = x"00000007" report "PRED_MOD_ANY Failed! Expected Threads 0,1,2" severity error;
 
         -- 3. Test X_ONLY Modifier
         ifu_pred_mod <= PRED_MOD_X;
         wait until rising_edge(clk); wait until falling_edge(clk);
-        -- Thread 2's X component is 8, which is < 10, so T2 should be true.
         assert ifu_mask_out = x"00000007" report "PRED_MOD_X Failed! Expected Threads 0,1,2" severity error;
 
         -- 4. Test A_ONLY Modifier
         ifu_pred_mod <= PRED_MOD_A;
         wait until rising_edge(clk); wait until falling_edge(clk);
-        -- Thread 2's A (W) component is 11, which is NOT < 10, so T2 should be false.
         assert ifu_mask_out = x"00000003" report "PRED_MOD_A Failed! Expected Threads 0,1" severity error;
 
         report ">> INTEGRATION TEST COMPLETE: Dual VRF/PRF Pipeline is perfectly synced!";

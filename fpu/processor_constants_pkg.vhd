@@ -77,10 +77,10 @@ package processor_constants_pkg is
     constant PRED_MOD_A   : std_logic_vector(1 downto 0) := "11"; -- True if A == 1
 
     -- ========================================================================
-    -- CONTROL RECORDS
+    -- CONTROL RECORDS (Expanded explicitly to remove downstream decoding)
     -- ========================================================================
     type fpu_ctrl_t is record
-        opcode          : std_logic_vector(5 downto 0);
+        opcode          : std_logic_vector(5 downto 0); -- Used only by FPU lanes as an ALU selector
         rs1_addr_local  : std_logic_vector(1 downto 0);
         rs2_addr_local  : std_logic_vector(1 downto 0);
         rs3_addr_local  : std_logic_vector(1 downto 0);
@@ -89,10 +89,12 @@ package processor_constants_pkg is
         swiz_sel_b      : swizzle_sel_t;
         swiz_sel_c      : swizzle_sel_t;
         write_mask      : std_logic_vector(3 downto 0);
-        cmp_invert      : std_logic; -- '1' flips LT to GE, EQ to NEQ
-        cmp_swap        : std_logic; -- '1' swaps A and B operands
+        cmp_invert      : std_logic; 
+        cmp_swap        : std_logic; 
+        is_logic_op     : std_logic; -- Instructs Swizzle Network to use PRF data
+        vrf_we          : std_logic; -- Vector Reg File Write Enable
+        prf_we          : std_logic; -- Predicate Reg File Write Enable
         wb_mux_sel      : std_logic_vector(1 downto 0);
-        reg_we          : std_logic;
     end record;
 
     type red_ctrl_t is record
@@ -104,14 +106,14 @@ package processor_constants_pkg is
         red_mask        : std_logic_vector(3 downto 0); 
         red_mode        : std_logic_vector(1 downto 0); 
         wb_mux_sel      : std_logic_vector(1 downto 0); 
-        reg_we          : std_logic;
+        vrf_we          : std_logic; -- Vector Reg File Write Enable
     end record;
 
     type pc_ctrl_t is record
-        branch_type     : std_logic_vector(2 downto 0);  -- BR_JMP, BR_BRA_Z, etc.
+        branch_type     : std_logic_vector(2 downto 0);  
         target_addr     : std_logic_vector(15 downto 0); 
-        predicate_sel   : std_logic_vector(1 downto 0);  -- Which P-reg to evaluate
-        predicate_mod   : std_logic_vector(1 downto 0);  -- ANY, ALL, X, A modifiers
+        predicate_sel   : std_logic_vector(1 downto 0);  
+        predicate_mod   : std_logic_vector(1 downto 0);  
     end record;
 
     -- ========================================================================

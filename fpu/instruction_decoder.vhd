@@ -42,8 +42,10 @@ begin
         v_fpu.write_mask     := "0000";
         v_fpu.cmp_invert     := '0';
         v_fpu.cmp_swap       := '0';
+        v_fpu.is_logic_op    := '0';
         v_fpu.wb_mux_sel     := WB_MUX_FPU;
-        v_fpu.reg_we         := '0';
+        v_fpu.vrf_we         := '0';
+        v_fpu.prf_we         := '0';
 
         v_red.rs1_addr_local := "00";
         v_red.rs2_addr_local := "00";
@@ -53,7 +55,7 @@ begin
         v_red.red_mask       := "0000";
         v_red.red_mode       := "00";
         v_red.wb_mux_sel     := WB_MUX_RED;
-        v_red.reg_we         := '0';
+        v_red.vrf_we         := '0';
 
         v_pc.branch_type     := BR_NONE;
         v_pc.target_addr     := (others => '0');
@@ -66,9 +68,6 @@ begin
         if inst_type = INST_TYPE_FPU then
             -- ----------------------------------------------------------------
             -- FPU MATH INSTRUCTION MAP
-            -- [31:26] Opcode | [25:22] Mask | [21:20] Dest | [19:18] Src1
-            -- [17:16] Src2   | [15:14] Src3 | [13] Cmp_Inv | [12] Cmp_Swap
-            -- [11:4] Swiz A
             -- ----------------------------------------------------------------
             v_fpu.opcode         := internal_opcode;
             v_fpu.write_mask     := instruction(25 downto 22);
@@ -90,14 +89,22 @@ begin
                      OP_FRCP | OP_FSQRT | OP_FLOG2 | OP_FEXP2 | 
                      OP_FMIN | OP_FMAX | OP_F2I | OP_I2F |
                      OP_SIN  | OP_COS =>
-                    v_fpu.wb_mux_sel := WB_MUX_FPU; 
-                    v_fpu.reg_we     := '1';
+                    v_fpu.wb_mux_sel  := WB_MUX_FPU; 
+                    v_fpu.vrf_we      := '1';
+                    v_fpu.prf_we      := '0';
+                    v_fpu.is_logic_op := '0';
                     
-                -- Grouping predicate ops with compares to disable standard vector writeback
-                when OP_FCMP_LT | OP_FCMP_EQ | 
-                     OP_PAND    | OP_POR     | OP_PXOR =>
-                    v_fpu.wb_mux_sel := WB_MUX_FPU;
-                    v_fpu.reg_we     := '0'; 
+                when OP_FCMP_LT | OP_FCMP_EQ =>
+                    v_fpu.wb_mux_sel  := WB_MUX_FPU;
+                    v_fpu.vrf_we      := '0'; 
+                    v_fpu.prf_we      := '1';
+                    v_fpu.is_logic_op := '0';
+                    
+                when OP_PAND | OP_POR | OP_PXOR =>
+                    v_fpu.wb_mux_sel  := WB_MUX_FPU;
+                    v_fpu.vrf_we      := '0'; 
+                    v_fpu.prf_we      := '1';
+                    v_fpu.is_logic_op := '1';
                     
                 when others => null;
             end case;
@@ -105,8 +112,6 @@ begin
         elsif inst_type = INST_TYPE_RED then
             -- ----------------------------------------------------------------
             -- REDUCTION INSTRUCTION MAP
-            -- [31:30] Mode | [29:26] Mask | [25:24] Dest   | [23:22] Src1
-            -- [21:20] Src2 | [19:12] Swz A| [11:4]  Swz B  | [3:0] Type (0010)
             -- ----------------------------------------------------------------
             v_red.red_mode       := instruction(31 downto 30);
             v_red.red_mask       := instruction(29 downto 26);
@@ -125,12 +130,11 @@ begin
             v_red.swiz_sel_b(0)  := instruction(5 downto 4);
 
             v_red.wb_mux_sel     := WB_MUX_RED;
-            v_red.reg_we         := '1';
+            v_red.vrf_we         := '1';
 
         elsif inst_type = INST_TYPE_CTRL then
             -- ----------------------------------------------------------------
             -- SIMT CONTROL INSTRUCTION MAP
-            -- [31:26] Opcode | [25:10] Target (16b) | [9:8] P_Sel | [7:6] P_Mod
             -- ----------------------------------------------------------------
             v_pc.target_addr   := instruction(25 downto 10);
             v_pc.predicate_sel := instruction(9 downto 8);

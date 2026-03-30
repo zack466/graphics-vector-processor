@@ -30,17 +30,19 @@ entity instruction_issue is
         rs3_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rd_addr_global  : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         
-        -- Modifiers
+        -- Modifiers & Routing Flags
         swiz_sel_a      : out swizzle_sel_t;
         swiz_sel_b      : out swizzle_sel_t;
         swiz_sel_c      : out swizzle_sel_t;
         inst_write_mask : out std_logic_vector(3 downto 0);
         cmp_invert      : out std_logic;
         cmp_swap        : out std_logic;
+        is_logic_op     : out std_logic;
         
         -- Top-Level Control Signals
         wb_mux_sel      : out std_logic_vector(1 downto 0);
-        reg_we          : out std_logic;
+        vrf_we          : out std_logic;
+        prf_we          : out std_logic;
         
         -- Pipeline Control
         issue_valid     : out std_logic 
@@ -56,8 +58,9 @@ architecture rtl of instruction_issue is
         opcode         => OP_NOP,
         rs1_addr_local => "00", rs2_addr_local => "00", rs3_addr_local => "00", rd_addr_local => "00",
         swiz_sel_a     => ("00", "00", "00", "00"), swiz_sel_b => ("00", "00", "00", "00"), swiz_sel_c => ("00", "00", "00", "00"),
-        write_mask     => "0000", wb_mux_sel => "00", reg_we => '0',
-        cmp_invert     => '0', cmp_swap => '0'
+        write_mask     => "0000", wb_mux_sel => "00", 
+        cmp_invert     => '0', cmp_swap => '0',
+        is_logic_op    => '0', vrf_we => '0', prf_we => '0'
     );
     
     signal current_thread_int : std_logic_vector(THREAD_WIDTH-1 downto 0);
@@ -65,16 +68,12 @@ architecture rtl of instruction_issue is
 
 begin
 
-    -- ========================================================================
-    -- 1. STATE MACHINE & INSTRUCTION LATCH
-    -- ========================================================================
     process(clk)
     begin
         if rising_edge(clk) then
             if reset = '1' then
                 count <= to_unsigned(32, 6); -- Idle state
                 
-                -- Explicitly reset the latch to prevent hazard propagation
                 latched_ctrl.opcode         <= OP_NOP;
                 latched_ctrl.rs1_addr_local <= "00";
                 latched_ctrl.rs2_addr_local <= "00";
@@ -85,16 +84,15 @@ begin
                 latched_ctrl.swiz_sel_c     <= ("00", "00", "00", "00");
                 latched_ctrl.write_mask     <= "0000";
                 latched_ctrl.wb_mux_sel     <= "00";
-                latched_ctrl.reg_we         <= '0';
                 latched_ctrl.cmp_invert     <= '0';
                 latched_ctrl.cmp_swap       <= '0';
+                latched_ctrl.is_logic_op    <= '0';
+                latched_ctrl.vrf_we         <= '0';
+                latched_ctrl.prf_we         <= '0';
             else
-                -- Immediate latch and queue Thread 1
                 if valid_in = '1' then
                     count <= to_unsigned(1, 6); 
                     latched_ctrl <= fpu_ctrl_in;
-                    
-                -- Keep incrementing until 32
                 elsif count < 32 then
                     count <= count + 1;
                 end if;
@@ -102,20 +100,13 @@ begin
         end if;
     end process;
 
-    -- ========================================================================
-    -- 2. COMBINATIONAL OUTPUT MULTIPLEXING (Zero-Latency Issue)
-    -- ========================================================================
     current_thread_int <= (others => '0') when valid_in = '1' 
                           else std_logic_vector(count(THREAD_WIDTH-1 downto 0));
                           
     ctrl_out           <= fpu_ctrl_in when valid_in = '1' else latched_ctrl;
     issue_valid        <= '1' when (valid_in = '1') or (count < 32) else '0';
 
-    -- ========================================================================
-    -- 3. SIGNAL ROUTING & GLOBAL ADDRESS GENERATION
-    -- ========================================================================
     current_thread  <= current_thread_int;
-    
     rs1_addr_global <= current_thread_int & ctrl_out.rs1_addr_local;
     rs2_addr_global <= current_thread_int & ctrl_out.rs2_addr_local;
     rs3_addr_global <= current_thread_int & ctrl_out.rs3_addr_local;
@@ -128,7 +119,9 @@ begin
     inst_write_mask <= ctrl_out.write_mask;
     cmp_invert      <= ctrl_out.cmp_invert;
     cmp_swap        <= ctrl_out.cmp_swap;
+    is_logic_op     <= ctrl_out.is_logic_op;
     wb_mux_sel      <= ctrl_out.wb_mux_sel;
-    reg_we          <= ctrl_out.reg_we;
+    vrf_we          <= ctrl_out.vrf_we;
+    prf_we          <= ctrl_out.prf_we;
 
 end architecture rtl;

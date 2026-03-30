@@ -1,14 +1,14 @@
 # Source files (Order matters: Entities/Packages must precede Architectures)
 SOURCES = vector_types.vhd \
-		  vector_reg_file.vhd swizzle_network.vhd \
-		  fp_sim_entities.vhd fp_sim_arch.vhd \
 		  processor_constants_pkg.vhd \
+		  fp_sim_entities.vhd fp_sim_arch.vhd \
+		  vector_reg_file.vhd swizzle_network.vhd \
 		  fpu_lane.vhd instruction_issue.vhd \
 		  predicate_reg_file.vhd \
-		  tb_issuer_writeback_integration.vhd \
 		  vector_reduction_unit.vhd  \
 		  instruction_memory.vhd \
 		  instruction_fetch_unit.vhd \
+		  writeback_controller.vhd \
 
 # Testbench files
 TESTBENCH_SOURCES = fp_sim_tb.vhd \
