@@ -20,13 +20,13 @@ The core processor operates on vector registers, with each 32-bit sub-unit refer
 * **Multithreaded Allocation:** The central Register File is partitioned to support 32 concurrent hardware thread contexts (one full Warp).
 * **Vector Registers:** Each thread context contains dedicated vector registers. Each vector consists of four 32-bit floating-point numbers or signed integers.
 * **Predicate Registers:** Dedicated small registers (e.g., 4-bit masks) per thread to store the boolean results of vector comparisons, used to drive conditional execution.
-* **True Dual-Ported Architecture:** The register file is implemented using natively dual-ported Altera M10K blocks, banked four times. Port A is dedicated to the rigidly timed FPU math pipeline, while Port B is dedicated to the Memory Controller Unit (MCU) for asynchronous memory loads/stores, preventing structural collisions.
+* **True Dual-Ported Architecture:** The register file is implemented using natively dual-ported Altera M10K blocks, banked four times. Port A is dedicated to the rigidly timed execution pipeline, while Port B is dedicated to the Memory Controller Unit (MCU) for asynchronous memory loads/stores, preventing structural collisions.
 
-### 2. Quad-FPU Cluster Topology
-The execution stage utilizes a "Quad-FPU Cluster" approach. It features four independent FPU lanes for parallel coordinate-wise operations, supported by centralized, shared execution units for resource-heavy calculations.
+### 2. Execution Datapath & Quad-FPU Cluster
+The execution stage utilizes a parallel, dual-path topology. Standard coordinate-wise math is handled by a "Quad-FPU Cluster," while cross-coordinate vector operations are routed to a dedicated parallel Reduction Unit. Both paths converge at a unified writeback multiplexer.
 
 **2.1. Standard FPU Lanes (4x Independent)**
-Each of the four lanes operates in parallel to process the (x, y, z, a) coordinates. Each lane contains:
+Each of the four lanes operates in parallel to process the (x, y, z, a) coordinates independently. Each lane contains:
 * **Unified Multiply-Add (MADD) Datapath:** To optimize DSP resource sharing, standard linear arithmetic is mapped to a single pipelined MADD IP core. Hardware constants are multiplexed into the operands to execute basic instructions:
     * **Addition (a + b):** Evaluated as `a * 1.0 + b`
     * **Subtraction (a - b):** Evaluated as `a * 1.0 + (-b)` (Sign bit of `b` is inverted)
@@ -38,23 +38,30 @@ Each of the four lanes operates in parallel to process the (x, y, z, a) coordina
     * Comparisons and Logical bounds (Min, Max, Less Than, Equal).
     * Type conversion (Fix2Float, Float2Fix).
 
-**2.3. Cascaded Vector Reduction (Adder Tree)**
-To handle cross-coordinate math (like 4-way Dot Products) without wasting dedicated DSP blocks, the reduction unit acts as a post-processing stage cascaded *after* the FPU lanes.
-* When a Dot Product (`DP4`) is called, the Instruction Decoder translates it into a parallel Multiply (`FMUL`) for the standard FPU lanes.
-* The multiplied results are then routed into a dedicated 2-stage floating-point adder tree to sum the coordinates.
-* The final scalar result is broadcast across the writeback bus, where the register write-mask determines which vector slots are updated.
+**2.2. Parallel Vector Reduction Unit**
+To handle cross-coordinate math without routing hazards across independent lanes, the architecture features a dedicated Vector Reduction Unit placed in parallel with the Quad-FPU cluster. 
+* **Core IP:** It utilizes a highly optimized, 37-cycle Altera floating-point 4D scalar product IP block.
+* **Hardware Modifiers:** Combinational input conditioning provides zero-latency behavioral changes to support multiple graphics modes:
+    * **Standard Dot Product (`a * b`)**
+    * **Squared Magnitude (`a * a`)**
+    * **Component Sum (`a * 1.0`)**
+    * **Absolute Sum / Manhattan Distance (`|a| * 1.0`)**
+* **Input Masking:** Dynamic masking allows specific coordinates to be zeroed out before the reduction, easily converting a 4D Dot Product into a 3D Dot Product for lighting normals.
 
 ### 3. Instruction Format & Modifiers
-The instruction set distinguishes between FPU math operations and Control/Memory operations via a dedicated "Type" field (e.g., bits [3:0]), radically altering how the remaining bits are decoded.
+The instruction set distinguishes between operations via a dedicated "Type" field (bits [3:0]), which drastically alters how the remaining 28 upper bits are decoded, allowing for highly packed instruction words.
 
 **3.1. Instruction Categories**
-* **Vector Math Operations:** Parallel FPU calculations (Add, Sub, Mul) dispatches.
-* **Control Flow Operations:** Modifications to the global Program Counter or SIMT Execution Stack (Jumps, Branches, Syncs).
+* **Standard FPU Operations (`INST_TYPE_FPU`):** Parallel calculations (Add, Sub, Mul) requiring up to three source registers.
+* **Reduction Operations (`INST_TYPE_RED`):** Dedicated instructions for the reduction unit. By only requiring two source registers and a scalar output destination, bit-space is freed to encode complex swizzle and reduction modifiers.
+* **Control Flow Operations (`INST_TYPE_CTRL`):** Modifications to the global Program Counter or SIMT Execution Stack (Jumps, Branches, Syncs).
 * **Memory Operations:** Scatter/Gather operations to external RAM (Loads, Stores).
 
 **3.2. Hardware Modifiers (Math)**
-* **Input Swizzle:** A combinational crossbar routing network before the FPU inputs allows flexible rearrangement of the (x, y, z, a) coordinates.
-* **Output Mask:** A write-enable bitmask that dictates which specific coordinates of the destination register are updated.
+* **Dual-Port Input Swizzle:** A completely combinational crossbar routing network before the execution units allows simultaneous, independent, and flexible rearrangement of the (x, y, z, a) coordinates for *both* operand A and operand B. Dual swizzle is supported for reduction operations, while only swizzles operand A is supported for parallel math instructions due to instruction encoding limitations.
+* **Output Mask (`write_mask`):** A write-enable bitmask that dictates which specific coordinates of the destination vector register are updated, safely preserving unmasked background data.
+* **Reduction Mask (`red_mask`):** Defines which input coordinates are included in the reduction summation.
+* **Reduction Mode (`red_mode`):** A 2-bit selector defining the mathematical behavior of the reduction unit (Dot, Square, Sum, Abs).
 
 ### 4. SIMT Control Flow & Divergence
 Because all 32 threads in a warp share a single Program Counter, conditional logic (`if/else`) is managed via execution masking and a hardware stack rather than individual thread branching.
@@ -72,14 +79,15 @@ Because all 32 threads in a warp share a single Program Counter, conditional log
 ### 5. Pipeline and Hazard Management
 The processor employs a rigidly timed execution pipeline, trading logic complexity for high maximum clock frequencies ($F_{max}$).
 
-**5.1. Barrel Scheduling (RAW Hazard Prevention)**
-* The Instruction Issue stage operates a strict round-robin scheduler across the 32 threads. 
-* It issues exactly one instruction from the shared PC to a different thread every clock cycle.
-* Because the 32-thread loop is inherently longer than the maximum FPU latency (e.g., 24 cycles), Read-After-Write (RAW) data hazards are physically impossible. 
+**5.1. Barrel Scheduling & The 37-Cycle Pipeline**
+* The pipeline depth is strictly anchored to the longest path in the system: currently the 37-cycle Vector Reduction Unit (`FPU_MAX_LATENCY = 37`).
+* The Instruction Issue stage operates a strict round-robin scheduler, issuing exactly one instruction from the shared PC to a different thread every clock cycle.
+* Because the 32-thread loop closely matches the pipeline depth, Read-After-Write (RAW) data hazards are heavily mitigated natively by the issue distance. 
 
 **5.2. Latency Padding (Writeback Hazard Prevention)**
-* To prevent Structural Writeback Hazards (fast instructions finishing at the same time as older, slower instructions), the pipeline is rigidly padded.
-* Shift-register delay lines ensure all instructions take the exact same number of clock cycles to reach the Register File write port, guaranteeing in-order completion without a complex scoreboard.
+* To prevent Structural Writeback Hazards (fast FPU instructions finishing at the same time as older, slower Reduction instructions), the standard FPU pipeline is rigidly padded.
+* Shift-register delay lines dynamically stretch all standard arithmetic operations so they take exactly 37 clock cycles to reach the unified Writeback Multiplexer.
+* This guarantees in-order completion without requiring a complex scoreboard or stall logic. The write address, write mask, and multiplexer select bits travel down a parallel 37-cycle shift register alongside the math data.
 
 ### 6. Memory Subsystem
 The processor accesses external DDR3 memory (via an Avalon-MM master interface) using a multi-cycle, coalescing memory controller.
@@ -89,7 +97,7 @@ The processor accesses external DDR3 memory (via an Avalon-MM master interface) 
 
 **6.2. Pipeline Stalling & Context**
 * Because external memory has variable latency, memory operations break the rigid pipeline timing.
-* When a `LOAD` or `STORE` is decoded, the Memory Controller Unit (MCU) asserts a global `mem_stall` signal, freezing the PC and Barrel Scheduler while it processes the 32 memory requests. Math instructions already in the FPU pipeline continue safely to completion.
+* When a `LOAD` or `STORE` is decoded, the Memory Controller Unit (MCU) asserts a global `mem_stall` signal, freezing the PC and Barrel Scheduler while it processes the 32 memory requests. Math instructions already inside the 37-cycle pipeline continue safely to completion.
 
 **6.3. Sequential Coalescing**
 * To prevent severe performance degradation from 32 individual random memory accesses, the MCU evaluates the generated addresses.
