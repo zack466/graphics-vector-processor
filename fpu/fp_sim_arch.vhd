@@ -159,28 +159,6 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
-use work.fp_sim_types.all;
-
-architecture sim of fp_scalar_product is
-    signal math_res, pipelined_res : real;
-begin
-    math_res <= (to_real(to_float(a(0))) * to_real(to_float(b(0)))) +
-                (to_real(to_float(a(1))) * to_real(to_float(b(1)))) +
-                (to_real(to_float(a(2))) * to_real(to_float(b(2)))) +
-                (to_real(to_float(a(3))) * to_real(to_float(b(3))));
-
-    pipe_inst: entity work.Pipeline
-        generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
-
-    q <= to_slv(to_float(pipelined_res));
-end architecture;
-
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use ieee.math_real.all;
-use ieee.float_pkg.all;
 
 architecture sim of fp_min is
     signal real_a, real_b, math_res, pipelined_res : real;

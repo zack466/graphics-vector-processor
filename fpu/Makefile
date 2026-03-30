@@ -4,16 +4,22 @@ SOURCES = vector_types.vhd \
 		  fp_sim_entities.vhd fp_sim_arch.vhd \
 		  processor_constants_pkg.vhd \
 		  fpu_lane.vhd instruction_issue.vhd \
-		  tb_issuer_writeback_integration.vhd
+		  tb_issuer_writeback_integration.vhd \
+		  vector_reduction_unit.vhd 
 
 # Testbench files
 TESTBENCH_SOURCES = fp_sim_tb.vhd \
 					tb_vector_reg_file.vhd tb_swizzle_network.vhd \
 					tb_fpu_lane.vhd tb_instruction_issue.vhd \
-					tb_issuer_writeback_integration.vhd
+					tb_vector_reduction_unit.vhd \
+					tb_issuer_writeback_integration.vhd \
+					tb_full_execution_integration.vhd
 
 # Testbench executable names
-TESTBENCHES = fp_sim_tb tb_vector_reg_file tb_swizzle_network tb_fpu_lane tb_instruction_issue tb_issuer_writeback_integration
+TESTBENCHES = fp_sim_tb tb_vector_reg_file tb_swizzle_network tb_fpu_lane \
+			  tb_instruction_issue tb_issuer_writeback_integration \
+			  tb_vector_reduction_unit tb_full_execution_integration
+
 WAVEFORM = waveform.ghw
 
 # Directory for build files

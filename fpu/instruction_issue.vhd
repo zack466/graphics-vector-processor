@@ -54,8 +54,7 @@ architecture rtl of instruction_issue is
         opcode         => OP_NOP,
         rs1_addr_local => "00", rs2_addr_local => "00", rs3_addr_local => "00", rd_addr_local => "00",
         swiz_sel_a     => ("00", "00", "00", "00"), swiz_sel_b => ("00", "00", "00", "00"), swiz_sel_c => ("00", "00", "00", "00"),
-        write_mask     => "0000", wb_mux_sel => "00", reg_we => '0',
-        sfu_target_lane => "00" -- TODO: remove
+        write_mask     => "0000", wb_mux_sel => "00", reg_we => '0'
     );
     
     signal current_thread_int : std_logic_vector(THREAD_WIDTH-1 downto 0);

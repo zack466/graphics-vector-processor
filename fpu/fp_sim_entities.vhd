@@ -111,20 +111,6 @@ end entity fp_rsqrt;
 
 library ieee;
 use ieee.std_logic_1164.all;
-use work.fp_sim_types.all;
-
-entity fp_scalar_product is
-    generic( latency : integer := 18 );
-    port (
-        clk    : in  std_logic := '0';
-        en     : in  std_logic := '0';
-        a, b   : in  slv_array_4;
-        q      : out std_logic_vector(31 downto 0)
-    );
-end entity fp_scalar_product;
-
-library ieee;
-use ieee.std_logic_1164.all;
 
 entity fp_min is
     generic( latency : integer := 3 );
@@ -266,7 +252,7 @@ entity fp_rcp is
     );
 end entity fp_rcp;
 
- library IEEE;
+library IEEE;
 use IEEE.std_logic_1164.all;
 use IEEE.numeric_std.all;
 

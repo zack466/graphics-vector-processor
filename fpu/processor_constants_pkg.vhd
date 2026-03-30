@@ -10,6 +10,7 @@ package processor_constants_pkg is
     -- ========================================================================
     constant INST_TYPE_FPU  : std_logic_vector(3 downto 0) := "0000";
     constant INST_TYPE_CTRL : std_logic_vector(3 downto 0) := "0001";
+    constant INST_TYPE_RED  : std_logic_vector(3 downto 0) := "0010";
 
     -- ========================================================================
     -- FPU MATH OPCODES [31:26] (When Type == 0000)
@@ -31,7 +32,6 @@ package processor_constants_pkg is
     constant OP_I2F     : std_logic_vector(5 downto 0) := "001110"; 
     constant OP_SIN     : std_logic_vector(5 downto 0) := "010000"; 
     constant OP_COS     : std_logic_vector(5 downto 0) := "010001"; 
-    constant OP_DOT4    : std_logic_vector(5 downto 0) := "100000"; 
 
     -- ========================================================================
     -- CONTROL FLOW OPCODES [31:26] (When Type == 0001)
@@ -46,7 +46,14 @@ package processor_constants_pkg is
     -- Writeback Mux Selectors
     constant WB_MUX_FPU : std_logic_vector(1 downto 0) := "00";
     constant WB_MUX_RED : std_logic_vector(1 downto 0) := "01";
-    constant WB_MUX_SFU : std_logic_vector(1 downto 0) := "10"; -- TODO: remove
+
+    -- ========================================================================
+    -- REDUCTION UNIT MODES (Used when Type == 0010)
+    -- ========================================================================
+    constant RED_MODE_DOT     : std_logic_vector(1 downto 0) := "00"; -- Standard Dot Product (a * b)
+    constant RED_MODE_SQ_MAG  : std_logic_vector(1 downto 0) := "01"; -- Squared Magnitude (a * a)
+    constant RED_MODE_SUM     : std_logic_vector(1 downto 0) := "10"; -- Component Sum (a * 1.0)
+    constant RED_MODE_ABS_SUM : std_logic_vector(1 downto 0) := "11"; -- Absolute Sum (|a| * 1.0)
 
     -- ========================================================================
     -- CONTROL RECORDS
@@ -61,8 +68,19 @@ package processor_constants_pkg is
         swiz_sel_b      : swizzle_sel_t;
         swiz_sel_c      : swizzle_sel_t;
         write_mask      : std_logic_vector(3 downto 0);
-        sfu_target_lane : std_logic_vector(1 downto 0); -- TODO: remove
         wb_mux_sel      : std_logic_vector(1 downto 0);
+        reg_we          : std_logic;
+    end record;
+
+    type red_ctrl_t is record
+        rs1_addr_local  : std_logic_vector(1 downto 0);
+        rs2_addr_local  : std_logic_vector(1 downto 0);
+        rd_addr_local   : std_logic_vector(1 downto 0);
+        swiz_sel_a      : swizzle_sel_t;
+        swiz_sel_b      : swizzle_sel_t;
+        red_mask        : std_logic_vector(3 downto 0); -- Which input components to sum (e.g. DP3 vs DP4)
+        red_mode        : std_logic_vector(1 downto 0); -- DOT, SQ_MAG, SUM, ABS_SUM
+        wb_mux_sel      : std_logic_vector(1 downto 0); -- Routes writeback multiplexer
         reg_we          : std_logic;
     end record;
 
@@ -73,14 +91,13 @@ package processor_constants_pkg is
         is_bra_div      : std_logic;
         is_ssy          : std_logic;
         is_sync         : std_logic;
-        target_addr     : std_logic_vector(15 downto 0); -- 16-bit branch target
+        target_addr     : std_logic_vector(15 downto 10); -- 16-bit branch target
         predicate_sel   : std_logic_vector(1 downto 0);  -- Which P-reg to evaluate
     end record;
 
     -- ========================================================================
     -- HARDWARE LATENCY CONSTANTS (Derived from Altera IP / Simulation Models)
     -- ========================================================================
-    -- TODO: verify using Quartus
     constant LAT_FMADD      : integer := 22;
     constant LAT_FRCP       : integer := 14;
     constant LAT_FSQRT      : integer := 9;
@@ -95,8 +112,10 @@ package processor_constants_pkg is
     constant LAT_FCMP_EQ    : integer := 3;
     constant LAT_I2F        : integer := 6; -- Fix to Float
     constant LAT_F2I        : integer := 6; -- Float to Fix
+    constant LAT_REDUCT     : integer := 37; -- 4D Scalar Product
 
-    -- The rigid pipeline depth for the entire FPU (must be >= longest latency)
-    constant FPU_MAX_LATENCY : integer := 28;
+    -- The rigid pipeline depth for the entire execution backend 
+    -- Bound by the 37-cycle Scalar Product block.
+    constant FPU_MAX_LATENCY : integer := 37;
 
 end package;

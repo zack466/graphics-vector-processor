@@ -6,10 +6,6 @@ use work.vector_types_pkg.all;
 use work.processor_constants_pkg.all;
 
 entity vector_reduction_unit is
-    generic (
-        -- Matches the Altera fp_scalar_product IP latency
-        LATENCY : integer := 37 
-    );
     port (
         clk         : in  std_logic;
         reset       : in  std_logic;
@@ -20,10 +16,8 @@ entity vector_reduction_unit is
         vec_b       : in  vector_t;
         
         -- Reduction Modifiers
-        reduce_mask : in  std_logic_vector(3 downto 0); -- 1=Keep, 0=Force to 0.0
-        sq_mode     : in  std_logic; -- If 1: vec_b becomes vec_a (Magnitude Squared)
-        sum_mode    : in  std_logic; -- If 1: vec_b becomes 1.0   (Component Sum)
-        abs_mode    : in  std_logic; -- If 1: Force vec_a positive (Absolute Sum)
+        reduce_mask : in  std_logic_vector(3 downto 0); 
+        red_mode    : in  std_logic_vector(1 downto 0); -- Mode directly from instruction
         
         -- Output
         result      : out word_t; 
@@ -36,15 +30,13 @@ architecture rtl of vector_reduction_unit is
     constant FLOAT_ZERO : word_t := x"00000000"; -- 0.0f
     constant FLOAT_ONE  : word_t := x"3F800000"; -- 1.0f
 
-    -- Conditioned inputs that will actually be fed to the IP
     signal cond_a : vector_t;
     signal cond_b : vector_t;
 
-    -- Shift register to track instruction validity through the 37-cycle pipeline
-    signal valid_pipe : std_logic_vector(LATENCY downto 0) := (others => '0');
+    signal valid_pipe : std_logic_vector(LAT_REDUCT downto 0) := (others => '0');
 
-    -- Declare the Altera IP Component
     component fp_scalar_product is
+        generic( latency : integer := 37 );
         port (
             clk    : in  std_logic;
             areset : in  std_logic;
@@ -66,28 +58,35 @@ begin
     -- ========================================================================
     -- 1. COMBINATIONAL INPUT CONDITIONING
     -- ========================================================================
-    process(vec_a, vec_b, reduce_mask, sq_mode, sum_mode, abs_mode)
+    process(vec_a, vec_b, reduce_mask, red_mode)
         variable temp_a, temp_b : word_t;
     begin
         for i in 0 to 3 loop
             
-            -- Step 1A: Absolute Value Modifier for A
-            if abs_mode = '1' then
-                temp_a := '0' & vec_a(i)(30 downto 0); -- Strip sign bit
-            else
-                temp_a := vec_a(i);
-            end if;
+            -- Evaluate behavior based on the specific reduction mode
+            case red_mode is
+                when RED_MODE_DOT =>
+                    temp_a := vec_a(i);
+                    temp_b := vec_b(i);
+                    
+                when RED_MODE_SQ_MAG =>
+                    temp_a := vec_a(i);
+                    temp_b := vec_a(i); -- Route A into B for squaring
+                    
+                when RED_MODE_SUM =>
+                    temp_a := vec_a(i);
+                    temp_b := FLOAT_ONE; -- Multiply by 1.0
+                    
+                when RED_MODE_ABS_SUM =>
+                    temp_a := '0' & vec_a(i)(30 downto 0); -- Strip sign bit
+                    temp_b := FLOAT_ONE;
+                    
+                when others =>
+                    temp_a := vec_a(i);
+                    temp_b := vec_b(i);
+            end case;
 
-            -- Step 1B: Input B Muxing (Standard vs. Square vs. Sum)
-            if sum_mode = '1' then
-                temp_b := FLOAT_ONE;
-            elsif sq_mode = '1' then
-                temp_b := vec_a(i); -- Use unmodified A for squaring
-            else
-                temp_b := vec_b(i);
-            end if;
-
-            -- Step 2: Component Masking (Zero out if mask bit is 0)
+            -- Apply Component Masking
             if reduce_mask(i) = '1' then
                 cond_a(i) <= temp_a;
                 cond_b(i) <= temp_b;
@@ -99,26 +98,21 @@ begin
         end loop;
     end process;
 
-
     -- ========================================================================
     -- 2. HARDWARE IP INSTANTIATION
     -- ========================================================================
     u_scalar_product : fp_scalar_product
+        generic map (latency => LAT_REDUCT)
         port map (
             clk    => clk,
             areset => reset,
-            en     => '1',            -- Tie to 1 for continuous pipeline flow
-            a0     => cond_a(0),
-            b0     => cond_b(0),
-            a1     => cond_a(1),
-            b1     => cond_b(1),
-            a2     => cond_a(2),
-            b2     => cond_b(2),
-            a3     => cond_a(3),
-            b3     => cond_b(3),
+            en     => '1', 
+            a0     => cond_a(0), b0 => cond_b(0),
+            a1     => cond_a(1), b1 => cond_b(1),
+            a2     => cond_a(2), b2 => cond_b(2),
+            a3     => cond_a(3), b3 => cond_b(3),
             q      => result
         );
-
 
     -- ========================================================================
     -- 3. VALID SIGNAL PIPELINE
@@ -130,13 +124,13 @@ begin
                 valid_pipe <= (others => '0');
             else
                 valid_pipe(0) <= valid_in;
-                for i in 1 to LATENCY loop
+                for i in 1 to LAT_REDUCT loop
                     valid_pipe(i) <= valid_pipe(i-1);
                 end loop;
             end if;
         end if;
     end process;
 
-    valid_out <= valid_pipe(LATENCY);
+    valid_out <= valid_pipe(LAT_REDUCT);
 
 end architecture rtl;
