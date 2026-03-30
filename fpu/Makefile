@@ -3,7 +3,7 @@ SOURCES = vector_types.vhd \
 		  processor_constants_pkg.vhd \
 		  fp_sim_entities.vhd fp_sim_arch.vhd \
 		  vector_reg_file.vhd swizzle_network.vhd \
-		  fpu_lane.vhd instruction_issue.vhd \
+		  fpu_lane.vhd alu_lane.vhd instruction_issue.vhd \
 		  predicate_reg_file.vhd \
 		  vector_reduction_unit.vhd  \
 		  instruction_memory.vhd \
@@ -11,7 +11,7 @@ SOURCES = vector_types.vhd \
 		  writeback_controller.vhd \
 
 # Testbench files
-TESTBENCH_SOURCES = fp_sim_tb.vhd \
+TESTBENCH_SOURCES = tb_fp_sim.vhd \
 					tb_vector_reg_file.vhd tb_swizzle_network.vhd \
 					tb_fpu_lane.vhd tb_instruction_issue.vhd \
 					tb_vector_reduction_unit.vhd \
@@ -21,7 +21,7 @@ TESTBENCH_SOURCES = fp_sim_tb.vhd \
 					tb_instruction_fetch_unit.vhd
 
 # Testbench executable names
-TESTBENCHES = fp_sim_tb tb_vector_reg_file tb_swizzle_network tb_fpu_lane \
+TESTBENCHES = tb_fp_sim tb_vector_reg_file tb_swizzle_network tb_fpu_lane \
 			  tb_instruction_issue tb_issuer_writeback_integration \
 			  tb_vector_reduction_unit tb_full_execution_integration \
 			  tb_instruction_memory tb_instruction_fetch_unit

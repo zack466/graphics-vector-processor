@@ -9,6 +9,7 @@ entity instruction_decoder is
         instruction : in  word_t;
         fpu_ctrl    : out fpu_ctrl_t;
         red_ctrl    : out red_ctrl_t;
+        alu_ctrl    : out alu_ctrl_t;
         pc_ctrl     : out pc_ctrl_t
     );
 end entity;
@@ -62,12 +63,25 @@ begin
         v_pc.predicate_sel   := "00";
         v_pc.predicate_mod   := PRED_MOD_ANY;
 
+        v_alu.opcode         := OP_NOP;
+        v_alu.rs1_addr_local := "00";
+        v_alu.rs2_addr_local := "00";
+        v_alu.rd_addr_local  := "00";
+        v_alu.swiz_sel_a     := ("00", "00", "00", "00");
+        v_alu.swiz_sel_b     := ("11", "10", "01", "00");
+        v_alu.write_mask     := "0000";
+        v_alu.wb_mux_sel     := WB_MUX_ALU;
+        v_alu.vrf_we         := '0';
+
         -- ====================================================================
         -- 2. DECODE BASED ON INSTRUCTION TYPE
         -- ====================================================================
         if inst_type = INST_TYPE_FPU then
             -- ----------------------------------------------------------------
             -- FPU MATH INSTRUCTION MAP
+            -- [31:26] Opcode | [25:22] Mask | [21:20] Dest | [19:18] Src1
+            -- [17:16] Src2   | [15:14] Src3 | [13] Cmp_Inv | [12] Cmp_Swap
+            -- [11:4] Swiz A  | [3:0] Type
             -- ----------------------------------------------------------------
             v_fpu.opcode         := internal_opcode;
             v_fpu.write_mask     := instruction(25 downto 22);
@@ -112,6 +126,8 @@ begin
         elsif inst_type = INST_TYPE_RED then
             -- ----------------------------------------------------------------
             -- REDUCTION INSTRUCTION MAP
+            -- [31:30] Mode | [29:26] Mask | [25:24] Dest   | [23:22] Src1
+            -- [21:20] Src2 | [19:12] Swz A| [11:4]  Swz B  | [3:0] Type
             -- ----------------------------------------------------------------
             v_red.red_mode       := instruction(31 downto 30);
             v_red.red_mask       := instruction(29 downto 26);
@@ -135,6 +151,8 @@ begin
         elsif inst_type = INST_TYPE_CTRL then
             -- ----------------------------------------------------------------
             -- SIMT CONTROL INSTRUCTION MAP
+            -- [31:26] Opcode | [25:10] Target (16b) | [9:8] P_Sel | [7:6] P_Mod
+            -- [5:4] Reserved | [3:0] Type
             -- ----------------------------------------------------------------
             v_pc.target_addr   := instruction(25 downto 10);
             v_pc.predicate_sel := instruction(9 downto 8);
@@ -149,6 +167,29 @@ begin
                 when OP_SYNC    => v_pc.branch_type := BR_SYNC;
                 when others     => v_pc.branch_type := BR_NONE;
             end case;
+
+        elsif inst_type = INST_TYPE_ALU then
+            -- ----------------------------------------------------------------
+            -- INTEGER ALU INSTRUCTION MAP
+            -- ----------------------------------------------------------------
+            v_alu.opcode         := internal_opcode;
+            v_alu.write_mask     := instruction(25 downto 22);
+            v_alu.rd_addr_local  := instruction(21 downto 20);
+            v_alu.rs1_addr_local := instruction(19 downto 18);
+            v_alu.rs2_addr_local := instruction(17 downto 16);
+            
+            v_alu.swiz_sel_a(3)  := instruction(11 downto 10);
+            v_alu.swiz_sel_a(2)  := instruction(9 downto 8);
+            v_alu.swiz_sel_a(1)  := instruction(7 downto 6);
+            v_alu.swiz_sel_a(0)  := instruction(5 downto 4);
+
+            v_alu.swiz_sel_b(3)  := instruction(11 downto 10);
+            v_alu.swiz_sel_b(2)  := instruction(9 downto 8);
+            v_alu.swiz_sel_b(1)  := instruction(7 downto 6);
+            v_alu.swiz_sel_b(0)  := instruction(5 downto 4);
+
+            v_alu.wb_mux_sel     := WB_MUX_ALU;
+            v_alu.vrf_we         := '1';
         end if;
 
         -- ====================================================================
@@ -157,6 +198,7 @@ begin
         fpu_ctrl <= v_fpu;
         red_ctrl <= v_red;
         pc_ctrl  <= v_pc;
+        alu_ctrl <= v_alu;
 
     end process;
 

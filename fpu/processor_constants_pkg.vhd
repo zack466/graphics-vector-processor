@@ -11,6 +11,7 @@ package processor_constants_pkg is
     constant INST_TYPE_FPU  : std_logic_vector(3 downto 0) := "0000";
     constant INST_TYPE_CTRL : std_logic_vector(3 downto 0) := "0001";
     constant INST_TYPE_RED  : std_logic_vector(3 downto 0) := "0010";
+    constant INST_TYPE_ALU  : std_logic_vector(3 downto 0) := "0011";
 
     -- ========================================================================
     -- FPU MATH OPCODES [31:26] (When Type == 0000)
@@ -51,6 +52,7 @@ package processor_constants_pkg is
     -- Writeback Mux Selectors
     constant WB_MUX_FPU : std_logic_vector(1 downto 0) := "00";
     constant WB_MUX_RED : std_logic_vector(1 downto 0) := "01";
+    constant WB_MUX_ALU : std_logic_vector(1 downto 0) := "10";
 
     -- ========================================================================
     -- REDUCTION UNIT MODES (Used when Type == 0010)
@@ -75,6 +77,17 @@ package processor_constants_pkg is
     constant PRED_MOD_ALL : std_logic_vector(1 downto 0) := "01"; -- True if X&Y&Z&A == 1
     constant PRED_MOD_X   : std_logic_vector(1 downto 0) := "10"; -- True if X == 1
     constant PRED_MOD_A   : std_logic_vector(1 downto 0) := "11"; -- True if A == 1
+
+    -- ========================================================================
+    -- INTEGER ALU OPCODES [31:26] (When Type == 0011)
+    -- ========================================================================
+    constant OP_IADD    : std_logic_vector(5 downto 0) := "000000";
+    constant OP_ISUB    : std_logic_vector(5 downto 0) := "000001";
+    constant OP_IAND    : std_logic_vector(5 downto 0) := "000010";
+    constant OP_IOR     : std_logic_vector(5 downto 0) := "000011";
+    constant OP_IXOR    : std_logic_vector(5 downto 0) := "000100";
+    constant OP_ISHL    : std_logic_vector(5 downto 0) := "000101"; -- Shift Left
+    constant OP_ISHR    : std_logic_vector(5 downto 0) := "000110"; -- Shift Right
 
     -- ========================================================================
     -- CONTROL RECORDS (Expanded explicitly to remove downstream decoding)
@@ -114,6 +127,40 @@ package processor_constants_pkg is
         target_addr     : std_logic_vector(15 downto 0); 
         predicate_sel   : std_logic_vector(1 downto 0);  
         predicate_mod   : std_logic_vector(1 downto 0);  
+    end record;
+
+    type alu_ctrl_t is record
+        opcode          : std_logic_vector(5 downto 0);
+        rs1_addr_local  : std_logic_vector(1 downto 0);
+        rs2_addr_local  : std_logic_vector(1 downto 0);
+        rd_addr_local   : std_logic_vector(1 downto 0);
+        swiz_sel_a      : swizzle_sel_t;
+        swiz_sel_b      : swizzle_sel_t;
+        write_mask      : std_logic_vector(3 downto 0);
+        wb_mux_sel      : std_logic_vector(1 downto 0);
+        vrf_we          : std_logic;
+    end record;
+
+    -- ========================================================================
+    -- UNIFIED EXECUTION PIPELINE RECORD
+    -- Muxed from specific ctrl records before entering the Issue Stage
+    -- ========================================================================
+    type exec_ctrl_t is record
+        opcode          : std_logic_vector(5 downto 0);
+        rs1_addr_local  : std_logic_vector(1 downto 0);
+        rs2_addr_local  : std_logic_vector(1 downto 0);
+        rs3_addr_local  : std_logic_vector(1 downto 0); -- FPU only
+        rd_addr_local   : std_logic_vector(1 downto 0);
+        swiz_sel_a      : swizzle_sel_t;
+        swiz_sel_b      : swizzle_sel_t;
+        swiz_sel_c      : swizzle_sel_t;                -- FPU only
+        write_mask      : std_logic_vector(3 downto 0);
+        cmp_invert      : std_logic;                    -- FPU only
+        cmp_swap        : std_logic;                    -- FPU only
+        is_logic_op     : std_logic;                    -- FPU only
+        vrf_we          : std_logic;
+        prf_we          : std_logic;                    -- FPU only
+        wb_mux_sel      : std_logic_vector(1 downto 0);
     end record;
 
     -- ========================================================================

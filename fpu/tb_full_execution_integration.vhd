@@ -21,7 +21,7 @@ architecture sim of tb_full_execution_integration is
     -- ========================================================================
     -- STAGE 0: INSTRUCTION ISSUE & PARALLEL LATCH
     -- ========================================================================
-    signal fpu_ctrl_in     : fpu_ctrl_t;
+    signal exec_ctrl_in    : exec_ctrl_t; -- UPDATED: Unified Execution Record
     signal valid_in        : std_logic := '0';
     
     signal inst_type_in    : std_logic_vector(3 downto 0) := INST_TYPE_FPU;
@@ -77,14 +77,17 @@ architecture sim of tb_full_execution_integration is
     signal swiz_a_out, swiz_b_out                   : vector_t;
 
     -- ========================================================================
-    -- STAGE 2: PARALLEL EXECUTION (FPU vs REDUCTION)
+    -- STAGE 2: PARALLEL EXECUTION (FPU, ALU, REDUCTION)
     -- ========================================================================
-    signal fpu_en, red_en : std_logic;
+    signal fpu_en, red_en, alu_en : std_logic;
     
     signal fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_a : word_t;
     signal comp_flag_x, comp_flag_y, comp_flag_z, comp_flag_a : std_logic;
     signal fpu_valid_x : std_logic;
     signal red_res_scalar : word_t;
+    
+    signal alu_res   : word_t;
+    signal alu_valid : std_logic;
     
     signal wb_data     : vector_t;
     signal prf_wb_data : std_logic_vector(3 downto 0);
@@ -138,7 +141,7 @@ begin
     -- ========================================================================
     u_issuer: entity work.instruction_issue
         port map (
-            clk => clk, reset => reset, fpu_ctrl_in => fpu_ctrl_in, valid_in => valid_in,
+            clk => clk, reset => reset, exec_ctrl_in => exec_ctrl_in, valid_in => valid_in,
             current_thread => current_thread, opcode_out => iss_opcode,
             rs1_addr_global => iss_rs1_addr, rs2_addr_global => iss_rs2_addr, 
             rs3_addr_global => iss_rs3_addr, rd_addr_global => iss_rd_addr,
@@ -202,6 +205,7 @@ begin
 
     fpu_en <= '1' when (s1_valid = '1' and s1_type = INST_TYPE_FPU) else '0';
     red_en <= '1' when (s1_valid = '1' and s1_type = INST_TYPE_RED) else '0';
+    alu_en <= '1' when (s1_valid = '1' and s1_type = INST_TYPE_ALU) else '0';
 
     -- FPU lanes just receive opcode as a dumb ALU selector
     u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>fpu_en, op_a=>swiz_a_out(0), op_b=>swiz_b_out(0), op_c=>vrf_rs3_data(0), result=>fpu_res_x, valid_out=>fpu_valid_x, comp_flag=>comp_flag_x, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
@@ -217,9 +221,17 @@ begin
             result => red_res_scalar, valid_out => open
         );
 
-    wb_data <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_a) 
-               when wb_mux_sel = WB_MUX_FPU 
-               else (red_res_scalar, red_res_scalar, red_res_scalar, red_res_scalar);
+    -- NEW: ALU Lane (Scalar, tapped into .x channel)
+    u_alu: entity work.alu_lane 
+        port map (
+            clk       => clk, reset => reset, opcode => s1_opcode, valid_in => alu_en,
+            op_a      => swiz_a_out(0), op_b => swiz_b_out(0),
+            result    => alu_res, valid_out => alu_valid
+        );
+
+    wb_data <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_a) when wb_mux_sel = WB_MUX_FPU else 
+               (red_res_scalar, red_res_scalar, red_res_scalar, red_res_scalar) when wb_mux_sel = WB_MUX_RED else
+               (alu_res, alu_res, alu_res, alu_res);
                
     prf_wb_data <= comp_flag_a & comp_flag_z & comp_flag_y & comp_flag_x;
 
@@ -254,19 +266,19 @@ begin
     stim_proc: process
     begin
         -- Base Initialization matching Decoder Defaults
-        fpu_ctrl_in.opcode <= OP_NOP; 
-        fpu_ctrl_in.rs1_addr_local <= "00"; fpu_ctrl_in.rs2_addr_local <= "00";
-        fpu_ctrl_in.rs3_addr_local <= "00"; fpu_ctrl_in.rd_addr_local <= "00"; 
-        fpu_ctrl_in.write_mask <= "0000";
-        fpu_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        fpu_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        fpu_ctrl_in.swiz_sel_c <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        fpu_ctrl_in.wb_mux_sel <= WB_MUX_FPU; 
-        fpu_ctrl_in.cmp_invert <= '0';
-        fpu_ctrl_in.cmp_swap <= '0';
-        fpu_ctrl_in.is_logic_op <= '0';
-        fpu_ctrl_in.vrf_we <= '0';
-        fpu_ctrl_in.prf_we <= '0';
+        exec_ctrl_in.opcode <= OP_NOP; 
+        exec_ctrl_in.rs1_addr_local <= "00"; exec_ctrl_in.rs2_addr_local <= "00";
+        exec_ctrl_in.rs3_addr_local <= "00"; exec_ctrl_in.rd_addr_local <= "00"; 
+        exec_ctrl_in.write_mask <= "0000";
+        exec_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        exec_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        exec_ctrl_in.swiz_sel_c <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        exec_ctrl_in.wb_mux_sel <= WB_MUX_FPU; 
+        exec_ctrl_in.cmp_invert <= '0';
+        exec_ctrl_in.cmp_swap <= '0';
+        exec_ctrl_in.is_logic_op <= '0';
+        exec_ctrl_in.vrf_we <= '0';
+        exec_ctrl_in.prf_we <= '0';
 
         wait until rising_edge(clk);
         reset <= '0';
@@ -275,7 +287,7 @@ begin
         -- ====================================================================
         -- PHASE 1: Data Setup
         -- ====================================================================
-        report ">> PHASE 1: Initializing Vector Registers (v0 = Thread*4 + Comp_ID, v1 = 10.0)";
+        report ">> PHASE 1: Initializing Vector Registers (v0=Floats, v1=10.0, v3=Integers)";
         for i in 0 to 31 loop
             mcu_wr_addr    <= std_logic_vector(to_unsigned(i, 5)) & "00"; -- v0
             mcu_wr_data(0) <= to_slv(to_float(real(i * 4 + 0))); 
@@ -289,6 +301,10 @@ begin
             mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "01"; -- v1
             mcu_wr_data <= (others => x"41200000"); -- 10.0f
             wait until rising_edge(clk);
+            
+            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "11"; -- v3
+            mcu_wr_data <= (others => std_logic_vector(to_unsigned(i * 2, 32))); 
+            wait until rising_edge(clk);
         end loop;
         mcu_we <= '0';
 
@@ -297,17 +313,16 @@ begin
         -- ====================================================================
         report ">> PHASE 2: Issuing OP_FADD (v2 = v0 + v1)";
         inst_type_in <= INST_TYPE_FPU;
-        fpu_ctrl_in.opcode <= OP_FADD;
-        fpu_ctrl_in.rs1_addr_local <= "00"; -- v0
-        fpu_ctrl_in.rs2_addr_local <= "01"; -- v1
-        fpu_ctrl_in.rd_addr_local  <= "10"; -- v2
-        fpu_ctrl_in.write_mask     <= "1111";
-        fpu_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
+        exec_ctrl_in.opcode <= OP_FADD;
+        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
+        exec_ctrl_in.rs2_addr_local <= "01"; -- v1
+        exec_ctrl_in.rd_addr_local  <= "10"; -- v2
+        exec_ctrl_in.write_mask     <= "1111";
+        exec_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
         
-        -- MOCKING DECODER FLAGS:
-        fpu_ctrl_in.vrf_we         <= '1';
-        fpu_ctrl_in.prf_we         <= '0';
-        fpu_ctrl_in.is_logic_op    <= '0';
+        exec_ctrl_in.vrf_we         <= '1';
+        exec_ctrl_in.prf_we         <= '0';
+        exec_ctrl_in.is_logic_op    <= '0';
         
         valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0'; 
         for i in 1 to 80 loop wait until rising_edge(clk); end loop;
@@ -332,17 +347,16 @@ begin
         red_mode_in  <= RED_MODE_DOT;
         red_mask_in  <= "1111";
         
-        fpu_ctrl_in.opcode <= OP_NOP;
-        fpu_ctrl_in.rs1_addr_local <= "00"; -- v0
-        fpu_ctrl_in.rs2_addr_local <= "01"; -- v1
-        fpu_ctrl_in.rd_addr_local  <= "11"; -- v3
-        fpu_ctrl_in.write_mask     <= "1111"; -- Broadcast scalar to all 4 coords
-        fpu_ctrl_in.wb_mux_sel     <= WB_MUX_RED;
+        exec_ctrl_in.opcode <= OP_NOP;
+        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
+        exec_ctrl_in.rs2_addr_local <= "01"; -- v1
+        exec_ctrl_in.rd_addr_local  <= "11"; -- v3
+        exec_ctrl_in.write_mask     <= "1111"; 
+        exec_ctrl_in.wb_mux_sel     <= WB_MUX_RED;
         
-        -- MOCKING DECODER FLAGS:
-        fpu_ctrl_in.vrf_we         <= '1';
-        fpu_ctrl_in.prf_we         <= '0';
-        fpu_ctrl_in.is_logic_op    <= '0';
+        exec_ctrl_in.vrf_we         <= '1';
+        exec_ctrl_in.prf_we         <= '0';
+        exec_ctrl_in.is_logic_op    <= '0';
         
         valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
         for i in 1 to 80 loop wait until rising_edge(clk); end loop;
@@ -364,21 +378,19 @@ begin
         -- ====================================================================
         report ">> PHASE 6: Issuing OP_FMUL (v2.xz = v0.yxxa * v0.zzyy)";
         inst_type_in <= INST_TYPE_FPU;
-        fpu_ctrl_in.opcode <= OP_FMUL;
-        fpu_ctrl_in.rs1_addr_local <= "00"; -- v0
-        fpu_ctrl_in.rs2_addr_local <= "00"; -- v0 again
-        fpu_ctrl_in.rd_addr_local  <= "10"; -- Overwrite v2
-        fpu_ctrl_in.write_mask     <= "0101"; -- Write X and Z only
+        exec_ctrl_in.opcode <= OP_FMUL;
+        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
+        exec_ctrl_in.rs2_addr_local <= "00"; -- v0 again
+        exec_ctrl_in.rd_addr_local  <= "10"; -- Overwrite v2
+        exec_ctrl_in.write_mask     <= "0101"; -- Write X and Z only
         
-        -- Swizzle A: Y, X, X, A
-        fpu_ctrl_in.swiz_sel_a <= (0 => "01", 1 => "00", 2 => "00", 3 => "11");
-        -- Swizzle B: Z, Z, Y, Y
-        fpu_ctrl_in.swiz_sel_b <= (0 => "10", 1 => "10", 2 => "01", 3 => "01");
+        exec_ctrl_in.swiz_sel_a <= (0 => "01", 1 => "00", 2 => "00", 3 => "11");
+        exec_ctrl_in.swiz_sel_b <= (0 => "10", 1 => "10", 2 => "01", 3 => "01");
         
-        fpu_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
-        fpu_ctrl_in.vrf_we         <= '1';
-        fpu_ctrl_in.prf_we         <= '0';
-        fpu_ctrl_in.is_logic_op    <= '0';
+        exec_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
+        exec_ctrl_in.vrf_we         <= '1';
+        exec_ctrl_in.prf_we         <= '0';
+        exec_ctrl_in.is_logic_op    <= '0';
         
         valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
         for i in 1 to 80 loop wait until rising_edge(clk); end loop;
@@ -388,13 +400,9 @@ begin
             mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "10";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
-            -- X (Written): (4i+1) * (4i+2)
             assert to_real(to_float(mcu_rd_data(0))) = real((i * 4 + 1) * (i * 4 + 2)) report "P7 X mismatch (Written)!" severity error;
-            -- Y (Preserved from Phase 2): 4i + 1 + 10.0
             assert to_real(to_float(mcu_rd_data(1))) = real(i * 4 + 1) + 10.0 report "P7 Y mismatch (Preserved)!" severity error;
-            -- Z (Written): (4i) * (4i+1)
             assert to_real(to_float(mcu_rd_data(2))) = real((i * 4 + 0) * (i * 4 + 1)) report "P7 Z mismatch (Written)!" severity error;
-            -- A (Preserved from Phase 2): 4i + 3 + 10.0
             assert to_real(to_float(mcu_rd_data(3))) = real(i * 4 + 3) + 10.0 report "P7 A mismatch (Preserved)!" severity error;
             wait until rising_edge(clk);
         end loop;
@@ -405,21 +413,20 @@ begin
         report ">> PHASE 8: Issuing RED_MODE_SUM (v3.y = SUM(v0.yyzz))";
         inst_type_in <= INST_TYPE_RED;
         red_mode_in  <= RED_MODE_SUM;
-        red_mask_in  <= "1111"; -- Sum all 4 swizzled components
+        red_mask_in  <= "1111"; 
         
-        fpu_ctrl_in.opcode <= OP_NOP; 
-        fpu_ctrl_in.rs1_addr_local <= "00"; -- v0
-        fpu_ctrl_in.rs2_addr_local <= "00"; -- Ignored by SUM, set to v0
-        fpu_ctrl_in.rd_addr_local  <= "11"; -- Overwrite v3
-        fpu_ctrl_in.write_mask     <= "0010"; -- Write Y only
+        exec_ctrl_in.opcode <= OP_NOP; 
+        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
+        exec_ctrl_in.rs2_addr_local <= "00"; -- Ignored by SUM, set to v0
+        exec_ctrl_in.rd_addr_local  <= "11"; -- Overwrite v3
+        exec_ctrl_in.write_mask     <= "0010"; -- Write Y only
         
-        -- Swizzle A: Y, Y, Z, Z
-        fpu_ctrl_in.swiz_sel_a <= (0 => "01", 1 => "01", 2 => "10", 3 => "10");
+        exec_ctrl_in.swiz_sel_a <= (0 => "01", 1 => "01", 2 => "10", 3 => "10");
         
-        fpu_ctrl_in.wb_mux_sel     <= WB_MUX_RED;
-        fpu_ctrl_in.vrf_we         <= '1';
-        fpu_ctrl_in.prf_we         <= '0';
-        fpu_ctrl_in.is_logic_op    <= '0';
+        exec_ctrl_in.wb_mux_sel     <= WB_MUX_RED;
+        exec_ctrl_in.vrf_we         <= '1';
+        exec_ctrl_in.prf_we         <= '0';
+        exec_ctrl_in.is_logic_op    <= '0';
         
         valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
         for i in 1 to 80 loop wait until rising_edge(clk); end loop;
@@ -429,11 +436,8 @@ begin
             mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
-            -- X (Preserved from Phase 4)
             assert to_real(to_float(mcu_rd_data(0))) = real(160 * i + 60) report "P9 X mismatch (Preserved)!" severity error;
-            -- Y (Written): (4i+1) + (4i+1) + (4i+2) + (4i+2) = 16i + 6
             assert to_real(to_float(mcu_rd_data(1))) = real(16 * i + 6) report "P9 Y mismatch (Written)!" severity error;
-            -- Z & A (Preserved from Phase 4)
             assert to_real(to_float(mcu_rd_data(2))) = real(160 * i + 60) report "P9 Z mismatch (Preserved)!" severity error;
             assert to_real(to_float(mcu_rd_data(3))) = real(160 * i + 60) report "P9 A mismatch (Preserved)!" severity error;
             wait until rising_edge(clk);
@@ -444,22 +448,20 @@ begin
         -- ====================================================================
         report ">> PHASE 10: Issuing OP_FCMP_LT (p0 = v0 < v1)";
         inst_type_in <= INST_TYPE_FPU;
-        fpu_ctrl_in.opcode <= OP_FCMP_LT;
-        fpu_ctrl_in.rs1_addr_local <= "00"; -- v0
-        fpu_ctrl_in.rs2_addr_local <= "01"; -- v1 (10.0)
-        fpu_ctrl_in.rd_addr_local  <= "00"; -- p0
-        fpu_ctrl_in.write_mask     <= "1111";
-        fpu_ctrl_in.cmp_invert     <= '0';
-        fpu_ctrl_in.cmp_swap       <= '0';
+        exec_ctrl_in.opcode <= OP_FCMP_LT;
+        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
+        exec_ctrl_in.rs2_addr_local <= "01"; -- v1 (10.0)
+        exec_ctrl_in.rd_addr_local  <= "00"; -- p0
+        exec_ctrl_in.write_mask     <= "1111";
+        exec_ctrl_in.cmp_invert     <= '0';
+        exec_ctrl_in.cmp_swap       <= '0';
         
-        -- Reset swizzles to default identity pass-through
-        fpu_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        fpu_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        exec_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        exec_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
         
-        -- MOCKING DECODER FLAGS (Compares write to PRF only)
-        fpu_ctrl_in.vrf_we         <= '0';
-        fpu_ctrl_in.prf_we         <= '1'; 
-        fpu_ctrl_in.is_logic_op    <= '0';
+        exec_ctrl_in.vrf_we         <= '0';
+        exec_ctrl_in.prf_we         <= '1'; 
+        exec_ctrl_in.is_logic_op    <= '0';
         
         valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
         for i in 1 to 80 loop wait until rising_edge(clk); end loop;
@@ -468,8 +470,8 @@ begin
         -- PHASE 11: Predicate Generation (p1 = v0 == v1)
         -- ====================================================================
         report ">> PHASE 11: Issuing OP_FCMP_EQ (p1 = v0 == v1)";
-        fpu_ctrl_in.opcode <= OP_FCMP_EQ;
-        fpu_ctrl_in.rd_addr_local  <= "01"; -- p1
+        exec_ctrl_in.opcode <= OP_FCMP_EQ;
+        exec_ctrl_in.rd_addr_local  <= "01"; -- p1
         
         valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
         for i in 1 to 80 loop wait until rising_edge(clk); end loop;
@@ -478,15 +480,14 @@ begin
         -- PHASE 12: Predicate Logic Combination (p2 = p0 OR p1)
         -- ====================================================================
         report ">> PHASE 12: Issuing OP_POR (p2 = p0 | p1)";
-        fpu_ctrl_in.opcode <= OP_POR;
-        fpu_ctrl_in.rs1_addr_local <= "00"; -- p0
-        fpu_ctrl_in.rs2_addr_local <= "01"; -- p1
-        fpu_ctrl_in.rd_addr_local  <= "10"; -- p2
+        exec_ctrl_in.opcode <= OP_POR;
+        exec_ctrl_in.rs1_addr_local <= "00"; -- p0
+        exec_ctrl_in.rs2_addr_local <= "01"; -- p1
+        exec_ctrl_in.rd_addr_local  <= "10"; -- p2
         
-        -- MOCKING DECODER FLAGS (Logic ops enable PRF injection)
-        fpu_ctrl_in.vrf_we         <= '0';
-        fpu_ctrl_in.prf_we         <= '1'; 
-        fpu_ctrl_in.is_logic_op    <= '1';
+        exec_ctrl_in.vrf_we         <= '0';
+        exec_ctrl_in.prf_we         <= '1'; 
+        exec_ctrl_in.is_logic_op    <= '1';
         
         valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
         for i in 1 to 80 loop wait until rising_edge(clk); end loop;
@@ -497,25 +498,69 @@ begin
         report ">> PHASE 13: Verifying PRF Logic and IFU Collapse";
         ifu_pred_sel <= "10"; -- Select p2
         
-        -- Test ANY Modifier
         ifu_pred_mod <= PRED_MOD_ANY;
         wait until rising_edge(clk); wait until falling_edge(clk);
         assert ifu_mask_out = x"00000007" report "P13 ANY Failed! Expected Threads 0,1,2" severity error;
         
-        -- Test ALL Modifier
         ifu_pred_mod <= PRED_MOD_ALL;
         wait until rising_edge(clk); wait until falling_edge(clk);
         assert ifu_mask_out = x"00000003" report "P13 ALL Failed! Expected Threads 0,1" severity error;
         
-        -- Test X Modifier
         ifu_pred_mod <= PRED_MOD_X;
         wait until rising_edge(clk); wait until falling_edge(clk);
         assert ifu_mask_out = x"00000007" report "P13 X Failed! Expected Threads 0,1,2" severity error;
         
-        -- Test A(W) Modifier
         ifu_pred_mod <= PRED_MOD_A; 
         wait until rising_edge(clk); wait until falling_edge(clk);
         assert ifu_mask_out = x"00000003" report "P13 A Failed! Expected Threads 0,1" severity error;
+
+        -- ====================================================================
+        -- PHASE 13.5: Re-Initialize v3 for ALU testing
+        -- ====================================================================
+        report ">> PHASE 13.5: Re-initializing v3 with integers";
+        for i in 0 to 31 loop
+            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "11"; -- v3
+            mcu_wr_data <= (others => std_logic_vector(to_unsigned(i * 2, 32)));
+            mcu_mask    <= "1111";
+            mcu_we      <= '1';
+            wait until rising_edge(clk);
+        end loop;
+        mcu_we <= '0';
+        wait until rising_edge(clk);
+
+        -- ====================================================================
+        -- PHASE 14 & 15: ALU Integration Test (v3.x = v3.x + v3.x)
+        -- ====================================================================
+        report ">> PHASE 14: Issuing OP_IADD (v3.x = v3.x + v3.x)";
+        inst_type_in <= INST_TYPE_ALU;
+        exec_ctrl_in.opcode <= OP_IADD;
+        exec_ctrl_in.rs1_addr_local <= "11"; -- v3
+        exec_ctrl_in.rs2_addr_local <= "11"; -- v3
+        exec_ctrl_in.rd_addr_local  <= "11"; -- Overwrite v3
+        exec_ctrl_in.write_mask     <= "0001"; -- Scalar write to X only
+        
+        exec_ctrl_in.wb_mux_sel     <= WB_MUX_ALU;
+        exec_ctrl_in.vrf_we         <= '1';
+        exec_ctrl_in.prf_we         <= '0';
+        exec_ctrl_in.is_logic_op    <= '0';
+        
+        -- Reset swizzles to default identity pass-through
+        exec_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        exec_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        
+        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
+        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+
+        report ">> PHASE 15: Verifying ALU Writeback";
+        for i in 0 to 31 loop
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            wait until rising_edge(clk); wait until falling_edge(clk);
+            
+            -- Thread `i` started with v3.x = i * 2. After IADD, it should be (i*2) + (i*2) = i*4
+            assert to_integer(unsigned(mcu_rd_data(0))) = i * 4 report "P15 ALU X mismatch!" severity error;
+            
+            wait until rising_edge(clk);
+        end loop;
 
         report ">> EXHAUSTIVE INTEGRATION TEST COMPLETE: All tests passed!";
         std.env.stop;

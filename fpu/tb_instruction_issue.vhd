@@ -13,7 +13,8 @@ architecture sim of tb_instruction_issue is
     signal clk             : std_logic := '0';
     signal reset           : std_logic := '1';
     
-    signal fpu_ctrl_in     : fpu_ctrl_t;
+    -- UPDATED: Now uses the unified execution control record
+    signal exec_ctrl_in    : exec_ctrl_t;
     signal valid_in        : std_logic := '0';
     
     signal current_thread  : std_logic_vector(4 downto 0);
@@ -41,7 +42,9 @@ begin
     uut: entity work.instruction_issue
         generic map ( THREAD_WIDTH => 5, REG_WIDTH => 2 )
         port map (
-            clk => clk, reset => reset, fpu_ctrl_in => fpu_ctrl_in, valid_in => valid_in,
+            clk => clk, reset => reset, 
+            exec_ctrl_in => exec_ctrl_in, -- UPDATED PORT
+            valid_in => valid_in,
             current_thread => current_thread, opcode_out => opcode_out,
             rs1_addr_global => rs1_addr_global, rs2_addr_global => rs2_addr_global,
             rs3_addr_global => rs3_addr_global, rd_addr_global => rd_addr_global,
@@ -59,22 +62,22 @@ begin
 
     stim_proc: process
     begin
-        -- Default Initialization
-        fpu_ctrl_in.opcode         <= OP_NOP;
-        fpu_ctrl_in.rs1_addr_local <= "00";
-        fpu_ctrl_in.rs2_addr_local <= "00";
-        fpu_ctrl_in.rs3_addr_local <= "00";
-        fpu_ctrl_in.rd_addr_local  <= "00";
-        fpu_ctrl_in.swiz_sel_a     <= ("00", "00", "00", "00");
-        fpu_ctrl_in.swiz_sel_b     <= ("00", "00", "00", "00");
-        fpu_ctrl_in.swiz_sel_c     <= ("00", "00", "00", "00");
-        fpu_ctrl_in.write_mask     <= "0000";
-        fpu_ctrl_in.cmp_invert     <= '0';
-        fpu_ctrl_in.cmp_swap       <= '0';
-        fpu_ctrl_in.is_logic_op    <= '0';
-        fpu_ctrl_in.wb_mux_sel     <= "00";
-        fpu_ctrl_in.vrf_we         <= '0';
-        fpu_ctrl_in.prf_we         <= '0';
+        -- Default Initialization using unified record
+        exec_ctrl_in.opcode         <= OP_NOP;
+        exec_ctrl_in.rs1_addr_local <= "00";
+        exec_ctrl_in.rs2_addr_local <= "00";
+        exec_ctrl_in.rs3_addr_local <= "00";
+        exec_ctrl_in.rd_addr_local  <= "00";
+        exec_ctrl_in.swiz_sel_a     <= ("00", "00", "00", "00");
+        exec_ctrl_in.swiz_sel_b     <= ("00", "00", "00", "00");
+        exec_ctrl_in.swiz_sel_c     <= ("00", "00", "00", "00");
+        exec_ctrl_in.write_mask     <= "0000";
+        exec_ctrl_in.cmp_invert     <= '0';
+        exec_ctrl_in.cmp_swap       <= '0';
+        exec_ctrl_in.is_logic_op    <= '0';
+        exec_ctrl_in.wb_mux_sel     <= "00";
+        exec_ctrl_in.vrf_we         <= '0';
+        exec_ctrl_in.prf_we         <= '0';
         
         wait until rising_edge(clk);
         reset <= '0';
@@ -85,13 +88,13 @@ begin
         -- ====================================================================
         report ">> TEST 1: Issuing Full 32 Threads";
         
-        fpu_ctrl_in.opcode         <= OP_FCMP_LT;
-        fpu_ctrl_in.rs1_addr_local <= "01";
-        fpu_ctrl_in.cmp_invert     <= '1'; 
-        fpu_ctrl_in.cmp_swap       <= '1'; 
-        fpu_ctrl_in.is_logic_op    <= '0';
-        fpu_ctrl_in.vrf_we         <= '0';
-        fpu_ctrl_in.prf_we         <= '1';
+        exec_ctrl_in.opcode         <= OP_FCMP_LT;
+        exec_ctrl_in.rs1_addr_local <= "01";
+        exec_ctrl_in.cmp_invert     <= '1'; 
+        exec_ctrl_in.cmp_swap       <= '1'; 
+        exec_ctrl_in.is_logic_op    <= '0';
+        exec_ctrl_in.vrf_we         <= '0';
+        exec_ctrl_in.prf_we         <= '1';
         valid_in <= '1'; 
 
         for i in 0 to 31 loop
@@ -115,11 +118,11 @@ begin
                 valid_in <= '0';
                 
                 -- Scramble the input to rigorously prove that the latch is working
-                fpu_ctrl_in.opcode <= OP_NOP;
-                fpu_ctrl_in.rs1_addr_local <= "00";
-                fpu_ctrl_in.cmp_invert <= '0';
-                fpu_ctrl_in.cmp_swap <= '0';
-                fpu_ctrl_in.prf_we <= '0';
+                exec_ctrl_in.opcode <= OP_NOP;
+                exec_ctrl_in.rs1_addr_local <= "00";
+                exec_ctrl_in.cmp_invert <= '0';
+                exec_ctrl_in.cmp_swap <= '0';
+                exec_ctrl_in.prf_we <= '0';
             end if;
         end loop;
 
@@ -133,11 +136,11 @@ begin
         -- ====================================================================
         report ">> TEST 2: Interruption / Restart Behavior";
         
-        fpu_ctrl_in.opcode <= OP_FSUB;
-        fpu_ctrl_in.cmp_invert <= '0';
-        fpu_ctrl_in.cmp_swap <= '0';
-        fpu_ctrl_in.vrf_we <= '1';
-        fpu_ctrl_in.prf_we <= '0';
+        exec_ctrl_in.opcode <= OP_FSUB;
+        exec_ctrl_in.cmp_invert <= '0';
+        exec_ctrl_in.cmp_swap <= '0';
+        exec_ctrl_in.vrf_we <= '1';
+        exec_ctrl_in.prf_we <= '0';
         valid_in <= '1';
         
         -- Let it run for 10 cycles
@@ -150,7 +153,7 @@ begin
         
         -- Force a new valid_in right now (Overriding Thread 10)
         report "   -> Forcing Restart";
-        fpu_ctrl_in.opcode <= OP_FMUL;
+        exec_ctrl_in.opcode <= OP_FMUL;
         valid_in <= '1';
         
         for i in 0 to 3 loop

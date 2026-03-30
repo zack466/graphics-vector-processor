@@ -4,10 +4,10 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-entity fp_sim_tb is
-end entity fp_sim_tb;
+entity tb_fp_sim is
+end entity tb_fp_sim;
 
-architecture behavior of fp_sim_tb is
+architecture behavior of tb_fp_sim is
     -- Clock and control
     constant clk_period : time      := 10 ns;
     signal clk          : std_logic := '0';

@@ -14,8 +14,8 @@ entity instruction_issue is
         clk             : in  std_logic;
         reset           : in  std_logic;
         
-        -- Inputs from Instruction Decoder
-        fpu_ctrl_in     : in  fpu_ctrl_t;
+        -- Inputs from Top-Level Decoder Mux
+        exec_ctrl_in    : in  exec_ctrl_t;
         valid_in        : in  std_logic;
         
         -- State Output
@@ -43,7 +43,7 @@ entity instruction_issue is
         wb_mux_sel      : out std_logic_vector(1 downto 0);
         vrf_we          : out std_logic;
         prf_we          : out std_logic;
-        
+
         -- Pipeline Control
         issue_valid     : out std_logic 
     );
@@ -52,9 +52,9 @@ end entity;
 architecture rtl of instruction_issue is
 
     signal count : unsigned(5 downto 0);
-    
-    -- Explicitly initialize the record to prevent 'U' states
-    signal latched_ctrl : fpu_ctrl_t := (
+
+    -- Explicitly initialize the generic record to prevent 'U' states
+    signal latched_ctrl : exec_ctrl_t := (
         opcode         => OP_NOP,
         rs1_addr_local => "00", rs2_addr_local => "00", rs3_addr_local => "00", rd_addr_local => "00",
         swiz_sel_a     => ("00", "00", "00", "00"), swiz_sel_b => ("00", "00", "00", "00"), swiz_sel_c => ("00", "00", "00", "00"),
@@ -62,9 +62,9 @@ architecture rtl of instruction_issue is
         cmp_invert     => '0', cmp_swap => '0',
         is_logic_op    => '0', vrf_we => '0', prf_we => '0'
     );
-    
+
     signal current_thread_int : std_logic_vector(THREAD_WIDTH-1 downto 0);
-    signal ctrl_out           : fpu_ctrl_t;
+    signal ctrl_out           : exec_ctrl_t;
 
 begin
 
@@ -89,10 +89,11 @@ begin
                 latched_ctrl.is_logic_op    <= '0';
                 latched_ctrl.vrf_we         <= '0';
                 latched_ctrl.prf_we         <= '0';
+
             else
                 if valid_in = '1' then
-                    count <= to_unsigned(1, 6); 
-                    latched_ctrl <= fpu_ctrl_in;
+                    count <= to_unsigned(1, 6);
+                    latched_ctrl <= exec_ctrl_in;
                 elsif count < 32 then
                     count <= count + 1;
                 end if;
@@ -102,11 +103,12 @@ begin
 
     current_thread_int <= (others => '0') when valid_in = '1' 
                           else std_logic_vector(count(THREAD_WIDTH-1 downto 0));
-                          
-    ctrl_out           <= fpu_ctrl_in when valid_in = '1' else latched_ctrl;
+
+    ctrl_out           <= exec_ctrl_in when valid_in = '1' else latched_ctrl;
     issue_valid        <= '1' when (valid_in = '1') or (count < 32) else '0';
 
     current_thread  <= current_thread_int;
+    
     rs1_addr_global <= current_thread_int & ctrl_out.rs1_addr_local;
     rs2_addr_global <= current_thread_int & ctrl_out.rs2_addr_local;
     rs3_addr_global <= current_thread_int & ctrl_out.rs3_addr_local;
