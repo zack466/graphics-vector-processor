@@ -1,7 +1,9 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
+
 use work.vector_types_pkg.all;
+use work.processor_constants_pkg.all;
 
 entity instruction_fetch_unit is
     generic (
@@ -17,29 +19,19 @@ entity instruction_fetch_unit is
         -- External Instruction Memory Interface
         -- ==========================================
         imem_addr          : out std_logic_vector(PC_WIDTH-1 downto 0);
-        imem_data          : in  word_t;      -- Arrives 1 cycle after imem_addr
-        imem_valid         : in  std_logic;   -- '1' if memory successfully read
+        imem_data          : in  word_t;      
+        imem_valid         : in  std_logic;   
 
         -- ==========================================
         -- Pipeline Control
         -- ==========================================
-        stall              : in  std_logic;   -- Freezes PC (e.g., waiting on memory or hazard)
+        stall              : in  std_logic;   
 
         -- ==========================================
-        -- Branch & SIMT Control (From Decoder)
+        -- Branch & SIMT Control
         -- ==========================================
-        branch_en          : in  std_logic;   -- Standard jump
-        branch_target      : in  std_logic_vector(PC_WIDTH-1 downto 0);
-
-        -- SIMT Divergence (Push to Stack)
-        simt_push_en       : in  std_logic;   
-        simt_reconv_pc     : in  std_logic_vector(PC_WIDTH-1 downto 0); -- The meetup point
-        simt_deferred_pc   : in  std_logic_vector(PC_WIDTH-1 downto 0); -- Where the 'else' block starts
-        simt_deferred_mask : in  std_logic_vector(WARP_SIZE-1 downto 0);-- Threads running the 'else'
-        simt_active_mask   : in  std_logic_vector(WARP_SIZE-1 downto 0);-- Threads running the 'if'
-
-        -- SIMT Reconvergence (Pop from Stack)
-        simt_sync_en       : in  std_logic;   -- Triggers a stack pop
+        pc_ctrl            : in  pc_ctrl_t;
+        predicate_mask     : in  std_logic_vector(WARP_SIZE-1 downto 0); -- Evaluated conditionals from threads
 
         -- ==========================================
         -- Outputs to the Barrel Scheduler
@@ -52,82 +44,138 @@ end entity;
 
 architecture rtl of instruction_fetch_unit is
 
-    -- SIMT Stack Definition
+    -- Enhanced SIMT Stack Definition
     type simt_entry_t is record
         reconv_pc     : unsigned(PC_WIDTH-1 downto 0);
         deferred_pc   : unsigned(PC_WIDTH-1 downto 0);
         deferred_mask : std_logic_vector(WARP_SIZE-1 downto 0);
+        outer_mask    : std_logic_vector(WARP_SIZE-1 downto 0);
     end record;
     
     type simt_stack_t is array (0 to STACK_DEPTH-1) of simt_entry_t;
     
     -- Hardware Registers
-    signal pc          : unsigned(PC_WIDTH-1 downto 0);
-    signal active_mask : std_logic_vector(WARP_SIZE-1 downto 0);
-    signal stack       : simt_stack_t;
-    signal sp          : integer range 0 to STACK_DEPTH; -- Stack Pointer
+    signal pc              : unsigned(PC_WIDTH-1 downto 0);
+    signal active_mask     : std_logic_vector(WARP_SIZE-1 downto 0);
+    signal stack           : simt_stack_t;
+    signal sp              : integer range 0 to STACK_DEPTH; 
+    signal saved_reconv_pc : unsigned(PC_WIDTH-1 downto 0);
     
     -- Delay registers to align with memory read latency
-    signal fetch_mask_reg : std_logic_vector(WARP_SIZE-1 downto 0);
+    signal fetch_mask_reg  : std_logic_vector(WARP_SIZE-1 downto 0);
 
 begin
 
-    -- Continuously drive the instruction memory address
     imem_addr <= std_logic_vector(pc);
 
     process(clk)
+        variable taken_mask     : std_logic_vector(WARP_SIZE-1 downto 0);
+        variable not_taken_mask : std_logic_vector(WARP_SIZE-1 downto 0);
+        variable all_taken      : boolean;
+        variable none_taken     : boolean;
+        variable is_divergent   : boolean;
+        variable target_u       : unsigned(PC_WIDTH-1 downto 0);
     begin
         if rising_edge(clk) then
             if reset = '1' then
-                pc          <= (others => '0');
-                active_mask <= (others => '1'); -- All threads active by default
-                sp          <= 0;
-                fetch_mask_reg <= (others => '1');
+                pc              <= (others => '0');
+                active_mask     <= (others => '1'); 
+                sp              <= 0;
+                saved_reconv_pc <= (others => '0');
+                fetch_mask_reg  <= (others => '1');
                 
             elsif stall = '0' then
                 
-                -- Shift the active mask into the delay register to align with imem_data
+                -- Shift mask into delay register to align with imem_data arriving next cycle
                 fetch_mask_reg <= active_mask;
 
+                -- Combinational Condition Evaluations
+                taken_mask     := active_mask and predicate_mask;
+                not_taken_mask := active_mask and (not predicate_mask);
+                all_taken      := (not_taken_mask = x"00000000");
+                none_taken     := (taken_mask = x"00000000");
+                is_divergent   := (not all_taken) and (not none_taken);
+                
+                -- Pad target_addr safely depending on PC_WIDTH
+                target_u       := resize(unsigned(pc_ctrl.target_addr), PC_WIDTH);
+
                 -- =======================================================
-                -- 1. SIMT Reconvergence (Pop Stack)
+                -- 1. SIMT Reconvergence (SYNC)
                 -- =======================================================
-                if simt_sync_en = '1' then
+                if pc_ctrl.branch_type = BR_SYNC then
                     if sp > 0 then
-                        -- Restore the deferred threads and jump to their code block
-                        sp <= sp - 1;
-                        pc <= stack(sp - 1).deferred_pc;
-                        active_mask <= stack(sp - 1).deferred_mask;
+                        if stack(sp-1).deferred_mask /= x"00000000" then
+                            -- Phase 1: End of IF block. Switch to ELSE path.
+                            pc <= stack(sp-1).deferred_pc;
+                            active_mask <= stack(sp-1).deferred_mask;
+                            stack(sp-1).deferred_mask <= (others => '0'); -- Mark as consumed
+                        else
+                            -- Phase 2: End of ELSE block. Reconverge full warp.
+                            pc <= stack(sp-1).reconv_pc;
+                            active_mask <= stack(sp-1).outer_mask;
+                            sp <= sp - 1;
+                        end if;
                     else
-                        -- Failsafe: If stack is empty, reset to full warp
                         active_mask <= (others => '1');
                         pc <= pc + 1;
                     end if;
 
                 -- =======================================================
-                -- 2. SIMT Divergence (Push Stack)
+                -- 2. Set Sync (SSY) - Marks the Reconvergence Point
                 -- =======================================================
-                elsif simt_push_en = '1' then
-                    if sp < STACK_DEPTH then
-                        -- Save the deferred path for later
-                        stack(sp).reconv_pc     <= unsigned(simt_reconv_pc);
-                        stack(sp).deferred_pc   <= unsigned(simt_deferred_pc);
-                        stack(sp).deferred_mask <= simt_deferred_mask;
+                elsif pc_ctrl.branch_type = BR_SSY then
+                    saved_reconv_pc <= target_u;
+                    pc <= pc + 1;
+
+                -- =======================================================
+                -- 3. Divergent Branch (BRA_DIV)
+                -- =======================================================
+                elsif pc_ctrl.branch_type = BR_BRA_DIV then
+                    if is_divergent then
+                        -- Push deferred 'Else' path to stack
+                        stack(sp).reconv_pc     <= saved_reconv_pc;
+                        stack(sp).deferred_pc   <= pc + 1;
+                        stack(sp).deferred_mask <= not_taken_mask;
+                        stack(sp).outer_mask    <= active_mask;
                         sp <= sp + 1;
+                        
+                        -- Jump to 'If' path
+                        pc <= target_u;
+                        active_mask <= taken_mask;
+                    elsif all_taken then
+                        pc <= target_u;
+                    else
+                        pc <= pc + 1;
                     end if;
-                    
-                    -- Jump to the active path and apply the new mask
-                    pc <= unsigned(branch_target);
-                    active_mask <= simt_active_mask;
 
                 -- =======================================================
-                -- 3. Standard Branching
+                -- 4. Branch if Zero (BRA_Z)
                 -- =======================================================
-                elsif branch_en = '1' then
-                    pc <= unsigned(branch_target);
+                elsif pc_ctrl.branch_type = BR_BRA_Z then
+                    if none_taken then -- All active predicates evaluated to 0
+                        pc <= target_u;
+                    else
+                        pc <= pc + 1;
+                    end if;
 
                 -- =======================================================
-                -- 4. Standard Sequential Fetch
+                -- 5. Branch if Not Zero (BRA_NZ)
+                -- =======================================================
+                elsif pc_ctrl.branch_type = BR_BRA_NZ then
+                    if not none_taken then -- At least one active predicate evaluated to 1
+                        pc <= target_u;
+                    else
+                        pc <= pc + 1;
+                    end if;
+
+                -- =======================================================
+                -- 6. Unconditional Jump
+                -- =======================================================
+                elsif pc_ctrl.branch_type = BR_JMP then
+                    pc <= target_u;
+
+                -- =======================================================
+                -- 7. Standard Sequential Fetch
                 -- =======================================================
                 else
                     pc <= pc + 1;
@@ -137,7 +185,6 @@ begin
         end if;
     end process;
 
-    -- Map outputs to the pipeline
     instruction_out <= imem_data;
     exec_mask_out   <= fetch_mask_reg;
     fetch_valid     <= imem_valid and not stall;

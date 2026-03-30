@@ -35,6 +35,8 @@ entity instruction_issue is
         swiz_sel_b      : out swizzle_sel_t;
         swiz_sel_c      : out swizzle_sel_t;
         inst_write_mask : out std_logic_vector(3 downto 0);
+        cmp_invert      : out std_logic;
+        cmp_swap        : out std_logic;
         
         -- Top-Level Control Signals
         wb_mux_sel      : out std_logic_vector(1 downto 0);
@@ -54,7 +56,8 @@ architecture rtl of instruction_issue is
         opcode         => OP_NOP,
         rs1_addr_local => "00", rs2_addr_local => "00", rs3_addr_local => "00", rd_addr_local => "00",
         swiz_sel_a     => ("00", "00", "00", "00"), swiz_sel_b => ("00", "00", "00", "00"), swiz_sel_c => ("00", "00", "00", "00"),
-        write_mask     => "0000", wb_mux_sel => "00", reg_we => '0'
+        write_mask     => "0000", wb_mux_sel => "00", reg_we => '0',
+        cmp_invert     => '0', cmp_swap => '0'
     );
     
     signal current_thread_int : std_logic_vector(THREAD_WIDTH-1 downto 0);
@@ -83,6 +86,8 @@ begin
                 latched_ctrl.write_mask     <= "0000";
                 latched_ctrl.wb_mux_sel     <= "00";
                 latched_ctrl.reg_we         <= '0';
+                latched_ctrl.cmp_invert     <= '0';
+                latched_ctrl.cmp_swap       <= '0';
             else
                 -- Immediate latch and queue Thread 1
                 if valid_in = '1' then
@@ -121,6 +126,8 @@ begin
     swiz_sel_b      <= ctrl_out.swiz_sel_b;
     swiz_sel_c      <= ctrl_out.swiz_sel_c;
     inst_write_mask <= ctrl_out.write_mask;
+    cmp_invert      <= ctrl_out.cmp_invert;
+    cmp_swap        <= ctrl_out.cmp_swap;
     wb_mux_sel      <= ctrl_out.wb_mux_sel;
     reg_we          <= ctrl_out.reg_we;
 

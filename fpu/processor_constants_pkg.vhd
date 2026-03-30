@@ -32,6 +32,11 @@ package processor_constants_pkg is
     constant OP_I2F     : std_logic_vector(5 downto 0) := "001110"; 
     constant OP_SIN     : std_logic_vector(5 downto 0) := "010000"; 
     constant OP_COS     : std_logic_vector(5 downto 0) := "010001"; 
+    
+    -- Predicate Logic Opcodes
+    constant OP_PAND    : std_logic_vector(5 downto 0) := "011000"; 
+    constant OP_POR     : std_logic_vector(5 downto 0) := "011001"; 
+    constant OP_PXOR    : std_logic_vector(5 downto 0) := "011010"; 
 
     -- ========================================================================
     -- CONTROL FLOW OPCODES [31:26] (When Type == 0001)
@@ -56,6 +61,22 @@ package processor_constants_pkg is
     constant RED_MODE_ABS_SUM : std_logic_vector(1 downto 0) := "11"; -- Absolute Sum (|a| * 1.0)
 
     -- ========================================================================
+    -- CONDENSED BRANCH TYPES & PREDICATE MODIFIERS
+    -- ========================================================================
+    constant BR_NONE    : std_logic_vector(2 downto 0) := "000";
+    constant BR_JMP     : std_logic_vector(2 downto 0) := "001";
+    constant BR_BRA_Z   : std_logic_vector(2 downto 0) := "010";
+    constant BR_BRA_NZ  : std_logic_vector(2 downto 0) := "011";
+    constant BR_BRA_DIV : std_logic_vector(2 downto 0) := "100";
+    constant BR_SSY     : std_logic_vector(2 downto 0) := "101";
+    constant BR_SYNC    : std_logic_vector(2 downto 0) := "110";
+
+    constant PRED_MOD_ANY : std_logic_vector(1 downto 0) := "00"; -- True if X|Y|Z|A == 1
+    constant PRED_MOD_ALL : std_logic_vector(1 downto 0) := "01"; -- True if X&Y&Z&A == 1
+    constant PRED_MOD_X   : std_logic_vector(1 downto 0) := "10"; -- True if X == 1
+    constant PRED_MOD_A   : std_logic_vector(1 downto 0) := "11"; -- True if A == 1
+
+    -- ========================================================================
     -- CONTROL RECORDS
     -- ========================================================================
     type fpu_ctrl_t is record
@@ -68,6 +89,8 @@ package processor_constants_pkg is
         swiz_sel_b      : swizzle_sel_t;
         swiz_sel_c      : swizzle_sel_t;
         write_mask      : std_logic_vector(3 downto 0);
+        cmp_invert      : std_logic; -- '1' flips LT to GE, EQ to NEQ
+        cmp_swap        : std_logic; -- '1' swaps A and B operands
         wb_mux_sel      : std_logic_vector(1 downto 0);
         reg_we          : std_logic;
     end record;
@@ -78,25 +101,21 @@ package processor_constants_pkg is
         rd_addr_local   : std_logic_vector(1 downto 0);
         swiz_sel_a      : swizzle_sel_t;
         swiz_sel_b      : swizzle_sel_t;
-        red_mask        : std_logic_vector(3 downto 0); -- Which input components to sum (e.g. DP3 vs DP4)
-        red_mode        : std_logic_vector(1 downto 0); -- DOT, SQ_MAG, SUM, ABS_SUM
-        wb_mux_sel      : std_logic_vector(1 downto 0); -- Routes writeback multiplexer
+        red_mask        : std_logic_vector(3 downto 0); 
+        red_mode        : std_logic_vector(1 downto 0); 
+        wb_mux_sel      : std_logic_vector(1 downto 0); 
         reg_we          : std_logic;
     end record;
 
     type pc_ctrl_t is record
-        is_jmp          : std_logic;
-        is_bra_z        : std_logic;
-        is_bra_nz       : std_logic;
-        is_bra_div      : std_logic;
-        is_ssy          : std_logic;
-        is_sync         : std_logic;
-        target_addr     : std_logic_vector(15 downto 10); -- 16-bit branch target
+        branch_type     : std_logic_vector(2 downto 0);  -- BR_JMP, BR_BRA_Z, etc.
+        target_addr     : std_logic_vector(15 downto 0); 
         predicate_sel   : std_logic_vector(1 downto 0);  -- Which P-reg to evaluate
+        predicate_mod   : std_logic_vector(1 downto 0);  -- ANY, ALL, X, A modifiers
     end record;
 
     -- ========================================================================
-    -- HARDWARE LATENCY CONSTANTS (Derived from Altera IP / Simulation Models)
+    -- HARDWARE LATENCY CONSTANTS
     -- ========================================================================
     constant LAT_FMADD      : integer := 22;
     constant LAT_FRCP       : integer := 14;
@@ -110,12 +129,10 @@ package processor_constants_pkg is
     constant LAT_FEXP2      : integer := 17;
     constant LAT_FCMP_LT    : integer := 3;
     constant LAT_FCMP_EQ    : integer := 3;
-    constant LAT_I2F        : integer := 6; -- Fix to Float
-    constant LAT_F2I        : integer := 6; -- Float to Fix
-    constant LAT_REDUCT     : integer := 37; -- 4D Scalar Product
+    constant LAT_I2F        : integer := 6; 
+    constant LAT_F2I        : integer := 6; 
+    constant LAT_REDUCT     : integer := 37; 
 
-    -- The rigid pipeline depth for the entire execution backend 
-    -- Bound by the 37-cycle Scalar Product block.
     constant FPU_MAX_LATENCY : integer := 37;
 
 end package;

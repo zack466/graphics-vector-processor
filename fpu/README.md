@@ -5,101 +5,72 @@ TODO:
 * check sin/cos resource usage, and switch to flopoco or something else if needed
 * create and verify each component using testbenches
 * finish integrating the memory controller, instruction fetcher, instruction issuer, instruction decoder, and the FPU lanes with the rest of the processor architecture
-* stall pipeline (nop?) in between compare operations and branch instructions to ensure condition flags are all written back before testing condition
-* for now, have memory stored in M10K memory
 * top-level control and status register, handle 1) loading assembly into internal ROM, 2) loading pixel data into DDR3 RAM, 3) tell GPU start executing at a given PC, and 4) know when GPU is finished / if there was an error during execution
 * add immediate FPU instructions, don't support things like swizzling or mask, but allow encoding low-precision immediate constants, for things like scalar multiplication, negation, etc
   * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
+* finish memory controller, test with real DDR3 memory as well
+* update full execution integration test to include predicate / logic operations
+
+This design document has been updated to reflect the critical advancements we've made in instruction storage, predicate logic, and enhanced SIMT control flow.
 
 ## Graphics Vector Processor Design Document
 
 ### 1. Architecture Overview
-The core processor operates on vector registers, with each 32-bit sub-unit referenced as a tuple (x, y, z, a). The architecture is designed to maximize parallel throughput for graphics workloads while strictly managing FPGA DSP block utilization through strategic resource sharing and algebraic optimization. It utilizes a Single Instruction, Multiple Thread (SIMT) execution model, grouping 32 threads into a single "Warp" that shares a common Program Counter (PC).
+The core processor operates on vector registers, with each 32-bit sub-unit referenced as a tuple (x, y, z, a). The architecture is designed to maximize parallel throughput for graphics workloads while strictly managing FPGA logic resources. It utilizes a Single Instruction, Multiple Thread (SIMT) execution model, grouping 32 threads into a single "Warp" that shares a common Program Counter (PC).
 
 **1.1. Register File & Thread Contexts**
-* **Multithreaded Allocation:** The central Register File is partitioned to support 32 concurrent hardware thread contexts (one full Warp).
-* **Vector Registers:** Each thread context contains dedicated vector registers. Each vector consists of four 32-bit floating-point numbers or signed integers.
-* **Predicate Registers:** Dedicated small registers (e.g., 4-bit masks) per thread to store the boolean results of vector comparisons, used to drive conditional execution.
-* **True Dual-Ported Architecture:** The register file is implemented using natively dual-ported Altera M10K blocks, banked four times. Port A is dedicated to the rigidly timed execution pipeline, while Port B is dedicated to the Memory Controller Unit (MCU) for asynchronous memory loads/stores, preventing structural collisions.
+* **Multithreaded Vector Register File (VRF):** Partitioned to support 32 concurrent hardware thread contexts. Implemented using natively dual-ported Altera M10K blocks. Port A is dedicated to the math pipeline, while Port B is for the Memory Controller (MCU).
+* **Predicate Register File (PRF):** A dedicated, high-speed register file storing 4 bits per thread (one per component). These store the results of comparisons and drive conditional branching.
+* **Instruction Memory (IMEM):** Internal synchronous M10K-based storage for up to 256 instructions. This ensures deterministic 1-cycle fetch latency, decoupling program execution from the variable latency of DDR3 memory.
 
 ### 2. Execution Datapath & Quad-FPU Cluster
-The execution stage utilizes a parallel, dual-path topology. Standard coordinate-wise math is handled by a "Quad-FPU Cluster," while cross-coordinate vector operations are routed to a dedicated parallel Reduction Unit. Both paths converge at a unified writeback multiplexer.
+The execution stage utilizes a parallel, dual-path topology for standard math and cross-coordinate reductions.
 
 **2.1. Standard FPU Lanes (4x Independent)**
-Each of the four lanes operates in parallel to process the (x, y, z, a) coordinates independently. Each lane contains:
-* **Unified Multiply-Add (MADD) Datapath:** To optimize DSP resource sharing, standard linear arithmetic is mapped to a single pipelined MADD IP core. Hardware constants are multiplexed into the operands to execute basic instructions:
-    * **Addition (a + b):** Evaluated as `a * 1.0 + b`
-    * **Subtraction (a - b):** Evaluated as `a * 1.0 + (-b)` (Sign bit of `b` is inverted)
-    * **Multiplication (a * b):** Evaluated as `a * b + 0.0`
-    * **Multiply-Add:** Natively supported as `a * b + c`
-* **Dedicated Hardware Units:** Each lane also contains dedicated, pipelined logic for:
-    * **Reciprocal:** Hardware division is omitted to save logic footprint. Division operations ($x / y$) are executed via a reciprocal calculation followed by a multiplication utilizing the MADD datapath.
-    * Square Root, Log 2, Exp 2, Sin, Cos
-    * Comparisons and Logical bounds (Min, Max, Less Than, Equal).
-    * Type conversion (Fix2Float, Float2Fix).
+Each lane contains a Unified Multiply-Add (MADD) datapath and transcendental units.
+* **Predicate Logic ALU:** Integrated directly into the FPU lanes to allow bitwise operations (`PAND`, `POR`, `PXOR`) on predicate masks. This allows complex boolean trees (e.g., `if (A && B)`) to be calculated in the math pipeline rather than the branch unit.
+* **Comparison Modifiers:** Native support for `Swap Operands` and `Invert Result` on comparison instructions. This allows the hardware to evaluate all six algebraic relations ($=, \neq, <, \leq, >, \geq$) using only `Equal` and `Less Than` hardware cores.
 
 **2.2. Parallel Vector Reduction Unit**
-To handle cross-coordinate math without routing hazards across independent lanes, the architecture features a dedicated Vector Reduction Unit placed in parallel with the Quad-FPU cluster. 
-* **Core IP:** It utilizes a highly optimized, 37-cycle Altera floating-point 4D scalar product IP block.
-* **Hardware Modifiers:** Combinational input conditioning provides zero-latency behavioral changes to support multiple graphics modes:
-    * **Standard Dot Product (`a * b`)**
-    * **Squared Magnitude (`a * a`)**
-    * **Component Sum (`a * 1.0`)**
-    * **Absolute Sum / Manhattan Distance (`|a| * 1.0`)**
-* **Input Masking:** Dynamic masking allows specific coordinates to be zeroed out before the reduction, easily converting a 4D Dot Product into a 3D Dot Product for lighting normals.
+A dedicated 37-cycle Altera floating-point 4D scalar product block handles cross-coordinate math (Dot Products, Squared Magnitudes, Sums). Dynamic input masking allows the unit to switch between 3D and 4D operations without latency penalties.
 
 ### 3. Instruction Format & Modifiers
-The instruction set distinguishes between operations via a dedicated "Type" field (bits [3:0]), which drastically alters how the remaining 28 upper bits are decoded, allowing for highly packed instruction words.
+The ISA uses a 32-bit word where the bottom 4 bits (`Type`) determine the decoding scheme for the remaining 28 bits.
 
-**3.1. Instruction Categories**
-* **Standard FPU Operations (`INST_TYPE_FPU`):** Parallel calculations (Add, Sub, Mul) requiring up to three source registers.
-* **Reduction Operations (`INST_TYPE_RED`):** Dedicated instructions for the reduction unit. By only requiring two source registers and a scalar output destination, bit-space is freed to encode complex swizzle and reduction modifiers.
-* **Control Flow Operations (`INST_TYPE_CTRL`):** Modifications to the global Program Counter or SIMT Execution Stack (Jumps, Branches, Syncs).
-* **Memory Operations:** Scatter/Gather operations to external RAM (Loads, Stores).
-
-**3.2. Hardware Modifiers (Math)**
-* **Dual-Port Input Swizzle:** A completely combinational crossbar routing network before the execution units allows simultaneous, independent, and flexible rearrangement of the (x, y, z, a) coordinates for *both* operand A and operand B. Dual swizzle is supported for reduction operations, while only swizzles operand A is supported for parallel math instructions due to instruction encoding limitations.
-* **Output Mask (`write_mask`):** A write-enable bitmask that dictates which specific coordinates of the destination vector register are updated, safely preserving unmasked background data.
-* **Reduction Mask (`red_mask`):** Defines which input coordinates are included in the reduction summation.
-* **Reduction Mode (`red_mode`):** A 2-bit selector defining the mathematical behavior of the reduction unit (Dot, Square, Sum, Abs).
+**3.1. Hardware Modifiers (Logic & Math)**
+* **Dual-Port Swizzle:** Combinational crossbar routing for operands. Supports component rearrangement (e.g., `.xxxx`, `.zyxw`).
+* **Predicate Modifiers (Collapse):** When evaluating a branch, the hardware collapses the 4-bit predicate vector into a 1-bit decision using four modes:
+    * **ANY:** True if any component is 1.
+    * **ALL:** True if all components are 1.
+    * **X_ONLY / A_ONLY:** True based on a single specific component (e.g., Alpha Test).
 
 ### 4. SIMT Control Flow & Divergence
-Because all 32 threads in a warp share a single Program Counter, conditional logic (`if/else`) is managed via execution masking and a hardware stack rather than individual thread branching.
+Conditional logic is managed via execution masking and a hardware stack to handle "Warp Divergence."
 
-**4.1. The Execution Mask (EXEC)**
-* A global 32-bit register where each bit represents the active status of one thread.
-* If a thread evaluates a condition as `False`, its EXEC bit is cleared. The thread continues to fetch and flow through the pipeline to maintain rigid timing, but the writeback stage drops its result.
+**4.1. The 2-Phase Reconvergence Model**
+The processor utilizes a structured reconvergence model to handle `if/else` blocks:
+* **`SSY` (Set Sync):** Marks the future PC where threads will reunite.
+* **`BRA_DIV` (Divergent Branch):** If threads disagree on a condition, the hardware pushes the "False" path to the stack and jumps to the "True" path.
+* **`SYNC` (Synchronize):** A two-phase instruction.
+    * **Phase 1 (Swap):** At the end of the `IF` block, `SYNC` toggles execution to the deferred threads waiting on the stack.
+    * **Phase 2 (Pop):** At the end of the `ELSE` block, `SYNC` pops the stack and jumps to the `SSY` meetup point.
 
-**4.2. The SIMT Hardware Stack**
-* To support nested `if/else` divergence, the Instruction Fetch unit contains a physical hardware stack.
-* **Divergence:** When threads diverge on a condition, the Fetch Unit pushes the "Reconvergence PC" (the address where the branches meet) and a "Deferred Mask" (the threads taking the alternate path) to the stack.
-* **Reconvergence:** When the PC matches the top of the stack, the hardware automatically pops the state, updates the EXEC mask to the deferred threads, and jumps to the deferred execution block.
-* Standard optimizations include `BRA_Z` (Branch if Zero) to skip entire code blocks if no threads in the warp require it.
+**4.2. Warp Optimizations**
+`BRA_Z` and `BRA_NZ` allow the PC to jump over entire blocks of code if the warp is "unanimous," bypassing the stack entirely to save cycles.
 
 ### 5. Pipeline and Hazard Management
-The processor employs a rigidly timed execution pipeline, trading logic complexity for high maximum clock frequencies ($F_{max}$).
+The processor trades logic complexity for high maximum clock frequencies ($F_{max}$) through a rigid timing model.
 
-**5.1. Barrel Scheduling & The 37-Cycle Pipeline**
-* The pipeline depth is strictly anchored to the longest path in the system: currently the 37-cycle Vector Reduction Unit (`FPU_MAX_LATENCY = 37`).
-* The Instruction Issue stage operates a strict round-robin scheduler, issuing exactly one instruction from the shared PC to a different thread every clock cycle.
-* Because the 32-thread loop closely matches the pipeline depth, Read-After-Write (RAW) data hazards are heavily mitigated natively by the issue distance. 
+**5.1. Barrel Scheduling & RAW Hazards**
+* The Instruction Issue stage operates a round-robin scheduler across the 32 threads.
+* **Math RAW Hazards:** Inherently avoided for vector math because the 32-cycle loop is shorter than the 37-cycle pipe, meaning a thread's result is almost ready before it executes again.
+* **Control RAW Hazards (Software Delay Slot):** Because comparison results take 37 cycles to reach the PRF, a branch cannot immediately follow a comparison for the same thread. The compiler must insert one unrelated instruction (or a `NOP`) between a `FCMP` and a dependent `BRA`.
 
-**5.2. Latency Padding (Writeback Hazard Prevention)**
-* To prevent Structural Writeback Hazards (fast FPU instructions finishing at the same time as older, slower Reduction instructions), the standard FPU pipeline is rigidly padded.
-* Shift-register delay lines dynamically stretch all standard arithmetic operations so they take exactly 37 clock cycles to reach the unified Writeback Multiplexer.
-* This guarantees in-order completion without requiring a complex scoreboard or stall logic. The write address, write mask, and multiplexer select bits travel down a parallel 37-cycle shift register alongside the math data.
+**5.2. Latency Padding**
+All math operations are stretched via shift-register delay lines to exactly 37 cycles. Logic operations (0-latency) are injected into the start of the pipeline, while math core outputs are injected as they complete, ensuring a unified, collision-free writeback stage.
 
 ### 6. Memory Subsystem
-The processor accesses external DDR3 memory (via an Avalon-MM master interface) using a multi-cycle, coalescing memory controller.
+Accesses external DDR3 memory using a multi-cycle, coalescing memory controller.
 
-**6.1. Gather / Scatter Addressing**
-* Each thread generates a unique 32-bit memory address using a standard `Base Address + Thread-Specific Offset` calculation. This natively supports individual pixel or vertex manipulation.
-
-**6.2. Pipeline Stalling & Context**
-* Because external memory has variable latency, memory operations break the rigid pipeline timing.
-* When a `LOAD` or `STORE` is decoded, the Memory Controller Unit (MCU) asserts a global `mem_stall` signal, freezing the PC and Barrel Scheduler while it processes the 32 memory requests. Math instructions already inside the 37-cycle pipeline continue safely to completion.
-
-**6.3. Sequential Coalescing**
-* To prevent severe performance degradation from 32 individual random memory accesses, the MCU evaluates the generated addresses.
-* If consecutive threads request contiguous memory blocks, the MCU bundles them into highly efficient, multi-word burst transactions on the Avalon bus. Divergent addresses are automatically broken into separate, smaller bursts.
-* Loaded data is routed asynchronously into the FPU's Register File via the dedicated Port B.
+**6.1. Sequential Coalescing**
+The MCU evaluates the 32 unique addresses generated by the warp. If addresses are contiguous, they are bundled into high-efficiency burst transactions on the Avalon-MM bus. Non-contiguous "Scatter/Gather" requests are automatically serialized into smaller bursts.

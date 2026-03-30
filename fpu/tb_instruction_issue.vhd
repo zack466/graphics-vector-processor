@@ -26,6 +26,8 @@ architecture sim of tb_instruction_issue is
     signal swiz_sel_b      : swizzle_sel_t;
     signal swiz_sel_c      : swizzle_sel_t;
     signal inst_write_mask : std_logic_vector(3 downto 0);
+    signal cmp_invert      : std_logic;
+    signal cmp_swap        : std_logic;
     signal wb_mux_sel      : std_logic_vector(1 downto 0);
     signal reg_we          : std_logic;
     signal issue_valid     : std_logic;
@@ -42,8 +44,9 @@ begin
             rs1_addr_global => rs1_addr_global, rs2_addr_global => rs2_addr_global,
             rs3_addr_global => rs3_addr_global, rd_addr_global => rd_addr_global,
             swiz_sel_a => swiz_sel_a, swiz_sel_b => swiz_sel_b, swiz_sel_c => swiz_sel_c,
-            inst_write_mask => inst_write_mask, wb_mux_sel => wb_mux_sel,
-            reg_we => reg_we, issue_valid => issue_valid
+            inst_write_mask => inst_write_mask, 
+            cmp_invert => cmp_invert, cmp_swap => cmp_swap,
+            wb_mux_sel => wb_mux_sel, reg_we => reg_we, issue_valid => issue_valid
         );
 
     clk_process : process
@@ -64,6 +67,8 @@ begin
         fpu_ctrl_in.swiz_sel_b     <= ("00", "00", "00", "00");
         fpu_ctrl_in.swiz_sel_c     <= ("00", "00", "00", "00");
         fpu_ctrl_in.write_mask     <= "0000";
+        fpu_ctrl_in.cmp_invert     <= '0';
+        fpu_ctrl_in.cmp_swap       <= '0';
         fpu_ctrl_in.wb_mux_sel     <= "00";
         fpu_ctrl_in.reg_we         <= '0';
         
@@ -72,12 +77,14 @@ begin
         wait until rising_edge(clk);
 
         -- ====================================================================
-        -- TEST 1: Full 32-Thread Issuance
+        -- TEST 1: Full 32-Thread Issuance (With Modifiers)
         -- ====================================================================
         report ">> TEST 1: Issuing Full 32 Threads";
         
-        fpu_ctrl_in.opcode         <= OP_FMADD;
+        fpu_ctrl_in.opcode         <= OP_FCMP_LT;
         fpu_ctrl_in.rs1_addr_local <= "01";
+        fpu_ctrl_in.cmp_invert     <= '1'; -- Testing modifier latching
+        fpu_ctrl_in.cmp_swap       <= '1'; 
         valid_in <= '1'; 
 
         for i in 0 to 31 loop
@@ -87,7 +94,9 @@ begin
             assert issue_valid = '1' report "issue_valid dropped early!" severity error;
             assert to_integer(unsigned(current_thread)) = i report "Thread mismatch!" severity error;
             assert rs1_addr_global = std_logic_vector(to_unsigned(i, 5)) & "01" report "Global Addr mismatch" severity error;
-            assert opcode_out = OP_FMADD report "Opcode latch mismatch" severity error;
+            assert opcode_out = OP_FCMP_LT report "Opcode latch mismatch" severity error;
+            assert cmp_invert = '1' report "Invert flag latch mismatch" severity error;
+            assert cmp_swap = '1' report "Swap flag latch mismatch" severity error;
 
             -- 2. Wait for the next active edge
             wait until rising_edge(clk);
@@ -99,6 +108,8 @@ begin
                 -- Scramble the input to rigorously prove that the latch is working
                 fpu_ctrl_in.opcode <= OP_NOP;
                 fpu_ctrl_in.rs1_addr_local <= "00";
+                fpu_ctrl_in.cmp_invert <= '0';
+                fpu_ctrl_in.cmp_swap <= '0';
             end if;
         end loop;
 
@@ -114,6 +125,8 @@ begin
         report ">> TEST 2: Interruption / Restart Behavior";
         
         fpu_ctrl_in.opcode <= OP_FSUB;
+        fpu_ctrl_in.cmp_invert <= '0';
+        fpu_ctrl_in.cmp_swap <= '0';
         valid_in <= '1';
         
         -- Let it run for 10 cycles

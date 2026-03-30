@@ -37,9 +37,11 @@ begin
         v_fpu.rs3_addr_local := "00";
         v_fpu.rd_addr_local  := "00";
         v_fpu.swiz_sel_a     := ("00", "00", "00", "00");
-        v_fpu.swiz_sel_b     := ("11", "10", "01", "00"); -- Pass-through
-        v_fpu.swiz_sel_c     := ("11", "10", "01", "00"); -- Pass-through
+        v_fpu.swiz_sel_b     := ("11", "10", "01", "00");
+        v_fpu.swiz_sel_c     := ("11", "10", "01", "00");
         v_fpu.write_mask     := "0000";
+        v_fpu.cmp_invert     := '0';
+        v_fpu.cmp_swap       := '0';
         v_fpu.wb_mux_sel     := WB_MUX_FPU;
         v_fpu.reg_we         := '0';
 
@@ -53,15 +55,10 @@ begin
         v_red.wb_mux_sel     := WB_MUX_RED;
         v_red.reg_we         := '0';
 
-        v_pc.is_jmp          := '0';
-        v_pc.is_bra_z        := '0';
-        v_pc.is_bra_nz       := '0';
-        v_pc.is_bra_div      := '0';
-        v_pc.is_ssy          := '0';
-        v_pc.is_sync         := '0';
+        v_pc.branch_type     := BR_NONE;
         v_pc.target_addr     := (others => '0');
         v_pc.predicate_sel   := "00";
-
+        v_pc.predicate_mod   := PRED_MOD_ANY;
 
         -- ====================================================================
         -- 2. DECODE BASED ON INSTRUCTION TYPE
@@ -70,7 +67,8 @@ begin
             -- ----------------------------------------------------------------
             -- FPU MATH INSTRUCTION MAP
             -- [31:26] Opcode | [25:22] Mask | [21:20] Dest | [19:18] Src1
-            -- [17:16] Src2   | [15:14] Src3 | [13:12] Rsvd | [11:4] Swiz A
+            -- [17:16] Src2   | [15:14] Src3 | [13] Cmp_Inv | [12] Cmp_Swap
+            -- [11:4] Swiz A
             -- ----------------------------------------------------------------
             v_fpu.opcode         := internal_opcode;
             v_fpu.write_mask     := instruction(25 downto 22);
@@ -78,6 +76,9 @@ begin
             v_fpu.rs1_addr_local := instruction(19 downto 18);
             v_fpu.rs2_addr_local := instruction(17 downto 16);
             v_fpu.rs3_addr_local := instruction(15 downto 14);
+            
+            v_fpu.cmp_invert     := instruction(13);
+            v_fpu.cmp_swap       := instruction(12);
             
             v_fpu.swiz_sel_a(3)  := instruction(11 downto 10);
             v_fpu.swiz_sel_a(2)  := instruction(9 downto 8);
@@ -92,7 +93,9 @@ begin
                     v_fpu.wb_mux_sel := WB_MUX_FPU; 
                     v_fpu.reg_we     := '1';
                     
-                when OP_FCMP_LT | OP_FCMP_EQ =>
+                -- Grouping predicate ops with compares to disable standard vector writeback
+                when OP_FCMP_LT | OP_FCMP_EQ | 
+                     OP_PAND    | OP_POR     | OP_PXOR =>
                     v_fpu.wb_mux_sel := WB_MUX_FPU;
                     v_fpu.reg_we     := '0'; 
                     
@@ -127,19 +130,20 @@ begin
         elsif inst_type = INST_TYPE_CTRL then
             -- ----------------------------------------------------------------
             -- SIMT CONTROL INSTRUCTION MAP
-            -- [31:26] Opcode | [25:10] Target Address (16b) | [9:8] Pred Sel
+            -- [31:26] Opcode | [25:10] Target (16b) | [9:8] P_Sel | [7:6] P_Mod
             -- ----------------------------------------------------------------
             v_pc.target_addr   := instruction(25 downto 10);
             v_pc.predicate_sel := instruction(9 downto 8);
+            v_pc.predicate_mod := instruction(7 downto 6);
 
             case internal_opcode is
-                when OP_JMP     => v_pc.is_jmp     := '1';
-                when OP_BRA_Z   => v_pc.is_bra_z   := '1';
-                when OP_BRA_NZ  => v_pc.is_bra_nz  := '1';
-                when OP_BRA_DIV => v_pc.is_bra_div := '1';
-                when OP_SSY     => v_pc.is_ssy     := '1';
-                when OP_SYNC    => v_pc.is_sync    := '1';
-                when others     => null;
+                when OP_JMP     => v_pc.branch_type := BR_JMP;
+                when OP_BRA_Z   => v_pc.branch_type := BR_BRA_Z;
+                when OP_BRA_NZ  => v_pc.branch_type := BR_BRA_NZ;
+                when OP_BRA_DIV => v_pc.branch_type := BR_BRA_DIV;
+                when OP_SSY     => v_pc.branch_type := BR_SSY;
+                when OP_SYNC    => v_pc.branch_type := BR_SYNC;
+                when others     => v_pc.branch_type := BR_NONE;
             end case;
         end if;
 
