@@ -1,11 +1,19 @@
 # Source files (Order matters: Entities/Packages must precede Architectures)
-SOURCES = fp_sim_entities.vhd fp_sim_arch.vhd
+SOURCES = vector_types.vhd \
+		  vector_reg_file.vhd swizzle_network.vhd \
+		  fp_sim_entities.vhd fp_sim_arch.vhd \
+		  processor_constants_pkg.vhd \
+		  fpu_lane.vhd instruction_issue.vhd \
+		  tb_issuer_writeback_integration.vhd
 
 # Testbench files
-TESTBENCH_SOURCES = fp_sim_tb.vhd
+TESTBENCH_SOURCES = fp_sim_tb.vhd \
+					tb_vector_reg_file.vhd tb_swizzle_network.vhd \
+					tb_fpu_lane.vhd tb_instruction_issue.vhd \
+					tb_issuer_writeback_integration.vhd
 
 # Testbench executable names
-TESTBENCHES = fp_sim_tb
+TESTBENCHES = fp_sim_tb tb_vector_reg_file tb_swizzle_network tb_fpu_lane tb_instruction_issue tb_issuer_writeback_integration
 WAVEFORM = waveform.ghw
 
 # Directory for build files

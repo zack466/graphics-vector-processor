@@ -61,7 +61,7 @@ use ieee.std_logic_1164.all;
 use work.fp_sim_types.all;
 
 entity fp_mult_add is
-    generic( latency : integer := 14 );
+    generic( latency : integer := 22 );
     port (
         clk    : in  std_logic := '0';
         en     : in  std_logic := '0';
@@ -87,7 +87,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 
 entity fp_sqrt is
-    generic( latency : integer := 28 );
+    generic( latency : integer := 9 );
     port (
         clk    : in  std_logic := '0';
         en     : in  std_logic := '0';
@@ -252,3 +252,38 @@ entity fp_float2fix is
         q      : out std_logic_vector(31 downto 0)
     );
 end entity fp_float2fix;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity fp_rcp is
+    generic( latency : integer := 14 );
+    port (
+        clk    : in  std_logic := '0';
+        en     : in  std_logic := '0';
+        a      : in  std_logic_vector(31 downto 0);
+        q      : out std_logic_vector(31 downto 0)
+    );
+end entity fp_rcp;
+
+ library IEEE;
+use IEEE.std_logic_1164.all;
+use IEEE.numeric_std.all;
+
+entity fp_scalar_product is
+    generic( latency : integer := 37 );
+    port (
+        clk    : in  std_logic                     := '0';             --    clk.clk
+        en     : in  std_logic := '0';
+        areset : in  std_logic                     := '0';             -- areset.reset
+        a0     : in  std_logic_vector(31 downto 0) := (others => '0'); --     a0.a0
+        b0     : in  std_logic_vector(31 downto 0) := (others => '0'); --     b0.b0
+        a1     : in  std_logic_vector(31 downto 0) := (others => '0'); --     a1.a1
+        b1     : in  std_logic_vector(31 downto 0) := (others => '0'); --     b1.b1
+        a2     : in  std_logic_vector(31 downto 0) := (others => '0'); --     a2.a2
+        b2     : in  std_logic_vector(31 downto 0) := (others => '0'); --     b2.b2
+        a3     : in  std_logic_vector(31 downto 0) := (others => '0'); --     a3.a3
+        b3     : in  std_logic_vector(31 downto 0) := (others => '0'); --     b3.b3
+        q      : out std_logic_vector(31 downto 0)                     --      q.q
+    );
+end entity fp_scalar_product; 

@@ -71,11 +71,11 @@ begin
     difference <= to_real(to_float(a)) - to_real(to_float(b));
 
     pipeline_add: entity work.Pipeline
-    generic map(latency => 11)
+    generic map(latency => latency)
     port map(clock => clk, en => en, data_in => sum, data_out => result_sum);
 
     pipeline_sub: entity work.Pipeline
-    generic map(latency => 11)
+    generic map(latency => latency)
     port map(clock => clk, en => en, data_in => difference, data_out => result_difference);
 
     q <= to_slv(to_float(result_sum));
@@ -145,7 +145,7 @@ use ieee.float_pkg.all;
 architecture sim of fp_rsqrt is
     signal math_res, pipelined_res : real;
 begin
-    math_res <= 1.0 / sqrt(to_real(to_float(a)));
+    math_res <= 1.0 / sqrt(to_real(to_float(a))) when to_real(to_float(a)) /= 0.0 else 0.0;
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
@@ -355,3 +355,48 @@ begin
 
     q <= std_logic_vector(to_signed(integer(pipelined_res), 32));
 end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+use ieee.math_real.all;
+use ieee.float_pkg.all;
+
+architecture sim of fp_rcp is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= 1.0 / to_real(to_float(a)) when to_real(to_float(a)) /= 0.0 else 0.0;
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+
+    q <= to_slv(to_float(pipelined_res));
+end architecture;
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+use IEEE.MATH_REAL.ALL;
+use IEEE.FLOAT_PKG.ALL;
+
+architecture sim of fp_scalar_product is
+    signal math_res, pipelined_res : real;
+begin
+    math_res <= (to_real(to_float(a0)) * to_real(to_float(b0))) +
+                (to_real(to_float(a1)) * to_real(to_float(b1))) +
+                (to_real(to_float(a2)) * to_real(to_float(b2))) +
+                (to_real(to_float(a3)) * to_real(to_float(b3)));
+
+    pipe_inst: entity work.Pipeline
+        generic map(latency => latency)
+        port map(
+            clock    => clk, 
+            en       => en, 
+            data_in  => math_res, 
+            data_out => pipelined_res
+        );
+
+    q <= to_slv(to_float(pipelined_res));
+
+end architecture sim;
