@@ -30,6 +30,11 @@ architecture sim of tb_instruction_issue is
     signal cmp_invert      : std_logic;
     signal cmp_swap        : std_logic;
     signal is_logic_op     : std_logic;
+    
+    -- NEW: Immediate Load outputs
+    signal is_load         : std_logic;
+    signal imm_data        : std_logic_vector(15 downto 0);
+    
     signal wb_mux_sel      : std_logic_vector(1 downto 0);
     signal vrf_we          : std_logic;
     signal prf_we          : std_logic;
@@ -43,7 +48,7 @@ begin
         generic map ( THREAD_WIDTH => 5, REG_WIDTH => 2 )
         port map (
             clk => clk, reset => reset, 
-            exec_ctrl_in => exec_ctrl_in, -- UPDATED PORT
+            exec_ctrl_in => exec_ctrl_in,
             valid_in => valid_in,
             current_thread => current_thread, opcode_out => opcode_out,
             rs1_addr_global => rs1_addr_global, rs2_addr_global => rs2_addr_global,
@@ -51,6 +56,7 @@ begin
             swiz_sel_a => swiz_sel_a, swiz_sel_b => swiz_sel_b, swiz_sel_c => swiz_sel_c,
             inst_write_mask => inst_write_mask, 
             cmp_invert => cmp_invert, cmp_swap => cmp_swap, is_logic_op => is_logic_op,
+            is_load => is_load, imm_data => imm_data, -- NEW
             wb_mux_sel => wb_mux_sel, vrf_we => vrf_we, prf_we => prf_we, issue_valid => issue_valid
         );
 
@@ -75,6 +81,8 @@ begin
         exec_ctrl_in.cmp_invert     <= '0';
         exec_ctrl_in.cmp_swap       <= '0';
         exec_ctrl_in.is_logic_op    <= '0';
+        exec_ctrl_in.is_load        <= '0';             -- NEW
+        exec_ctrl_in.imm_data       <= (others => '0'); -- NEW
         exec_ctrl_in.wb_mux_sel     <= "00";
         exec_ctrl_in.vrf_we         <= '0';
         exec_ctrl_in.prf_we         <= '0';
@@ -109,6 +117,8 @@ begin
             assert cmp_swap = '1' report "Swap flag latch mismatch" severity error;
             assert prf_we = '1' report "PRF WE latch mismatch" severity error;
             assert vrf_we = '0' report "VRF WE latch mismatch" severity error;
+            assert is_load = '0' report "is_load latch mismatch" severity error;
+            assert imm_data = x"0000" report "imm_data latch mismatch" severity error;
 
             -- 2. Wait for the next active edge
             wait until rising_edge(clk);
@@ -162,6 +172,38 @@ begin
             assert opcode_out = OP_FMUL report "Latched opcode failed to update!" severity error;
             wait until rising_edge(clk);
             if i = 0 then valid_in <= '0'; end if;
+        end loop;
+        
+        -- Allow the restart sequence to finish or clear before moving to Test 3
+        valid_in <= '0';
+        for i in 4 to 32 loop wait until rising_edge(clk); end loop;
+
+        -- ====================================================================
+        -- TEST 3: Immediate Load Behavior
+        -- ====================================================================
+        report ">> TEST 3: Immediate Load Latch Behavior";
+        
+        exec_ctrl_in.opcode   <= OP_LDI_LO;
+        exec_ctrl_in.is_load  <= '1';
+        exec_ctrl_in.imm_data <= x"BEEF";
+        exec_ctrl_in.vrf_we   <= '1';
+        valid_in <= '1';
+        
+        for i in 0 to 4 loop
+            wait until falling_edge(clk);
+            assert to_integer(unsigned(current_thread)) = i report "LDI Thread mismatch!" severity error;
+            assert opcode_out = OP_LDI_LO report "LDI opcode latch mismatch" severity error;
+            assert is_load = '1' report "is_load flag failed to latch!" severity error;
+            assert imm_data = x"BEEF" report "imm_data failed to latch!" severity error;
+            wait until rising_edge(clk);
+            
+            if i = 0 then 
+                valid_in <= '0'; 
+                -- Scramble to prove it latched
+                exec_ctrl_in.opcode   <= OP_NOP;
+                exec_ctrl_in.is_load  <= '0';
+                exec_ctrl_in.imm_data <= x"0000";
+            end if;
         end loop;
 
         report ">> SIMULATION COMPLETE: All assertions passed synchronously!";

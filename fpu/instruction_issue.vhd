@@ -39,6 +39,9 @@ entity instruction_issue is
         cmp_swap        : out std_logic;
         is_logic_op     : out std_logic;
         
+        is_load         : out std_logic;
+        imm_data        : out std_logic_vector(15 downto 0);
+        
         -- Top-Level Control Signals
         wb_mux_sel      : out std_logic_vector(1 downto 0);
         vrf_we          : out std_logic;
@@ -60,7 +63,8 @@ architecture rtl of instruction_issue is
         swiz_sel_a     => ("00", "00", "00", "00"), swiz_sel_b => ("00", "00", "00", "00"), swiz_sel_c => ("00", "00", "00", "00"),
         write_mask     => "0000", wb_mux_sel => "00", 
         cmp_invert     => '0', cmp_swap => '0',
-        is_logic_op    => '0', vrf_we => '0', prf_we => '0'
+        is_logic_op    => '0', vrf_we => '0', prf_we => '0',
+        is_load        => '0', imm_data => (others => '0') -- NEW
     );
 
     signal current_thread_int : std_logic_vector(THREAD_WIDTH-1 downto 0);
@@ -89,6 +93,8 @@ begin
                 latched_ctrl.is_logic_op    <= '0';
                 latched_ctrl.vrf_we         <= '0';
                 latched_ctrl.prf_we         <= '0';
+                latched_ctrl.is_load        <= '0';             -- NEW
+                latched_ctrl.imm_data       <= (others => '0'); -- NEW
 
             else
                 if valid_in = '1' then
@@ -122,6 +128,8 @@ begin
     cmp_invert      <= ctrl_out.cmp_invert;
     cmp_swap        <= ctrl_out.cmp_swap;
     is_logic_op     <= ctrl_out.is_logic_op;
+    is_load         <= ctrl_out.is_load;   -- NEW
+    imm_data        <= ctrl_out.imm_data;  -- NEW
     wb_mux_sel      <= ctrl_out.wb_mux_sel;
     vrf_we          <= ctrl_out.vrf_we;
     prf_we          <= ctrl_out.prf_we;

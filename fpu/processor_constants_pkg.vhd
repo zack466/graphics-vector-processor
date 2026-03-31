@@ -12,6 +12,7 @@ package processor_constants_pkg is
     constant INST_TYPE_CTRL : std_logic_vector(3 downto 0) := "0001";
     constant INST_TYPE_RED  : std_logic_vector(3 downto 0) := "0010";
     constant INST_TYPE_ALU  : std_logic_vector(3 downto 0) := "0011";
+    constant INST_TYPE_IMM  : std_logic_vector(3 downto 0) := "0100";
 
     -- ========================================================================
     -- FPU MATH OPCODES [31:26] (When Type == 0000)
@@ -86,14 +87,27 @@ package processor_constants_pkg is
     constant OP_IAND    : std_logic_vector(5 downto 0) := "000010";
     constant OP_IOR     : std_logic_vector(5 downto 0) := "000011";
     constant OP_IXOR    : std_logic_vector(5 downto 0) := "000100";
-    constant OP_ISHL    : std_logic_vector(5 downto 0) := "000101"; -- Shift Left
-    constant OP_ISHR    : std_logic_vector(5 downto 0) := "000110"; -- Shift Right
+    constant OP_ISHL    : std_logic_vector(5 downto 0) := "000101"; 
+    constant OP_ISHR    : std_logic_vector(5 downto 0) := "000110"; 
+    constant OP_IMUL    : std_logic_vector(5 downto 0) := "000111"; -- NEW
+    constant OP_IINC    : std_logic_vector(5 downto 0) := "001000"; -- NEW
+    constant OP_IDEC    : std_logic_vector(5 downto 0) := "001001"; -- NEW
+    constant OP_ISAR    : std_logic_vector(5 downto 0) := "001010"; -- NEW: Shift Arith Right
+    constant OP_ICMP_EQ : std_logic_vector(5 downto 0) := "001011"; -- NEW
+    constant OP_ICMP_SLT: std_logic_vector(5 downto 0) := "001100"; -- NEW: Signed Less Than
+    constant OP_ICMP_ULT: std_logic_vector(5 downto 0) := "001101"; -- NEW: Unsigned Less Than
+
+    -- ========================================================================
+    -- IMMEDIATE OPCODES [31:26] (When Type == 0100)
+    -- ========================================================================
+    constant OP_LDI_LO  : std_logic_vector(5 downto 0) := "000000"; -- NEW
+    constant OP_LDI_HI  : std_logic_vector(5 downto 0) := "000001"; -- NEW
 
     -- ========================================================================
     -- CONTROL RECORDS (Expanded explicitly to remove downstream decoding)
     -- ========================================================================
     type fpu_ctrl_t is record
-        opcode          : std_logic_vector(5 downto 0); -- Used only by FPU lanes as an ALU selector
+        opcode          : std_logic_vector(5 downto 0);
         rs1_addr_local  : std_logic_vector(1 downto 0);
         rs2_addr_local  : std_logic_vector(1 downto 0);
         rs3_addr_local  : std_logic_vector(1 downto 0);
@@ -104,9 +118,9 @@ package processor_constants_pkg is
         write_mask      : std_logic_vector(3 downto 0);
         cmp_invert      : std_logic; 
         cmp_swap        : std_logic; 
-        is_logic_op     : std_logic; -- Instructs Swizzle Network to use PRF data
-        vrf_we          : std_logic; -- Vector Reg File Write Enable
-        prf_we          : std_logic; -- Predicate Reg File Write Enable
+        is_logic_op     : std_logic;
+        vrf_we          : std_logic; 
+        prf_we          : std_logic; 
         wb_mux_sel      : std_logic_vector(1 downto 0);
     end record;
 
@@ -119,7 +133,7 @@ package processor_constants_pkg is
         red_mask        : std_logic_vector(3 downto 0); 
         red_mode        : std_logic_vector(1 downto 0); 
         wb_mux_sel      : std_logic_vector(1 downto 0); 
-        vrf_we          : std_logic; -- Vector Reg File Write Enable
+        vrf_we          : std_logic; 
     end record;
 
     type pc_ctrl_t is record
@@ -139,6 +153,9 @@ package processor_constants_pkg is
         write_mask      : std_logic_vector(3 downto 0);
         wb_mux_sel      : std_logic_vector(1 downto 0);
         vrf_we          : std_logic;
+        prf_we          : std_logic;                     -- NEW: For ALU Compares
+        is_load         : std_logic;                     -- NEW: Differentiates LDI from standard math
+        imm_data        : std_logic_vector(15 downto 0); -- NEW: For Immediate Loads
     end record;
 
     -- ========================================================================
@@ -149,22 +166,24 @@ package processor_constants_pkg is
         opcode          : std_logic_vector(5 downto 0);
         rs1_addr_local  : std_logic_vector(1 downto 0);
         rs2_addr_local  : std_logic_vector(1 downto 0);
-        rs3_addr_local  : std_logic_vector(1 downto 0); -- FPU only
+        rs3_addr_local  : std_logic_vector(1 downto 0); 
         rd_addr_local   : std_logic_vector(1 downto 0);
         swiz_sel_a      : swizzle_sel_t;
         swiz_sel_b      : swizzle_sel_t;
-        swiz_sel_c      : swizzle_sel_t;                -- FPU only
+        swiz_sel_c      : swizzle_sel_t;                
         write_mask      : std_logic_vector(3 downto 0);
-        cmp_invert      : std_logic;                    -- FPU only
-        cmp_swap        : std_logic;                    -- FPU only
-        is_logic_op     : std_logic;                    -- FPU only
+        cmp_invert      : std_logic;                    
+        cmp_swap        : std_logic;                    
+        is_logic_op     : std_logic;                    
         vrf_we          : std_logic;
-        prf_we          : std_logic;                    -- FPU only
+        prf_we          : std_logic;                    
         wb_mux_sel      : std_logic_vector(1 downto 0);
+        is_load         : std_logic;                    
+        imm_data        : std_logic_vector(15 downto 0); -- NEW
     end record;
 
     -- ========================================================================
-    -- HARDWARE LATENCY CONSTANTS
+    -- HARDWARE LATENCY CONSTANTS (TODO: update for real Altera IP)
     -- ========================================================================
     constant LAT_FMADD      : integer := 22;
     constant LAT_FRCP       : integer := 14;
@@ -180,7 +199,7 @@ package processor_constants_pkg is
     constant LAT_FCMP_EQ    : integer := 3;
     constant LAT_I2F        : integer := 6; 
     constant LAT_F2I        : integer := 6; 
-    constant LAT_REDUCT     : integer := 37; 
+    constant LAT_REDUCT     : integer := 37;    -- 4d scalar product
 
     constant FPU_MAX_LATENCY : integer := 37;
 

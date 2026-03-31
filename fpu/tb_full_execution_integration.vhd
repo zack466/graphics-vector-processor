@@ -21,7 +21,7 @@ architecture sim of tb_full_execution_integration is
     -- ========================================================================
     -- STAGE 0: INSTRUCTION ISSUE & PARALLEL LATCH
     -- ========================================================================
-    signal exec_ctrl_in    : exec_ctrl_t; -- UPDATED: Unified Execution Record
+    signal exec_ctrl_in    : exec_ctrl_t; 
     signal valid_in        : std_logic := '0';
     
     signal inst_type_in    : std_logic_vector(3 downto 0) := INST_TYPE_FPU;
@@ -53,6 +53,10 @@ architecture sim of tb_full_execution_integration is
     signal iss_vrf_we      : std_logic;
     signal iss_prf_we      : std_logic;
 
+    -- NEW: Immediate Load signals
+    signal iss_is_load     : std_logic;
+    signal iss_imm_data    : std_logic_vector(15 downto 0);
+
     -- ========================================================================
     -- STAGE 1: VRF READ & SWIZZLE NETWORK (Strictly Pipelined)
     -- ========================================================================
@@ -70,6 +74,10 @@ architecture sim of tb_full_execution_integration is
     signal s1_swiz_a       : swizzle_sel_t;
     signal s1_swiz_b       : swizzle_sel_t;
     signal s1_is_logic_op  : std_logic;
+    
+    -- NEW: Stage 1 Immediate Load signals
+    signal s1_is_load      : std_logic := '0';
+    signal s1_imm_data     : std_logic_vector(15 downto 0) := (others => '0');
     
     signal s1_prf_rs1      : std_logic_vector(3 downto 0) := "0000";
     signal s1_prf_rs2      : std_logic_vector(3 downto 0) := "0000";
@@ -148,6 +156,7 @@ begin
             inst_write_mask => iss_mask, issue_valid => iss_valid,
             swiz_sel_a => iss_swiz_a, swiz_sel_b => iss_swiz_b, swiz_sel_c => open, wb_mux_sel => iss_wb_mux,
             cmp_invert => iss_cmp_invert, cmp_swap => iss_cmp_swap, is_logic_op => iss_is_logic_op,
+            is_load => iss_is_load, imm_data => iss_imm_data, -- NEW
             vrf_we => iss_vrf_we, prf_we => iss_prf_we
         );
 
@@ -205,9 +214,10 @@ begin
 
     fpu_en <= '1' when (s1_valid = '1' and s1_type = INST_TYPE_FPU) else '0';
     red_en <= '1' when (s1_valid = '1' and s1_type = INST_TYPE_RED) else '0';
-    alu_en <= '1' when (s1_valid = '1' and s1_type = INST_TYPE_ALU) else '0';
+    
+    -- UPDATED: ALU Lane triggers on both standard ALU and Immediate instructions
+    alu_en <= '1' when (s1_valid = '1' and (s1_type = INST_TYPE_ALU or s1_type = INST_TYPE_IMM)) else '0';
 
-    -- FPU lanes just receive opcode as a dumb ALU selector
     u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>fpu_en, op_a=>swiz_a_out(0), op_b=>swiz_b_out(0), op_c=>vrf_rs3_data(0), result=>fpu_res_x, valid_out=>fpu_valid_x, comp_flag=>comp_flag_x, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
     u_lane_y: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>fpu_en, op_a=>swiz_a_out(1), op_b=>swiz_b_out(1), op_c=>vrf_rs3_data(1), result=>fpu_res_y, valid_out=>open,        comp_flag=>comp_flag_y, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
     u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>fpu_en, op_a=>swiz_a_out(2), op_b=>swiz_b_out(2), op_c=>vrf_rs3_data(2), result=>fpu_res_z, valid_out=>open,        comp_flag=>comp_flag_z, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
@@ -221,12 +231,13 @@ begin
             result => red_res_scalar, valid_out => open
         );
 
-    -- NEW: ALU Lane (Scalar, tapped into .x channel)
     u_alu: entity work.alu_lane 
         port map (
             clk       => clk, reset => reset, opcode => s1_opcode, valid_in => alu_en,
+            is_load   => s1_is_load,  -- NEW
+            imm_data  => s1_imm_data, -- NEW
             op_a      => swiz_a_out(0), op_b => swiz_b_out(0),
-            result    => alu_res, valid_out => alu_valid
+            result    => alu_res, comp_flag => open, valid_out => alu_valid
         );
 
     wb_data <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_a) when wb_mux_sel = WB_MUX_FPU else 
@@ -240,6 +251,7 @@ begin
         if rising_edge(clk) then
             if reset = '1' then
                 s1_valid <= '0';
+                s1_is_load <= '0';
             else
                 -- STRICLY LATCH ALL STAGE 0 SIGNALS INTO STAGE 1
                 s1_opcode      <= iss_opcode;
@@ -252,6 +264,9 @@ begin
                 s1_swiz_a      <= iss_swiz_a;
                 s1_swiz_b      <= iss_swiz_b;
                 s1_is_logic_op <= iss_is_logic_op;
+                
+                s1_is_load     <= iss_is_load;  -- NEW
+                s1_imm_data    <= iss_imm_data; -- NEW
                 
                 -- Latch Async PRF data to align with Sync VRF data
                 s1_prf_rs1     <= prf_rs1_data;
@@ -279,6 +294,8 @@ begin
         exec_ctrl_in.is_logic_op <= '0';
         exec_ctrl_in.vrf_we <= '0';
         exec_ctrl_in.prf_we <= '0';
+        exec_ctrl_in.is_load <= '0';
+        exec_ctrl_in.imm_data <= (others => '0');
 
         wait until rising_edge(clk);
         reset <= '0';
@@ -558,6 +575,36 @@ begin
             
             -- Thread `i` started with v3.x = i * 2. After IADD, it should be (i*2) + (i*2) = i*4
             assert to_integer(unsigned(mcu_rd_data(0))) = i * 4 report "P15 ALU X mismatch!" severity error;
+            
+            wait until rising_edge(clk);
+        end loop;
+
+        -- ====================================================================
+        -- PHASE 16 & 17: Immediate Load Integration Test (v3.y = x"0000BEEF")
+        -- ====================================================================
+        report ">> PHASE 16: Issuing OP_LDI_LO (v3.y = 0xBEEF)";
+        inst_type_in <= INST_TYPE_IMM; 
+        exec_ctrl_in.opcode      <= OP_LDI_LO;
+        exec_ctrl_in.rd_addr_local <= "11"; -- Overwrite v3
+        exec_ctrl_in.write_mask  <= "0010"; -- Scalar write to Y only
+        exec_ctrl_in.is_load     <= '1';
+        exec_ctrl_in.imm_data    <= x"BEEF";
+        exec_ctrl_in.wb_mux_sel  <= WB_MUX_ALU;
+        exec_ctrl_in.vrf_we      <= '1';
+        exec_ctrl_in.prf_we      <= '0';
+        exec_ctrl_in.is_logic_op <= '0';
+        
+        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
+        exec_ctrl_in.is_load <= '0'; -- Clear it for cleanliness
+        
+        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+
+        report ">> PHASE 17: Verifying Immediate Writeback";
+        for i in 0 to 31 loop
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            wait until rising_edge(clk); wait until falling_edge(clk);
+            
+            assert mcu_rd_data(1) = x"0000BEEF" report "P17 Immediate Y mismatch!" severity error;
             
             wait until rising_edge(clk);
         end loop;

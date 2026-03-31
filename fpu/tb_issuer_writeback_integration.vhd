@@ -21,7 +21,6 @@ architecture sim of tb_issuer_writeback_integration is
     -- ========================================================================
     -- STAGE 0: INSTRUCTION ISSUE (Outputs)
     -- ========================================================================
-    -- UPDATED: Using the unified exec_ctrl_t instead of fpu_ctrl_t
     signal exec_ctrl_in    : exec_ctrl_t;
     signal valid_in        : std_logic := '0';
     
@@ -43,6 +42,10 @@ architecture sim of tb_issuer_writeback_integration is
     
     signal iss_swiz_a      : swizzle_sel_t;
     signal iss_swiz_b      : swizzle_sel_t;
+    
+    -- NEW: Immediate Load signals
+    signal iss_is_load     : std_logic;
+    signal iss_imm_data    : std_logic_vector(15 downto 0);
 
     -- ========================================================================
     -- STAGE 1: REG FILE READS (1 Cycle Latency)
@@ -55,6 +58,10 @@ architecture sim of tb_issuer_writeback_integration is
     signal s1_cmp_inv      : std_logic;
     signal s1_cmp_swap     : std_logic;
     signal s1_is_logic_op  : std_logic;
+    
+    -- NEW: Stage 1 Immediate Load signals
+    signal s1_is_load      : std_logic := '0';
+    signal s1_imm_data     : std_logic_vector(15 downto 0) := (others => '0');
     
     signal s1_swiz_a       : swizzle_sel_t;
     signal s1_swiz_b       : swizzle_sel_t;
@@ -70,7 +77,6 @@ architecture sim of tb_issuer_writeback_integration is
     signal comp_flag_x, comp_flag_y, comp_flag_z, comp_flag_w : std_logic;
     signal fpu_valid_x : std_logic; 
     
-    -- NEW: ALU signals
     signal alu_res     : word_t;
     signal alu_valid   : std_logic;
     
@@ -109,13 +115,14 @@ begin
     u_issuer: entity work.instruction_issue
         port map (
             clk => clk, reset => reset, 
-            exec_ctrl_in => exec_ctrl_in, -- UPDATED
+            exec_ctrl_in => exec_ctrl_in, 
             valid_in => valid_in,
             current_thread => current_thread, opcode_out => iss_opcode,
             rs1_addr_global => iss_rs1_addr, rs2_addr_global => iss_rs2_addr, 
             rs3_addr_global => iss_rs3_addr, rd_addr_global => iss_rd_addr,
             inst_write_mask => iss_mask, issue_valid => iss_valid,
             cmp_invert => iss_cmp_invert, cmp_swap => iss_cmp_swap, is_logic_op => iss_is_logic_op,
+            is_load => iss_is_load, imm_data => iss_imm_data, -- NEW
             vrf_we => iss_vrf_we, prf_we => iss_prf_we,
             swiz_sel_a => iss_swiz_a, swiz_sel_b => iss_swiz_b, swiz_sel_c => open, wb_mux_sel => iss_wb_mux
         );
@@ -179,20 +186,21 @@ begin
     u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>swiz_a_out(2), op_b=>swiz_b_out(2), op_c=>vrf_rs3_data(2), result=>fpu_res_z, valid_out=>open,        comp_flag=>comp_flag_z, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
     u_lane_w: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>swiz_a_out(3), op_b=>swiz_b_out(3), op_c=>vrf_rs3_data(3), result=>fpu_res_w, valid_out=>open,        comp_flag=>comp_flag_w, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
 
-    -- NEW: ALU Lane (Scalar, tapped into .x channel of the swizzle network)
     u_alu: entity work.alu_lane 
         port map (
             clk       => clk,
             reset     => reset,
             opcode    => s1_opcode,
             valid_in  => s1_valid,
+            is_load   => s1_is_load,  -- NEW
+            imm_data  => s1_imm_data, -- NEW
             op_a      => swiz_a_out(0),
             op_b      => swiz_b_out(0),
             result    => alu_res,
+            comp_flag => open, -- Ignored in this top-level test for now
             valid_out => alu_valid
         );
 
-    -- UPDATED: Writeback Multiplexer
     vrf_wb_data <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_w) when wb_mux_sel = WB_MUX_FPU else
                    (alu_res, alu_res, alu_res, alu_res)         when wb_mux_sel = WB_MUX_ALU else
                    (others => (others => '0'));
@@ -203,13 +211,17 @@ begin
     begin
         if rising_edge(clk) then
             if reset = '1' then
-                s1_valid <= '0';
+                s1_valid   <= '0';
+                s1_is_load <= '0';
             else
                 s1_opcode      <= iss_opcode;
                 s1_valid       <= iss_valid;
                 s1_cmp_inv     <= iss_cmp_invert;
                 s1_cmp_swap    <= iss_cmp_swap;
                 s1_is_logic_op <= iss_is_logic_op;
+                
+                s1_is_load     <= iss_is_load;  -- NEW
+                s1_imm_data    <= iss_imm_data; -- NEW
                 
                 s1_swiz_a      <= iss_swiz_a;
                 s1_swiz_b      <= iss_swiz_b;
@@ -236,6 +248,8 @@ begin
         exec_ctrl_in.wb_mux_sel <= WB_MUX_FPU; 
         exec_ctrl_in.cmp_invert <= '0'; exec_ctrl_in.cmp_swap <= '0';
         exec_ctrl_in.is_logic_op <= '0'; exec_ctrl_in.vrf_we <= '0'; exec_ctrl_in.prf_we <= '0';
+        exec_ctrl_in.is_load    <= '0'; 
+        exec_ctrl_in.imm_data   <= (others => '0');
 
         wait until rising_edge(clk);
         reset <= '0';
@@ -259,7 +273,6 @@ begin
             mcu_wr_data <= (others => x"41200000"); -- Float representation of 10.0
             wait until rising_edge(clk);
 
-            -- NEW: Initialize v3 with pure integers for the ALU
             mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
             mcu_wr_data <= (others => std_logic_vector(to_unsigned(i * 2, 32))); 
             wait until rising_edge(clk);
@@ -358,7 +371,6 @@ begin
         exec_ctrl_in.rd_addr_local  <= "11"; -- Overwrite v3
         exec_ctrl_in.write_mask     <= "0001"; -- Scalar write to X only
         
-        -- Route to the ALU Lane
         exec_ctrl_in.wb_mux_sel     <= WB_MUX_ALU;
         exec_ctrl_in.vrf_we         <= '1';
         exec_ctrl_in.prf_we         <= '0';
@@ -380,8 +392,43 @@ begin
             wait until rising_edge(clk); 
             wait until falling_edge(clk); 
             
-            -- Thread `i` started with v3.x = i * 2.  After IADD, it should be (i*2) + (i*2) = i*4
             assert to_integer(unsigned(mcu_rd_data(0))) = i * 4 report "Thread " & integer'image(i) & " ALU X mismatch!" severity error;
+            
+            wait until rising_edge(clk);
+        end loop;
+
+        -- ====================================================================
+        -- PHASE 8: Issue SIMT Immediate Load (v3.y = x"0000BEEF")
+        -- ====================================================================
+        report ">> PHASE 8: Issuing OP_LDI_LO (v3.y = 0xBEEF)";
+        exec_ctrl_in.opcode      <= OP_LDI_LO;
+        exec_ctrl_in.rd_addr_local <= "11"; -- Overwrite v3
+        exec_ctrl_in.write_mask  <= "0010"; -- Scalar write to Y only
+        exec_ctrl_in.is_load     <= '1';
+        exec_ctrl_in.imm_data    <= x"BEEF";
+        exec_ctrl_in.wb_mux_sel  <= WB_MUX_ALU;
+        exec_ctrl_in.vrf_we      <= '1';
+        exec_ctrl_in.prf_we      <= '0';
+        exec_ctrl_in.is_logic_op <= '0';
+        
+        valid_in <= '1';
+        wait until rising_edge(clk);
+        valid_in <= '0'; 
+        exec_ctrl_in.is_load <= '0'; -- Ensure it is cleared for future instructions
+
+        report ">> Waiting for LDI pipelined execution to complete...";
+        for i in 1 to 75 loop wait until rising_edge(clk); end loop;
+
+        -- ====================================================================
+        -- PHASE 9: Verify Vector Reg File (Immediate Results)
+        -- ====================================================================
+        report ">> PHASE 9: Verifying VRF Writeback Results (Immediates)";
+        for i in 0 to 31 loop
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            wait until rising_edge(clk); 
+            wait until falling_edge(clk); 
+            
+            assert mcu_rd_data(1) = x"0000BEEF" report "Thread " & integer'image(i) & " ALU Y mismatch (Immediate)!" severity error;
             
             wait until rising_edge(clk);
         end loop;

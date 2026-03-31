@@ -13,15 +13,15 @@ SOURCES = vector_types.vhd \
 # Testbench files
 TESTBENCH_SOURCES = tb_fp_sim.vhd \
 					tb_vector_reg_file.vhd tb_swizzle_network.vhd \
-					tb_fpu_lane.vhd tb_instruction_issue.vhd \
+					tb_fpu_lane.vhd tb_alu_lane.vhd tb_instruction_issue.vhd \
 					tb_vector_reduction_unit.vhd \
-					tb_issuer_writeback_integration.vhd \
-					tb_full_execution_integration.vhd \
 					tb_instruction_memory.vhd \
-					tb_instruction_fetch_unit.vhd
+					tb_instruction_fetch_unit.vhd \
+					tb_issuer_writeback_integration.vhd \
+					tb_full_execution_integration.vhd
 
 # Testbench executable names
-TESTBENCHES = tb_fp_sim tb_vector_reg_file tb_swizzle_network tb_fpu_lane \
+TESTBENCHES = tb_fp_sim tb_vector_reg_file tb_swizzle_network tb_fpu_lane tb_alu_lane \
 			  tb_instruction_issue tb_issuer_writeback_integration \
 			  tb_vector_reduction_unit tb_full_execution_integration \
 			  tb_instruction_memory tb_instruction_fetch_unit

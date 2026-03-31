@@ -28,6 +28,7 @@ begin
         variable v_fpu : fpu_ctrl_t;
         variable v_red : red_ctrl_t;
         variable v_pc  : pc_ctrl_t;
+        variable v_alu : alu_ctrl_t;
     begin
         -- ====================================================================
         -- 1. INITIALIZE VARIABLES WITH SAFE DEFAULTS (Prevents latches)
@@ -72,6 +73,9 @@ begin
         v_alu.write_mask     := "0000";
         v_alu.wb_mux_sel     := WB_MUX_ALU;
         v_alu.vrf_we         := '0';
+        v_alu.prf_we         := '0';
+        v_alu.is_load        := '0';
+        v_alu.imm_data       := (others => '0');
 
         -- ====================================================================
         -- 2. DECODE BASED ON INSTRUCTION TYPE
@@ -189,7 +193,30 @@ begin
             v_alu.swiz_sel_b(0)  := instruction(5 downto 4);
 
             v_alu.wb_mux_sel     := WB_MUX_ALU;
+
+            -- NEW: ICMP instructions route their 1-bit result to the PRF
+            if internal_opcode = OP_ICMP_EQ or internal_opcode = OP_ICMP_SLT or internal_opcode = OP_ICMP_ULT then
+                v_alu.vrf_we := '0';
+                v_alu.prf_we := '1';
+            else
+                v_alu.vrf_we := '1';
+                v_alu.prf_we := '0';
+            end if;
+
+        elsif inst_type = INST_TYPE_IMM then
+            -- ----------------------------------------------------------------
+            -- IMMEDIATE INSTRUCTION MAP (Routes to ALU Lane)
+            -- [31:26] Opcode | [25:10] Imm16 | [9:6] Mask | [5:4] Dest | [3:0] Type
+            -- ----------------------------------------------------------------
+            v_alu.opcode         := internal_opcode;
+            v_alu.imm_data       := instruction(25 downto 10);
+            v_alu.write_mask     := instruction(9 downto 6);
+            v_alu.rd_addr_local  := instruction(5 downto 4);
+            
+            v_alu.wb_mux_sel     := WB_MUX_ALU;
             v_alu.vrf_we         := '1';
+            v_alu.prf_we         := '0';
+            v_alu.is_load        := '1';
         end if;
 
         -- ====================================================================
