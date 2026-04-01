@@ -19,98 +19,68 @@ architecture sim of tb_full_execution_integration is
     signal reset : std_logic := '1';
 
     -- ========================================================================
-    -- STAGE 0: INSTRUCTION ISSUE & PARALLEL LATCH
+    -- STAGE 0: DECODER MOCK SIGNALS (Inputs to Instruction Issue)
     -- ========================================================================
-    signal exec_ctrl_in    : exec_ctrl_t; 
-    signal valid_in        : std_logic := '0';
+    signal decoder_exec_ctrl : exec_ctrl_t;
+    signal decoder_valid_in  : std_logic := '0';
     
-    signal inst_type_in    : std_logic_vector(3 downto 0) := INST_TYPE_FPU;
-    signal red_mode_in     : std_logic_vector(1 downto 0) := RED_MODE_DOT;
-    signal red_mask_in     : std_logic_vector(3 downto 0) := "1111";
-    
-    signal latched_type    : std_logic_vector(3 downto 0);
-    signal latched_rmode   : std_logic_vector(1 downto 0);
-    signal latched_rmask   : std_logic_vector(3 downto 0);
-    
-    signal active_type     : std_logic_vector(3 downto 0);
-    signal active_rmode    : std_logic_vector(1 downto 0);
-    signal active_rmask    : std_logic_vector(3 downto 0);
+    signal decoder_inst_type : std_logic_vector(3 downto 0) := INST_TYPE_FPU;
+    signal decoder_red_mode  : std_logic_vector(1 downto 0) := RED_MODE_DOT;
+    signal decoder_red_mask  : std_logic_vector(3 downto 0) := "1111";
 
-    signal current_thread  : std_logic_vector(4 downto 0);
-    signal iss_opcode      : std_logic_vector(5 downto 0);
-    signal iss_rs1_addr    : std_logic_vector(6 downto 0);
-    signal iss_rs2_addr    : std_logic_vector(6 downto 0);
-    signal iss_rs3_addr    : std_logic_vector(6 downto 0);
-    signal iss_rd_addr     : std_logic_vector(6 downto 0);
-    signal iss_mask        : std_logic_vector(3 downto 0);
-    signal iss_valid       : std_logic;
-    signal iss_swiz_a      : swizzle_sel_t;
-    signal iss_swiz_b      : swizzle_sel_t;
-    signal iss_wb_mux      : std_logic_vector(1 downto 0);
-    signal iss_cmp_invert  : std_logic;
-    signal iss_cmp_swap    : std_logic;
-    signal iss_is_logic_op : std_logic;
-    signal iss_vrf_we      : std_logic;
-    signal iss_prf_we      : std_logic;
-
-    -- NEW: Immediate Load signals
-    signal iss_is_load     : std_logic;
-    signal iss_imm_data    : std_logic_vector(15 downto 0);
+    -- Parallel latches to hold type/mode/mask for the 32-cycle warp duration
+    signal latched_type      : std_logic_vector(3 downto 0);
+    signal latched_rmode     : std_logic_vector(1 downto 0);
+    signal latched_rmask     : std_logic_vector(3 downto 0);
+    signal active_type       : std_logic_vector(3 downto 0);
+    signal active_rmode      : std_logic_vector(1 downto 0);
+    signal active_rmask      : std_logic_vector(3 downto 0);
 
     -- ========================================================================
-    -- STAGE 1: VRF READ & SWIZZLE NETWORK (Strictly Pipelined)
+    -- STAGE 0.5: ISSUER OUTPUTS (Inputs to Execution Unit & Register Files)
+    -- ========================================================================
+    signal iss_current_thread: std_logic_vector(4 downto 0);
+    signal iss_rs1_addr      : std_logic_vector(6 downto 0);
+    signal iss_rs2_addr      : std_logic_vector(6 downto 0);
+    signal iss_rs3_addr      : std_logic_vector(6 downto 0);
+    signal iss_rd_addr       : std_logic_vector(6 downto 0);
+    
+    signal iss_opcode        : std_logic_vector(5 downto 0);
+    signal iss_mask          : std_logic_vector(3 downto 0);
+    signal iss_valid         : std_logic;
+    signal iss_wb_mux        : std_logic_vector(1 downto 0);
+    signal iss_cmp_invert    : std_logic;
+    signal iss_cmp_swap      : std_logic;
+    signal iss_is_logic_op   : std_logic;
+    signal iss_vrf_we        : std_logic;
+    signal iss_prf_we        : std_logic;
+    signal iss_swiz_a        : swizzle_sel_t;
+    signal iss_swiz_b        : swizzle_sel_t;
+    signal iss_swiz_c        : swizzle_sel_t;
+    signal iss_is_load       : std_logic;
+    signal iss_imm_data      : std_logic_vector(15 downto 0);
+
+    -- Re-packed record to feed into the Execution Unit
+    signal iss_exec_ctrl     : exec_ctrl_t;
+
+    -- ========================================================================
+    -- REGISTER FILE DATA BUSES (Arrive at Stage 1)
     -- ========================================================================
     signal vrf_rs1_data, vrf_rs2_data, vrf_rs3_data : vector_t;
     signal prf_rs1_data, prf_rs2_data               : std_logic_vector(3 downto 0);
-    
-    -- STAGE 1 ISOLATION REGISTERS
-    signal s1_opcode       : std_logic_vector(5 downto 0);
-    signal s1_valid        : std_logic;
-    signal s1_type         : std_logic_vector(3 downto 0);
-    signal s1_rmode        : std_logic_vector(1 downto 0);
-    signal s1_rmask        : std_logic_vector(3 downto 0);
-    signal s1_cmp_inv      : std_logic;
-    signal s1_cmp_swap     : std_logic;
-    signal s1_swiz_a       : swizzle_sel_t;
-    signal s1_swiz_b       : swizzle_sel_t;
-    signal s1_is_logic_op  : std_logic;
-    
-    -- NEW: Stage 1 Immediate Load signals
-    signal s1_is_load      : std_logic := '0';
-    signal s1_imm_data     : std_logic_vector(15 downto 0) := (others => '0');
-    
-    signal s1_prf_rs1      : std_logic_vector(3 downto 0) := "0000";
-    signal s1_prf_rs2      : std_logic_vector(3 downto 0) := "0000";
-    
-    signal swiz_a_out, swiz_b_out                   : vector_t;
 
     -- ========================================================================
-    -- STAGE 2: PARALLEL EXECUTION (FPU, ALU, REDUCTION)
+    -- WRITEBACK BUSES (Arrive at Stage N)
     -- ========================================================================
-    signal fpu_en, red_en, alu_en : std_logic;
-    
-    signal fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_a : word_t;
-    signal comp_flag_x, comp_flag_y, comp_flag_z, comp_flag_a : std_logic;
-    signal fpu_valid_x : std_logic;
-    signal red_res_scalar : word_t;
-    
-    signal alu_res   : word_t;
-    signal alu_valid : std_logic;
-    
-    signal wb_data     : vector_t;
-    signal prf_wb_data : std_logic_vector(3 downto 0);
+    signal wb_rd_addr  : std_logic_vector(6 downto 0);
+    signal wb_vrf_data : vector_t;
+    signal wb_prf_data : std_logic_vector(3 downto 0);
+    signal wb_vrf_we   : std_logic;
+    signal wb_prf_we   : std_logic;
+    signal wb_mask     : std_logic_vector(3 downto 0);
 
     -- ========================================================================
-    -- STAGE N: WRITEBACK SIGNALS (From Controller)
-    -- ========================================================================
-    signal wb_rd_addr : std_logic_vector(6 downto 0);
-    signal wb_mask    : std_logic_vector(3 downto 0);
-    signal wb_mux_sel : std_logic_vector(1 downto 0);
-    signal wb_vrf_we  : std_logic;
-    signal wb_prf_we  : std_logic;
-
-    -- ========================================================================
-    -- MCU / VERIFICATION PORT (VRF PORT B)
+    -- MCU / IFU VERIFICATION PORTS
     -- ========================================================================
     signal mcu_rd_addr, mcu_wr_addr : std_logic_vector(6 downto 0) := (others => '0');
     signal mcu_rd_data, mcu_wr_data : vector_t := (others => (others => '0'));
@@ -129,173 +99,133 @@ begin
         clk <= '1'; wait for CLK_PERIOD / 2;
     end process;
 
+    -- 32-Cycle Latch for top-level routing signals
     process(clk)
     begin
         if rising_edge(clk) then
-            if valid_in = '1' then
-                latched_type  <= inst_type_in;
-                latched_rmode <= red_mode_in;
-                latched_rmask <= red_mask_in;
+            if decoder_valid_in = '1' then
+                latched_type  <= decoder_inst_type;
+                latched_rmode <= decoder_red_mode;
+                latched_rmask <= decoder_red_mask;
             end if;
         end if;
     end process;
 
-    active_type  <= inst_type_in when valid_in = '1' else latched_type;
-    active_rmode <= red_mode_in  when valid_in = '1' else latched_rmode;
-    active_rmask <= red_mask_in  when valid_in = '1' else latched_rmask;
-    
+    active_type  <= decoder_inst_type when decoder_valid_in = '1' else latched_type;
+    active_rmode <= decoder_red_mode  when decoder_valid_in = '1' else latched_rmode;
+    active_rmask <= decoder_red_mask  when decoder_valid_in = '1' else latched_rmask;
+
     -- ========================================================================
     -- INSTANTIATIONS
     -- ========================================================================
+    
     u_issuer: entity work.instruction_issue
         port map (
-            clk => clk, reset => reset, exec_ctrl_in => exec_ctrl_in, valid_in => valid_in,
-            current_thread => current_thread, opcode_out => iss_opcode,
-            rs1_addr_global => iss_rs1_addr, rs2_addr_global => iss_rs2_addr, 
-            rs3_addr_global => iss_rs3_addr, rd_addr_global => iss_rd_addr,
-            inst_write_mask => iss_mask, issue_valid => iss_valid,
-            swiz_sel_a => iss_swiz_a, swiz_sel_b => iss_swiz_b, swiz_sel_c => open, wb_mux_sel => iss_wb_mux,
-            cmp_invert => iss_cmp_invert, cmp_swap => iss_cmp_swap, is_logic_op => iss_is_logic_op,
-            is_load => iss_is_load, imm_data => iss_imm_data, -- NEW
-            vrf_we => iss_vrf_we, prf_we => iss_prf_we
+            clk => clk, reset => reset, 
+            exec_ctrl_in => decoder_exec_ctrl, 
+            valid_in => decoder_valid_in,
+            current_thread => iss_current_thread, 
+            opcode_out => iss_opcode,
+            rs1_addr_global => iss_rs1_addr, 
+            rs2_addr_global => iss_rs2_addr, 
+            rs3_addr_global => iss_rs3_addr, 
+            rd_addr_global => iss_rd_addr,
+            inst_write_mask => iss_mask, 
+            issue_valid => iss_valid,
+            swiz_sel_a => iss_swiz_a, 
+            swiz_sel_b => iss_swiz_b, 
+            swiz_sel_c => iss_swiz_c, 
+            wb_mux_sel => iss_wb_mux,
+            cmp_invert => iss_cmp_invert, 
+            cmp_swap => iss_cmp_swap, 
+            is_logic_op => iss_is_logic_op,
+            is_load => iss_is_load, 
+            imm_data => iss_imm_data,
+            vrf_we => iss_vrf_we, 
+            prf_we => iss_prf_we
         );
 
-    u_wb_ctrl: entity work.writeback_controller
+    -- Repack the flattened issuer signals into the record expected by the Execution Unit
+    iss_exec_ctrl.opcode      <= iss_opcode;
+    iss_exec_ctrl.write_mask  <= iss_mask;
+    iss_exec_ctrl.wb_mux_sel  <= iss_wb_mux;
+    iss_exec_ctrl.cmp_invert  <= iss_cmp_invert;
+    iss_exec_ctrl.cmp_swap    <= iss_cmp_swap;
+    iss_exec_ctrl.is_logic_op <= iss_is_logic_op;
+    iss_exec_ctrl.is_load     <= iss_is_load;
+    iss_exec_ctrl.imm_data    <= iss_imm_data;
+    iss_exec_ctrl.vrf_we      <= iss_vrf_we;
+    iss_exec_ctrl.prf_we      <= iss_prf_we;
+    iss_exec_ctrl.swiz_sel_a  <= iss_swiz_a;
+    iss_exec_ctrl.swiz_sel_b  <= iss_swiz_b;
+    iss_exec_ctrl.swiz_sel_c  <= iss_swiz_c;
+    iss_exec_ctrl.rs1_addr_local <= "00"; -- Local addresses ignored by exec unit
+    iss_exec_ctrl.rs2_addr_local <= "00";
+    iss_exec_ctrl.rs3_addr_local <= "00";
+    iss_exec_ctrl.rd_addr_local  <= "00";
+
+    uut_exec: entity work.execution_unit
         port map (
-            clk         => clk,
-            reset       => reset,
-            iss_rd_addr => iss_rd_addr,
-            iss_mask    => iss_mask,
-            iss_wb_mux  => iss_wb_mux,
-            iss_vrf_we  => (iss_vrf_we and iss_valid),
-            iss_prf_we  => (iss_prf_we and iss_valid),
-            wb_rd_addr  => wb_rd_addr,
-            wb_mask     => wb_mask,
-            wb_mux_sel  => wb_mux_sel,
-            wb_vrf_we   => wb_vrf_we,
-            wb_prf_we   => wb_prf_we
+            clk               => clk,
+            reset             => reset,
+            exec_ctrl_in      => iss_exec_ctrl,
+            valid_in          => iss_valid,
+            inst_type_in      => active_type,
+            red_mode_in       => active_rmode,
+            red_mask_in       => active_rmask,
+            rd_addr_global_in => iss_rd_addr,
+            vrf_rs1_data      => vrf_rs1_data,
+            vrf_rs2_data      => vrf_rs2_data,
+            vrf_rs3_data      => vrf_rs3_data,
+            prf_rs1_data      => prf_rs1_data,
+            prf_rs2_data      => prf_rs2_data,
+            wb_rd_addr_out    => wb_rd_addr,
+            wb_vrf_data_out   => wb_vrf_data,
+            wb_prf_data_out   => wb_prf_data,
+            wb_vrf_we_out     => wb_vrf_we,
+            wb_prf_we_out     => wb_prf_we,
+            wb_mask_out       => wb_mask
         );
 
     u_vrf: entity work.vector_reg_file
         port map (
-            clk => clk, reset => reset,
-            rs1_addr => iss_rs1_addr, rs2_addr => iss_rs2_addr, rs3_addr => iss_rs3_addr,
-            rs1_data => vrf_rs1_data, rs2_data => vrf_rs2_data, rs3_data => vrf_rs3_data,
-            rd_addr_A => wb_rd_addr, rd_data_A => wb_data,
+            clk          => clk, reset => reset,
+            rs1_addr     => iss_rs1_addr, rs2_addr => iss_rs2_addr, rs3_addr => iss_rs3_addr,
+            rs1_data     => vrf_rs1_data, rs2_data => vrf_rs2_data, rs3_data => vrf_rs3_data,
+            rd_addr_A    => wb_rd_addr, rd_data_A => wb_vrf_data,
             write_mask_A => wb_mask, we_A => wb_vrf_we,
-            rd_addr_B => mcu_rd_addr, rd_data_B => mcu_rd_data,
-            wr_addr_B => mcu_wr_addr, wr_data_B => mcu_wr_data,
+            rd_addr_B    => mcu_rd_addr, rd_data_B => mcu_rd_data,
+            wr_addr_B    => mcu_wr_addr, wr_data_B => mcu_wr_data,
             write_mask_B => mcu_mask, we_B => mcu_we
         );
 
     u_prf: entity work.predicate_reg_file
         port map (
-            clk => clk, reset => reset,
-            rs1_addr => iss_rs1_addr, rs2_addr => iss_rs2_addr,
-            rs1_data => prf_rs1_data, rs2_data => prf_rs2_data,
-            wr_addr => wb_rd_addr, wr_data => prf_wb_data,
-            we => wb_prf_we, wr_mask => wb_mask,
+            clk          => clk, reset => reset,
+            rs1_addr     => iss_rs1_addr, rs2_addr => iss_rs2_addr,
+            rs1_data     => prf_rs1_data, rs2_data => prf_rs2_data,
+            wr_addr      => wb_rd_addr, wr_data => wb_prf_data,
+            we           => wb_prf_we, wr_mask => wb_mask,
             ifu_pred_sel => ifu_pred_sel, ifu_pred_mod => ifu_pred_mod, ifu_mask_out => ifu_mask_out
         );
-
-    u_swizzle: entity work.swizzle_network
-        port map (
-            is_logic_op => s1_is_logic_op,
-            vec_a_in    => vrf_rs1_data, 
-            prf_a_in    => s1_prf_rs1,
-            swiz_sel_a  => s1_swiz_a, 
-            vec_a_out   => swiz_a_out,
-            
-            vec_b_in    => vrf_rs2_data, 
-            prf_b_in    => s1_prf_rs2,
-            swiz_sel_b  => s1_swiz_b, 
-            vec_b_out   => swiz_b_out
-        );
-
-    fpu_en <= '1' when (s1_valid = '1' and s1_type = INST_TYPE_FPU) else '0';
-    red_en <= '1' when (s1_valid = '1' and s1_type = INST_TYPE_RED) else '0';
-    
-    -- UPDATED: ALU Lane triggers on both standard ALU and Immediate instructions
-    alu_en <= '1' when (s1_valid = '1' and (s1_type = INST_TYPE_ALU or s1_type = INST_TYPE_IMM)) else '0';
-
-    u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>fpu_en, op_a=>swiz_a_out(0), op_b=>swiz_b_out(0), op_c=>vrf_rs3_data(0), result=>fpu_res_x, valid_out=>fpu_valid_x, comp_flag=>comp_flag_x, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
-    u_lane_y: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>fpu_en, op_a=>swiz_a_out(1), op_b=>swiz_b_out(1), op_c=>vrf_rs3_data(1), result=>fpu_res_y, valid_out=>open,        comp_flag=>comp_flag_y, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
-    u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>fpu_en, op_a=>swiz_a_out(2), op_b=>swiz_b_out(2), op_c=>vrf_rs3_data(2), result=>fpu_res_z, valid_out=>open,        comp_flag=>comp_flag_z, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
-    u_lane_a: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>fpu_en, op_a=>swiz_a_out(3), op_b=>swiz_b_out(3), op_c=>vrf_rs3_data(3), result=>fpu_res_a, valid_out=>open,        comp_flag=>comp_flag_a, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
-
-    u_reduction: entity work.vector_reduction_unit
-        port map (
-            clk => clk, reset => reset, valid_in => red_en,
-            vec_a => swiz_a_out, vec_b => swiz_b_out,
-            reduce_mask => s1_rmask, red_mode => s1_rmode,
-            result => red_res_scalar, valid_out => open
-        );
-
-    u_alu: entity work.alu_lane 
-        port map (
-            clk       => clk, reset => reset, opcode => s1_opcode, valid_in => alu_en,
-            is_load   => s1_is_load,  -- NEW
-            imm_data  => s1_imm_data, -- NEW
-            op_a      => swiz_a_out(0), op_b => swiz_b_out(0),
-            result    => alu_res, comp_flag => open, valid_out => alu_valid
-        );
-
-    wb_data <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_a) when wb_mux_sel = WB_MUX_FPU else 
-               (red_res_scalar, red_res_scalar, red_res_scalar, red_res_scalar) when wb_mux_sel = WB_MUX_RED else
-               (alu_res, alu_res, alu_res, alu_res);
-               
-    prf_wb_data <= comp_flag_a & comp_flag_z & comp_flag_y & comp_flag_x;
-
-    pipeline_sync: process(clk)
-    begin
-        if rising_edge(clk) then
-            if reset = '1' then
-                s1_valid <= '0';
-                s1_is_load <= '0';
-            else
-                -- STRICLY LATCH ALL STAGE 0 SIGNALS INTO STAGE 1
-                s1_opcode      <= iss_opcode;
-                s1_valid       <= iss_valid;
-                s1_type        <= active_type;
-                s1_rmode       <= active_rmode;
-                s1_rmask       <= active_rmask;
-                s1_cmp_inv     <= iss_cmp_invert;
-                s1_cmp_swap    <= iss_cmp_swap;
-                s1_swiz_a      <= iss_swiz_a;
-                s1_swiz_b      <= iss_swiz_b;
-                s1_is_logic_op <= iss_is_logic_op;
-                
-                s1_is_load     <= iss_is_load;  -- NEW
-                s1_imm_data    <= iss_imm_data; -- NEW
-                
-                -- Latch Async PRF data to align with Sync VRF data
-                s1_prf_rs1     <= prf_rs1_data;
-                s1_prf_rs2     <= prf_rs2_data;
-            end if;
-        end if;
-    end process;
 
     -- ========================================================================
     -- MAIN STIMULUS & VERIFICATION PROCESS
     -- ========================================================================
     stim_proc: process
     begin
-        -- Base Initialization matching Decoder Defaults
-        exec_ctrl_in.opcode <= OP_NOP; 
-        exec_ctrl_in.rs1_addr_local <= "00"; exec_ctrl_in.rs2_addr_local <= "00";
-        exec_ctrl_in.rs3_addr_local <= "00"; exec_ctrl_in.rd_addr_local <= "00"; 
-        exec_ctrl_in.write_mask <= "0000";
-        exec_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        exec_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        exec_ctrl_in.swiz_sel_c <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        exec_ctrl_in.wb_mux_sel <= WB_MUX_FPU; 
-        exec_ctrl_in.cmp_invert <= '0';
-        exec_ctrl_in.cmp_swap <= '0';
-        exec_ctrl_in.is_logic_op <= '0';
-        exec_ctrl_in.vrf_we <= '0';
-        exec_ctrl_in.prf_we <= '0';
-        exec_ctrl_in.is_load <= '0';
-        exec_ctrl_in.imm_data <= (others => '0');
+        -- Base Initialization
+        decoder_exec_ctrl.opcode <= OP_NOP; 
+        decoder_exec_ctrl.rs1_addr_local <= "00"; decoder_exec_ctrl.rs2_addr_local <= "00";
+        decoder_exec_ctrl.rs3_addr_local <= "00"; decoder_exec_ctrl.rd_addr_local <= "00"; 
+        decoder_exec_ctrl.write_mask <= "0000";
+        decoder_exec_ctrl.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        decoder_exec_ctrl.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        decoder_exec_ctrl.swiz_sel_c <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        decoder_exec_ctrl.wb_mux_sel <= WB_MUX_FPU; 
+        decoder_exec_ctrl.cmp_invert <= '0'; decoder_exec_ctrl.cmp_swap <= '0';
+        decoder_exec_ctrl.is_logic_op <= '0'; decoder_exec_ctrl.vrf_we <= '0'; decoder_exec_ctrl.prf_we <= '0';
+        decoder_exec_ctrl.is_load <= '0'; decoder_exec_ctrl.imm_data <= (others => '0');
 
         wait until rising_edge(clk);
         reset <= '0';
@@ -329,20 +259,21 @@ begin
         -- PHASE 2 & 3: Standard FPU Integration Test
         -- ====================================================================
         report ">> PHASE 2: Issuing OP_FADD (v2 = v0 + v1)";
-        inst_type_in <= INST_TYPE_FPU;
-        exec_ctrl_in.opcode <= OP_FADD;
-        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
-        exec_ctrl_in.rs2_addr_local <= "01"; -- v1
-        exec_ctrl_in.rd_addr_local  <= "10"; -- v2
-        exec_ctrl_in.write_mask     <= "1111";
-        exec_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
+        decoder_inst_type <= INST_TYPE_FPU;
+        decoder_exec_ctrl.opcode <= OP_FADD;
+        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "01"; -- v1
+        decoder_exec_ctrl.rd_addr_local  <= "10"; -- v2
+        decoder_exec_ctrl.write_mask     <= "1111";
+        decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_FPU;
+        decoder_exec_ctrl.vrf_we         <= '1';
+        decoder_exec_ctrl.prf_we         <= '0';
         
-        exec_ctrl_in.vrf_we         <= '1';
-        exec_ctrl_in.prf_we         <= '0';
-        exec_ctrl_in.is_logic_op    <= '0';
+        -- Pulse valid exactly like the Fetch/Decode stage would
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
         
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0'; 
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        -- Wait for 32 threads to issue + 37 pipeline stages + safety buffer
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
 
         report ">> PHASE 3: Verifying FPU Writeback";
         for i in 0 to 31 loop
@@ -360,23 +291,20 @@ begin
         -- PHASE 4 & 5: Standard Reduction Integration Test
         -- ====================================================================
         report ">> PHASE 4: Issuing RED_MODE_DOT DP4 (v3 = v0 dot v1)";
-        inst_type_in <= INST_TYPE_RED;
-        red_mode_in  <= RED_MODE_DOT;
-        red_mask_in  <= "1111";
+        decoder_inst_type <= INST_TYPE_RED;
+        decoder_red_mode  <= RED_MODE_DOT;
+        decoder_red_mask  <= "1111";
         
-        exec_ctrl_in.opcode <= OP_NOP;
-        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
-        exec_ctrl_in.rs2_addr_local <= "01"; -- v1
-        exec_ctrl_in.rd_addr_local  <= "11"; -- v3
-        exec_ctrl_in.write_mask     <= "1111"; 
-        exec_ctrl_in.wb_mux_sel     <= WB_MUX_RED;
+        decoder_exec_ctrl.opcode         <= OP_NOP;
+        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "01"; -- v1
+        decoder_exec_ctrl.rd_addr_local  <= "11"; -- v3
+        decoder_exec_ctrl.write_mask     <= "1111"; 
+        decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_RED;
+        decoder_exec_ctrl.vrf_we         <= '1';
         
-        exec_ctrl_in.vrf_we         <= '1';
-        exec_ctrl_in.prf_we         <= '0';
-        exec_ctrl_in.is_logic_op    <= '0';
-        
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
 
         report ">> PHASE 5: Verifying Reduction Writeback";
         for i in 0 to 31 loop
@@ -394,23 +322,21 @@ begin
         -- PHASE 6 & 7: Swizzle + Partial Mask FPU Test (Overwrites v2.xz)
         -- ====================================================================
         report ">> PHASE 6: Issuing OP_FMUL (v2.xz = v0.yxxa * v0.zzyy)";
-        inst_type_in <= INST_TYPE_FPU;
-        exec_ctrl_in.opcode <= OP_FMUL;
-        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
-        exec_ctrl_in.rs2_addr_local <= "00"; -- v0 again
-        exec_ctrl_in.rd_addr_local  <= "10"; -- Overwrite v2
-        exec_ctrl_in.write_mask     <= "0101"; -- Write X and Z only
+        decoder_inst_type <= INST_TYPE_FPU;
+        decoder_exec_ctrl.opcode <= OP_FMUL;
+        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "00"; -- v0 again
+        decoder_exec_ctrl.rd_addr_local  <= "10"; -- Overwrite v2
+        decoder_exec_ctrl.write_mask     <= "0101"; -- Write X and Z only
         
-        exec_ctrl_in.swiz_sel_a <= (0 => "01", 1 => "00", 2 => "00", 3 => "11");
-        exec_ctrl_in.swiz_sel_b <= (0 => "10", 1 => "10", 2 => "01", 3 => "01");
+        decoder_exec_ctrl.swiz_sel_a <= (0 => "01", 1 => "00", 2 => "00", 3 => "11");
+        decoder_exec_ctrl.swiz_sel_b <= (0 => "10", 1 => "10", 2 => "01", 3 => "01");
         
-        exec_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
-        exec_ctrl_in.vrf_we         <= '1';
-        exec_ctrl_in.prf_we         <= '0';
-        exec_ctrl_in.is_logic_op    <= '0';
+        decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_FPU;
+        decoder_exec_ctrl.vrf_we         <= '1';
         
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
 
         report ">> PHASE 7: Verifying Swizzle & Partial FPU Writeback";
         for i in 0 to 31 loop
@@ -428,25 +354,22 @@ begin
         -- PHASE 8 & 9: Swizzle + Partial Mask Reduction Test (Overwrites v3.y)
         -- ====================================================================
         report ">> PHASE 8: Issuing RED_MODE_SUM (v3.y = SUM(v0.yyzz))";
-        inst_type_in <= INST_TYPE_RED;
-        red_mode_in  <= RED_MODE_SUM;
-        red_mask_in  <= "1111"; 
+        decoder_inst_type <= INST_TYPE_RED;
+        decoder_red_mode  <= RED_MODE_SUM;
+        decoder_red_mask  <= "1111"; 
         
-        exec_ctrl_in.opcode <= OP_NOP; 
-        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
-        exec_ctrl_in.rs2_addr_local <= "00"; -- Ignored by SUM, set to v0
-        exec_ctrl_in.rd_addr_local  <= "11"; -- Overwrite v3
-        exec_ctrl_in.write_mask     <= "0010"; -- Write Y only
+        decoder_exec_ctrl.opcode <= OP_NOP; 
+        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "00"; -- Ignored by SUM, set to v0
+        decoder_exec_ctrl.rd_addr_local  <= "11"; -- Overwrite v3
+        decoder_exec_ctrl.write_mask     <= "0010"; -- Write Y only
         
-        exec_ctrl_in.swiz_sel_a <= (0 => "01", 1 => "01", 2 => "10", 3 => "10");
+        decoder_exec_ctrl.swiz_sel_a <= (0 => "01", 1 => "01", 2 => "10", 3 => "10");
+        decoder_exec_ctrl.wb_mux_sel <= WB_MUX_RED;
+        decoder_exec_ctrl.vrf_we     <= '1';
         
-        exec_ctrl_in.wb_mux_sel     <= WB_MUX_RED;
-        exec_ctrl_in.vrf_we         <= '1';
-        exec_ctrl_in.prf_we         <= '0';
-        exec_ctrl_in.is_logic_op    <= '0';
-        
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
 
         report ">> PHASE 9: Verifying Partial Reduction Writeback";
         for i in 0 to 31 loop
@@ -464,50 +387,46 @@ begin
         -- PHASE 10: Predicate Generation (p0 = v0 < v1)
         -- ====================================================================
         report ">> PHASE 10: Issuing OP_FCMP_LT (p0 = v0 < v1)";
-        inst_type_in <= INST_TYPE_FPU;
-        exec_ctrl_in.opcode <= OP_FCMP_LT;
-        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
-        exec_ctrl_in.rs2_addr_local <= "01"; -- v1 (10.0)
-        exec_ctrl_in.rd_addr_local  <= "00"; -- p0
-        exec_ctrl_in.write_mask     <= "1111";
-        exec_ctrl_in.cmp_invert     <= '0';
-        exec_ctrl_in.cmp_swap       <= '0';
+        decoder_inst_type <= INST_TYPE_FPU;
+        decoder_exec_ctrl.opcode <= OP_FCMP_LT;
+        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "01"; -- v1 (10.0)
+        decoder_exec_ctrl.rd_addr_local  <= "00"; -- p0
+        decoder_exec_ctrl.write_mask     <= "1111";
         
-        exec_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        exec_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        -- Reset swizzles to default identity pass-through
+        decoder_exec_ctrl.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        decoder_exec_ctrl.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
         
-        exec_ctrl_in.vrf_we         <= '0';
-        exec_ctrl_in.prf_we         <= '1'; 
-        exec_ctrl_in.is_logic_op    <= '0';
+        decoder_exec_ctrl.vrf_we         <= '0';
+        decoder_exec_ctrl.prf_we         <= '1'; 
         
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
 
         -- ====================================================================
         -- PHASE 11: Predicate Generation (p1 = v0 == v1)
         -- ====================================================================
         report ">> PHASE 11: Issuing OP_FCMP_EQ (p1 = v0 == v1)";
-        exec_ctrl_in.opcode <= OP_FCMP_EQ;
-        exec_ctrl_in.rd_addr_local  <= "01"; -- p1
+        decoder_exec_ctrl.opcode <= OP_FCMP_EQ;
+        decoder_exec_ctrl.rd_addr_local  <= "01"; -- p1
         
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
 
         -- ====================================================================
         -- PHASE 12: Predicate Logic Combination (p2 = p0 OR p1)
         -- ====================================================================
         report ">> PHASE 12: Issuing OP_POR (p2 = p0 | p1)";
-        exec_ctrl_in.opcode <= OP_POR;
-        exec_ctrl_in.rs1_addr_local <= "00"; -- p0
-        exec_ctrl_in.rs2_addr_local <= "01"; -- p1
-        exec_ctrl_in.rd_addr_local  <= "10"; -- p2
+        decoder_exec_ctrl.opcode <= OP_POR;
+        decoder_exec_ctrl.rs1_addr_local <= "00"; -- p0
+        decoder_exec_ctrl.rs2_addr_local <= "01"; -- p1
+        decoder_exec_ctrl.rd_addr_local  <= "10"; -- p2
+        decoder_exec_ctrl.is_logic_op    <= '1';
         
-        exec_ctrl_in.vrf_we         <= '0';
-        exec_ctrl_in.prf_we         <= '1'; 
-        exec_ctrl_in.is_logic_op    <= '1';
-        
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
+        decoder_exec_ctrl.is_logic_op    <= '0'; -- Reset
 
         -- ====================================================================
         -- PHASE 13: Verify PRF and IFU Collapse Logic
@@ -549,31 +468,25 @@ begin
         -- PHASE 14 & 15: ALU Integration Test (v3.x = v3.x + v3.x)
         -- ====================================================================
         report ">> PHASE 14: Issuing OP_IADD (v3.x = v3.x + v3.x)";
-        inst_type_in <= INST_TYPE_ALU;
-        exec_ctrl_in.opcode <= OP_IADD;
-        exec_ctrl_in.rs1_addr_local <= "11"; -- v3
-        exec_ctrl_in.rs2_addr_local <= "11"; -- v3
-        exec_ctrl_in.rd_addr_local  <= "11"; -- Overwrite v3
-        exec_ctrl_in.write_mask     <= "0001"; -- Scalar write to X only
+        decoder_inst_type <= INST_TYPE_ALU;
+        decoder_exec_ctrl.opcode <= OP_IADD;
+        decoder_exec_ctrl.rs1_addr_local <= "11"; -- v3
+        decoder_exec_ctrl.rs2_addr_local <= "11"; -- v3
+        decoder_exec_ctrl.rd_addr_local  <= "11"; -- Overwrite v3
+        decoder_exec_ctrl.write_mask     <= "0001"; -- Scalar write to X only
         
-        exec_ctrl_in.wb_mux_sel     <= WB_MUX_ALU;
-        exec_ctrl_in.vrf_we         <= '1';
-        exec_ctrl_in.prf_we         <= '0';
-        exec_ctrl_in.is_logic_op    <= '0';
+        decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_ALU;
+        decoder_exec_ctrl.vrf_we         <= '1';
+        decoder_exec_ctrl.prf_we         <= '0';
         
-        -- Reset swizzles to default identity pass-through
-        exec_ctrl_in.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        exec_ctrl_in.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
 
         report ">> PHASE 15: Verifying ALU Writeback";
         for i in 0 to 31 loop
             mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
-            -- Thread `i` started with v3.x = i * 2. After IADD, it should be (i*2) + (i*2) = i*4
             assert to_integer(unsigned(mcu_rd_data(0))) = i * 4 report "P15 ALU X mismatch!" severity error;
             
             wait until rising_edge(clk);
@@ -583,21 +496,20 @@ begin
         -- PHASE 16 & 17: Immediate Load Integration Test (v3.y = x"0000BEEF")
         -- ====================================================================
         report ">> PHASE 16: Issuing OP_LDI_LO (v3.y = 0xBEEF)";
-        inst_type_in <= INST_TYPE_IMM; 
-        exec_ctrl_in.opcode      <= OP_LDI_LO;
-        exec_ctrl_in.rd_addr_local <= "11"; -- Overwrite v3
-        exec_ctrl_in.write_mask  <= "0010"; -- Scalar write to Y only
-        exec_ctrl_in.is_load     <= '1';
-        exec_ctrl_in.imm_data    <= x"BEEF";
-        exec_ctrl_in.wb_mux_sel  <= WB_MUX_ALU;
-        exec_ctrl_in.vrf_we      <= '1';
-        exec_ctrl_in.prf_we      <= '0';
-        exec_ctrl_in.is_logic_op <= '0';
+        decoder_inst_type <= INST_TYPE_IMM; 
+        decoder_exec_ctrl.opcode      <= OP_LDI_LO;
+        decoder_exec_ctrl.rd_addr_local <= "11"; -- Overwrite v3
+        decoder_exec_ctrl.write_mask  <= "0010"; -- Scalar write to Y only
+        decoder_exec_ctrl.is_load     <= '1';
+        decoder_exec_ctrl.imm_data    <= x"BEEF";
+        decoder_exec_ctrl.wb_mux_sel  <= WB_MUX_ALU;
+        decoder_exec_ctrl.vrf_we      <= '1';
+        decoder_exec_ctrl.prf_we      <= '0';
         
-        valid_in <= '1'; wait until rising_edge(clk); valid_in <= '0';
-        exec_ctrl_in.is_load <= '0'; -- Clear it for cleanliness
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        decoder_exec_ctrl.is_load <= '0'; -- Clear it for cleanliness
         
-        for i in 1 to 80 loop wait until rising_edge(clk); end loop;
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
 
         report ">> PHASE 17: Verifying Immediate Writeback";
         for i in 0 to 31 loop
@@ -608,6 +520,61 @@ begin
             
             wait until rising_edge(clk);
         end loop;
+
+        -- ====================================================================
+        -- PHASE 18: ALU Comparison (p3 = v3.x < v3.y) -> Expected: TRUE
+        -- Context: v3.x is (i*4) ranging 0..124. v3.y is x"BEEF" (48879).
+        -- ====================================================================
+        report ">> PHASE 18: Issuing OP_ICMP_SLT (p3 = v3.x < v3.y)";
+        decoder_inst_type <= INST_TYPE_ALU;
+        decoder_exec_ctrl.opcode <= OP_ICMP_SLT;
+        decoder_exec_ctrl.rs1_addr_local <= "11"; -- v3
+        decoder_exec_ctrl.rs2_addr_local <= "11"; -- v3
+        decoder_exec_ctrl.rd_addr_local  <= "11"; -- Write to p3
+        decoder_exec_ctrl.write_mask     <= "1111";
+        
+        -- Swizzle A routes .x to ALU. Swizzle B routes .y to ALU.
+        decoder_exec_ctrl.swiz_sel_a <= (0 => "00", 1 => "00", 2 => "00", 3 => "00");
+        decoder_exec_ctrl.swiz_sel_b <= (0 => "01", 1 => "01", 2 => "01", 3 => "01");
+        
+        decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_ALU;
+        decoder_exec_ctrl.vrf_we         <= '0';
+        decoder_exec_ctrl.prf_we         <= '1'; -- Route ALU comp_flag to PRF
+        
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
+
+        -- ====================================================================
+        -- PHASE 19: Verify ALU Comparison (TRUE)
+        -- ====================================================================
+        report ">> PHASE 19: Verifying ALU Comparison (Expected: All True)";
+        ifu_pred_sel <= "11"; -- Select p3
+        ifu_pred_mod <= PRED_MOD_X;
+        
+        wait until rising_edge(clk); wait until falling_edge(clk);
+        assert ifu_mask_out = x"FFFFFFFF" report "P19 ICMP_SLT Failed! Expected all 32 threads to evaluate True." severity error;
+
+        -- ====================================================================
+        -- PHASE 20: ALU Comparison (p3 = v3.y < v3.x) -> Expected: FALSE
+        -- ====================================================================
+        report ">> PHASE 20: Issuing OP_ICMP_SLT (p3 = v3.y < v3.x)";
+        
+        -- Swap the swizzles so ALU evaluates 48879 < (i*4)
+        decoder_exec_ctrl.swiz_sel_a <= (0 => "01", 1 => "01", 2 => "01", 3 => "01");
+        decoder_exec_ctrl.swiz_sel_b <= (0 => "00", 1 => "00", 2 => "00", 3 => "00");
+        
+        decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
+        
+        for i in 1 to 100 loop wait until rising_edge(clk); end loop;
+
+        -- ====================================================================
+        -- PHASE 21: Verify ALU Comparison (FALSE)
+        -- ====================================================================
+        report ">> PHASE 21: Verifying ALU Comparison (Expected: All False)";
+        
+        wait until rising_edge(clk); wait until falling_edge(clk);
+        assert ifu_mask_out = x"00000000" report "P21 ICMP_SLT Failed! Expected all 32 threads to evaluate False." severity error;
 
         report ">> EXHAUSTIVE INTEGRATION TEST COMPLETE: All tests passed!";
         std.env.stop;

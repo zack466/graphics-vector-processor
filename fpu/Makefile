@@ -9,6 +9,7 @@ SOURCES = vector_types.vhd \
 		  instruction_memory.vhd \
 		  instruction_fetch_unit.vhd \
 		  writeback_controller.vhd \
+		  execution_unit.vhd
 
 # Testbench files
 TESTBENCH_SOURCES = tb_fp_sim.vhd \
@@ -59,6 +60,7 @@ test-%: $(WORKDIR)%
 test:
 	@echo "Available testbenches:"
 	@for tb in $(TESTBENCHES); do echo "  make test-$$tb"; done
+	@echo "  make test-all"
 	@echo ""
 	@echo "Or run all tests with: make test-all"
 
