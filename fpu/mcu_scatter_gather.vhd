@@ -107,6 +107,7 @@ begin
                 v_fifo_count := 0;
                 rx_words_handled := 0;
             else
+                -- report "MCU state: " & to_string(state);
                 reg_write_en <= '0';
                 cmd_valid <= '0'; tx_valid <= '0'; 
 
@@ -270,6 +271,7 @@ begin
                         if tx_valid = '1' and tx_ready = '1' then
                             thread_served(target_th_tx) <= '1';
                             words_handled <= words_handled + 1;
+                            report "Writing data: " & to_hstring(tx_data);
                             
                             if words_handled = burst_len - 1 then
                                 tx_valid <= '0';

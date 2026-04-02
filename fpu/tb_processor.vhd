@@ -107,67 +107,114 @@ begin
     -- ========================================================================
     p_main : process
     
-        -- Helper Procedure: Write to Processor CSR
+        -- --------------------------------------------------------------------
+        -- IN-TESTBENCH ASSEMBLER FUNCTIONS
+        -- Eliminates hand-assembly hex errors!
+        -- --------------------------------------------------------------------
+        function asm_nop return word_t is
+        begin
+            return (others => '0'); -- All zeros is OP_NOP, INST_TYPE_FPU
+        end function;
+
+        function asm_ldi(is_hi : boolean; dest_reg : integer; imm : std_logic_vector(15 downto 0)) return word_t is
+            variable res : word_t := (others => '0');
+        begin
+            if is_hi then res(31 downto 26) := "000001"; else res(31 downto 26) := "000000"; end if;
+            res(25 downto 10) := imm;
+            res(9 downto 6)   := "1111"; -- Write to all 4 vector elements
+            res(5 downto 4)   := std_logic_vector(to_unsigned(dest_reg, 2));
+            res(3 downto 0)   := "0100"; -- INST_TYPE_IMM
+            return res;
+        end function;
+
+        function asm_store(base : std_logic_vector(15 downto 0); off_reg : integer; src_reg : integer) return word_t is
+            variable res : word_t := (others => '0');
+        begin
+            res(31 downto 26) := "100001"; -- OP_STORE
+            res(25 downto 10) := base;
+            res(9 downto 8)   := std_logic_vector(to_unsigned(off_reg, 2));
+            res(7 downto 6)   := std_logic_vector(to_unsigned(src_reg, 2));
+            res(5 downto 4)   := "00";
+            res(3 downto 0)   := "0101"; -- INST_TYPE_MEM
+            return res;
+        end function;
+        
+        function asm_jmp(target : integer) return word_t is
+            variable res : word_t := (others => '0');
+        begin
+            res(31 downto 26) := "110000"; -- OP_JMP
+            res(25 downto 24) := "00";
+            res(23 downto 8)  := std_logic_vector(to_unsigned(target, 16));
+            res(7 downto 6)   := "00";
+            res(5 downto 4)   := "00";
+            res(3 downto 0)   := "0001"; -- INST_TYPE_CTRL
+            return res;
+        end function;
+
+        -- --------------------------------------------------------------------
+        -- HELPER PROCEDURES
+        -- --------------------------------------------------------------------
         procedure write_csr(addr : integer; data : std_logic_vector(31 downto 0)) is
         begin
             csr_address <= std_logic_vector(to_unsigned(addr, 2));
-            csr_writedata <= data;
-            csr_write <= '1';
-            wait until rising_edge(clk);
-            csr_write <= '0';
-            wait until rising_edge(clk);
+            csr_writedata <= data; csr_write <= '1';
+            wait until rising_edge(clk); csr_write <= '0'; wait until rising_edge(clk);
         end procedure;
 
-        -- Helper Procedure: Load instruction into ROM
-        procedure load_inst(addr : integer; data : std_logic_vector(31 downto 0)) is
-        begin
-            prog_wr_addr <= std_logic_vector(to_unsigned(addr, IMEM_ADDR_WIDTH));
-            prog_wr_data <= data;
-            prog_we <= '1';
-            wait until rising_edge(clk);
-            prog_we <= '0';
-        end procedure;
-
-        -- Helper Procedure: Read from DDR3 via Avalon Bus
         procedure read_memory(addr : std_logic_vector(31 downto 0)) is
         begin
-            tb_avm_address <= addr;
-            tb_avm_read <= '1';
+            tb_avm_address <= addr; tb_avm_read <= '1';
             wait until rising_edge(clk);
-            while mem_avm_waitrequest = '1' loop
-                wait until rising_edge(clk);
-            end loop;
+            while mem_avm_waitrequest = '1' loop wait until rising_edge(clk); end loop;
             tb_avm_read <= '0';
-            while mem_avm_readdatavalid = '0' loop
-                wait until rising_edge(clk);
-            end loop;
+            while mem_avm_readdatavalid = '0' loop wait until rising_edge(clk); end loop;
         end procedure;
+        
+        variable rom_ptr : integer := 0;
 
     begin
-        -- System Initialization
+        wait for 50 ns; wait until rising_edge(clk); reset <= '0';
         wait for 50 ns; wait until rising_edge(clk);
-        reset <= '0';
-        wait for 50 ns; wait until rising_edge(clk);
-        
         report "--- STARTING END-TO-END PROCESSOR TEST ---";
 
         -- ====================================================================
         -- 1. LOAD ASSEMBLY PROGRAM
-        -- NOPs are inserted between Immediate Loads to ensure 37-cycle
-        -- execution pipeline writes back before the next load relies on it.
         -- ====================================================================
         report "Loading instruction memory...";
-        load_inst(0, x"000000F4"); -- LDI_LO v0, 0x0000 (Set Thread Offsets to 0)
-        load_inst(1, x"00000000"); -- NOP
-        load_inst(2, x"040000F4"); -- LDI_HI v0, 0x0000 
-        load_inst(3, x"00000000"); -- NOP
-        load_inst(4, x"02FBBFD4"); -- LDI_LO v1, 0xBEEF (Load lower half of target data)
-        load_inst(5, x"00000000"); -- NOP
-        load_inst(6, x"077ABFD4"); -- LDI_HI v1, 0xDEAD (Load upper half of target data)
-        load_inst(7, x"00000000"); -- NOP
-        load_inst(8, x"84000015"); -- STORE v1, Base: 0x0000, Offsets: v0
-        load_inst(9, x"C0000901"); -- JMP 9 (Infinite Loop)
-        wait for 50 ns; wait until rising_edge(clk);
+        
+        -- Load v0 with offsets (0x0000)
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_ldi(false, 0, x"0000"); prog_we <= '1'; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        
+        -- Load v1 LOWER half with data (0xBEEF)
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_ldi(false, 1, x"BEEF"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        
+        -- PIPELINE FLUSH 1: Wait for LDI_LO to write back to the VRF!
+        for i in 1 to 40 loop
+            prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+            prog_wr_data <= asm_nop; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        end loop;
+
+        -- Load v1 UPPER half with data (0xDEAD)
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_ldi(true,  1, x"DEAD"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        
+        -- PIPELINE FLUSH 2: Wait for LDI_HI to write back to the VRF!
+        for i in 1 to 40 loop
+            prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+            prog_wr_data <= asm_nop; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        end loop;
+
+        -- Store v1 to DDR3 (Base: 0x0000, Offsets: v0)
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_store(x"0000", 0, 1); wait until rising_edge(clk); 
+        
+        -- Infinite Loop JMP
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr + 1, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_jmp(rom_ptr + 1); wait until rising_edge(clk); 
+
+        prog_we <= '0'; wait for 50 ns; wait until rising_edge(clk);
 
         -- ====================================================================
         -- 2. START PROCESSOR
@@ -176,25 +223,23 @@ begin
         write_csr(1, x"00000000"); -- CSR[1] = Start PC (0)
         write_csr(0, x"00000001"); -- CSR[0] = Run (1)
 
-        -- Let the processor run for enough time to execute 10 instructions 
-        -- across 32 threads, plus memory simulation delays.
-        wait for 8000 ns; 
-        wait until rising_edge(clk);
+        -- Wait for execution, pipeline delays, and AVM bursts
+        wait for 39000 ns; wait until rising_edge(clk);
 
         report "Halting processor...";
-        write_csr(0, x"00000000"); -- CSR[0] = Run (0)
+        write_csr(0, x"00000000"); 
         wait for 100 ns; wait until rising_edge(clk);
 
         -- ====================================================================
         -- 3. VERIFY MEMORY CONTENTS
         -- ====================================================================
         report "Taking over Avalon Bus and checking DDR3 Memory...";
-        tb_takeover <= '1';
-        wait until rising_edge(clk);
-
+        tb_takeover <= '1'; wait until rising_edge(clk);
+        
+        -- Because all 32 threads have offset 0, the Memory Unit will write 0xDEADBEEF 
+        -- to address 0x0000 thirty-two times in a row.
         read_memory(x"00000000");
 
-        -- Check that all 4 vector elements contain 0xDEADBEEF
         report to_hstring(mem_avm_readdata(31 downto 0));
         report to_hstring(mem_avm_readdata(63 downto 32));
         report to_hstring(mem_avm_readdata(95 downto 64));

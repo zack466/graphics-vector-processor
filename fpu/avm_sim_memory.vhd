@@ -19,7 +19,7 @@ entity avm_sim_memory is
         avs_burstcount    : in  std_logic_vector(7 downto 0);
         avs_write         : in  std_logic;
         avs_writedata     : in  std_logic_vector(DATA_WIDTH-1 downto 0);
-        avs_byteenable    : in  std_logic_vector((DATA_WIDTH/8)-1 downto 0); -- NEW
+        avs_byteenable    : in  std_logic_vector((DATA_WIDTH/8)-1 downto 0);
         avs_read          : in  std_logic;
         avs_readdata      : out std_logic_vector(DATA_WIDTH-1 downto 0);
         avs_readdatavalid : out std_logic;
@@ -119,6 +119,10 @@ begin
                         avs_readdatavalid <= '1';
                         avs_readdata      <= ram(to_integer(v_read_fifo(v_read_head).addr) / (DATA_WIDTH/8) mod MEM_WORDS);
                         
+                        -- LOG THE RETURNED READ
+                        report "[AVM MEM READ RET] Addr: 0x" & to_hstring(v_read_fifo(v_read_head).addr) &
+                               " | Data: 0x" & to_hstring(ram(to_integer(v_read_fifo(v_read_head).addr) / (DATA_WIDTH/8) mod MEM_WORDS)) severity note;
+                        
                         v_read_fifo(v_read_head).addr       := v_read_fifo(v_read_head).addr + (DATA_WIDTH/8);
                         v_read_fifo(v_read_head).burst_left := v_read_fifo(v_read_head).burst_left - 1;
                         
@@ -159,6 +163,10 @@ begin
                     end loop;
                     ram(target_idx) <= temp_word;
 
+                    -- LOG THE WRITE
+                    report "[AVM MEM WRITE] Addr: 0x" & to_hstring(to_unsigned(target_idx * (DATA_WIDTH/8), ADDR_WIDTH)) &
+                           " | Data: 0x" & to_hstring(temp_word) severity note;
+
                     -- Randomize delay for next beat
                     uniform(seed1, seed2, rand);
                     v_wait_counter := integer(rand * real(MAX_DELAY));
@@ -167,6 +175,10 @@ begin
                 elsif avs_read = '1' then
                     v_read_fifo(v_read_tail).addr       := unsigned(avs_address);
                     v_read_fifo(v_read_tail).burst_left := to_integer(unsigned(avs_burstcount));
+                    
+                    -- LOG THE READ REQUEST
+                    report "[AVM MEM READ REQ] Addr: 0x" & to_hstring(unsigned(avs_address)) &
+                           " | Burst Len: " & integer'image(to_integer(unsigned(avs_burstcount))) severity note;
                     
                     uniform(seed1, seed2, rand);
                     v_read_fifo(v_read_tail).latency    := integer(rand * real(MAX_DELAY)) + 2; 

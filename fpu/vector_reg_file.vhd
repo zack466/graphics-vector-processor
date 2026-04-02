@@ -81,6 +81,7 @@ begin
             if we_A = '1' then
                 for i in 0 to 3 loop
                     if write_mask_A(i) = '1' then
+                        report "FPU writing: " & to_hstring(rd_data_A(i)) & " to " & to_string(to_integer(unsigned(rd_addr_A)));
                         ram_bank_1(to_integer(unsigned(rd_addr_A)))(i) <= rd_data_A(i);
                         ram_bank_2(to_integer(unsigned(rd_addr_A)))(i) <= rd_data_A(i);
                         ram_bank_3(to_integer(unsigned(rd_addr_A)))(i) <= rd_data_A(i);

@@ -131,6 +131,12 @@ begin
                     v_fpu.vrf_we      := '0'; 
                     v_fpu.prf_we      := '1';
                     v_fpu.is_logic_op := '1';
+
+                when OP_NOP =>
+                    v_fpu.wb_mux_sel  := WB_MUX_FPU;
+                    v_fpu.vrf_we      := '0'; 
+                    v_fpu.prf_we      := '0';
+                    v_fpu.is_logic_op := '0';
                     
                 when others => null;
             end case;
@@ -163,12 +169,12 @@ begin
         elsif inst_type = INST_TYPE_CTRL then
             -- ----------------------------------------------------------------
             -- SIMT CONTROL INSTRUCTION MAP
-            -- [31:26] Opcode | [25:10] Target (16b) | [9:8] P_Sel | [7:6] P_Mod
-            -- [5:4] Reserved | [3:0] Type
+            -- [31:26] Opcode | [25:24] Reserved | [23:8] Target (16b) 
+            -- [7:6] P_Sel | [5:4] P_Mod | [3:0] Type
             -- ----------------------------------------------------------------
-            v_pc.target_addr   := instruction(25 downto 10);
-            v_pc.predicate_sel := instruction(9 downto 8);
-            v_pc.predicate_mod := instruction(7 downto 6);
+            v_pc.target_addr   := instruction(23 downto 8);
+            v_pc.predicate_sel := instruction(7 downto 6);
+            v_pc.predicate_mod := instruction(5 downto 4);
 
             case internal_opcode is
                 when OP_JMP     => v_pc.branch_type := BR_JMP;
@@ -219,6 +225,10 @@ begin
             v_alu.imm_data       := instruction(25 downto 10);
             v_alu.write_mask     := instruction(9 downto 6);
             v_alu.rd_addr_local  := instruction(5 downto 4);
+            
+            -- FIX: Route the destination register to Read Port 1 so the ALU 
+            -- can read the current value and preserve the unmodified half!
+            v_alu.rs1_addr_local := instruction(5 downto 4); 
             
             v_alu.wb_mux_sel     := WB_MUX_ALU;
             v_alu.vrf_we         := '1';
