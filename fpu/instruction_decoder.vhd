@@ -10,7 +10,8 @@ entity instruction_decoder is
         fpu_ctrl    : out fpu_ctrl_t;
         red_ctrl    : out red_ctrl_t;
         alu_ctrl    : out alu_ctrl_t;
-        pc_ctrl     : out pc_ctrl_t
+        pc_ctrl     : out pc_ctrl_t;
+        mem_ctrl    : out mem_ctrl_t -- NEW
     );
 end entity;
 
@@ -29,6 +30,7 @@ begin
         variable v_red : red_ctrl_t;
         variable v_pc  : pc_ctrl_t;
         variable v_alu : alu_ctrl_t;
+        variable v_mem : mem_ctrl_t;
     begin
         -- ====================================================================
         -- 1. INITIALIZE VARIABLES WITH SAFE DEFAULTS (Prevents latches)
@@ -76,6 +78,12 @@ begin
         v_alu.prf_we         := '0';
         v_alu.is_load        := '0';
         v_alu.imm_data       := (others => '0');
+
+        v_mem.is_valid         := '0';
+        v_mem.is_store         := '0';
+        v_mem.base_addr        := (others => '0');
+        v_mem.offset_reg_idx   := "00";
+        v_mem.dest_src_reg_idx := "00";
 
         -- ====================================================================
         -- 2. DECODE BASED ON INSTRUCTION TYPE
@@ -194,7 +202,6 @@ begin
 
             v_alu.wb_mux_sel     := WB_MUX_ALU;
 
-            -- NEW: ICMP instructions route their 1-bit result to the PRF
             if internal_opcode = OP_ICMP_EQ or internal_opcode = OP_ICMP_SLT or internal_opcode = OP_ICMP_ULT then
                 v_alu.vrf_we := '0';
                 v_alu.prf_we := '1';
@@ -217,6 +224,24 @@ begin
             v_alu.vrf_we         := '1';
             v_alu.prf_we         := '0';
             v_alu.is_load        := '1';
+
+        elsif inst_type = INST_TYPE_MEM then
+            -- ----------------------------------------------------------------
+            -- MEMORY INSTRUCTION MAP (Routes to Scatter/Gather Unit)
+            -- [31:26] Opcode | [25:10] Base Addr Imm (16b) | [9:8] Offset Reg
+            -- [7:6] Dest/Src Reg | [5:4] Reserved | [3:0] Type
+            -- ----------------------------------------------------------------
+            v_mem.is_valid         := '1';
+            v_mem.base_addr        := instruction(25 downto 10);
+            v_mem.offset_reg_idx   := instruction(9 downto 8);
+            v_mem.dest_src_reg_idx := instruction(7 downto 6);
+
+            if internal_opcode = OP_STORE then
+                v_mem.is_store := '1';
+            else
+                v_mem.is_store := '0';
+            end if;
+
         end if;
 
         -- ====================================================================
@@ -226,6 +251,7 @@ begin
         red_ctrl <= v_red;
         pc_ctrl  <= v_pc;
         alu_ctrl <= v_alu;
+        mem_ctrl <= v_mem;
 
     end process;
 

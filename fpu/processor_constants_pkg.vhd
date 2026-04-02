@@ -13,6 +13,7 @@ package processor_constants_pkg is
     constant INST_TYPE_RED  : std_logic_vector(3 downto 0) := "0010";
     constant INST_TYPE_ALU  : std_logic_vector(3 downto 0) := "0011";
     constant INST_TYPE_IMM  : std_logic_vector(3 downto 0) := "0100";
+    constant INST_TYPE_MEM  : std_logic_vector(3 downto 0) := "0101"; -- NEW
 
     -- ========================================================================
     -- FPU MATH OPCODES [31:26] (When Type == 0000)
@@ -89,19 +90,26 @@ package processor_constants_pkg is
     constant OP_IXOR    : std_logic_vector(5 downto 0) := "000100";
     constant OP_ISHL    : std_logic_vector(5 downto 0) := "000101"; 
     constant OP_ISHR    : std_logic_vector(5 downto 0) := "000110"; 
-    constant OP_IMUL    : std_logic_vector(5 downto 0) := "000111"; -- NEW
-    constant OP_IINC    : std_logic_vector(5 downto 0) := "001000"; -- NEW
-    constant OP_IDEC    : std_logic_vector(5 downto 0) := "001001"; -- NEW
-    constant OP_ISAR    : std_logic_vector(5 downto 0) := "001010"; -- NEW: Shift Arith Right
-    constant OP_ICMP_EQ : std_logic_vector(5 downto 0) := "001011"; -- NEW
-    constant OP_ICMP_SLT: std_logic_vector(5 downto 0) := "001100"; -- NEW: Signed Less Than
-    constant OP_ICMP_ULT: std_logic_vector(5 downto 0) := "001101"; -- NEW: Unsigned Less Than
+    constant OP_IMUL    : std_logic_vector(5 downto 0) := "000111";
+    constant OP_IINC    : std_logic_vector(5 downto 0) := "001000";
+    constant OP_IDEC    : std_logic_vector(5 downto 0) := "001001";
+    constant OP_ISAR    : std_logic_vector(5 downto 0) := "001010";
+    constant OP_ICMP_EQ : std_logic_vector(5 downto 0) := "001011";
+    constant OP_ICMP_SLT: std_logic_vector(5 downto 0) := "001100";
+    constant OP_ICMP_ULT: std_logic_vector(5 downto 0) := "001101";
 
     -- ========================================================================
     -- IMMEDIATE OPCODES [31:26] (When Type == 0100)
     -- ========================================================================
-    constant OP_LDI_LO  : std_logic_vector(5 downto 0) := "000000"; -- NEW
-    constant OP_LDI_HI  : std_logic_vector(5 downto 0) := "000001"; -- NEW
+    constant OP_LDI_LO  : std_logic_vector(5 downto 0) := "000000";
+    constant OP_LDI_HI  : std_logic_vector(5 downto 0) := "000001";
+
+    -- ========================================================================
+    -- MEMORY OPCODES [31:26] (When Type == 0101)
+    -- ========================================================================
+    constant OP_LOAD    : std_logic_vector(5 downto 0) := "100000"; -- NEW
+    constant OP_STORE   : std_logic_vector(5 downto 0) := "100001"; -- NEW
+
 
     -- ========================================================================
     -- CONTROL RECORDS (Expanded explicitly to remove downstream decoding)
@@ -153,14 +161,24 @@ package processor_constants_pkg is
         write_mask      : std_logic_vector(3 downto 0);
         wb_mux_sel      : std_logic_vector(1 downto 0);
         vrf_we          : std_logic;
-        prf_we          : std_logic;                     -- NEW: For ALU Compares
-        is_load         : std_logic;                     -- NEW: Differentiates LDI from standard math
-        imm_data        : std_logic_vector(15 downto 0); -- NEW: For Immediate Loads
+        prf_we          : std_logic;                     
+        is_load         : std_logic;                     
+        imm_data        : std_logic_vector(15 downto 0); 
+    end record;
+
+    -- NEW: Memory Control Record (Used strictly by top-level / Memory Unit routing)
+    type mem_ctrl_t is record
+        is_valid         : std_logic;
+        is_store         : std_logic;
+        base_addr        : std_logic_vector(15 downto 0); -- 16-bit immediate base address
+        offset_reg_idx   : std_logic_vector(1 downto 0);
+        dest_src_reg_idx : std_logic_vector(1 downto 0);
     end record;
 
     -- ========================================================================
     -- UNIFIED EXECUTION PIPELINE RECORD
     -- Muxed from specific ctrl records before entering the Issue Stage
+    -- (Reverted back to its original state, unaware of memory ops)
     -- ========================================================================
     type exec_ctrl_t is record
         opcode          : std_logic_vector(5 downto 0);
@@ -179,11 +197,11 @@ package processor_constants_pkg is
         prf_we          : std_logic;                    
         wb_mux_sel      : std_logic_vector(1 downto 0);
         is_load         : std_logic;                    
-        imm_data        : std_logic_vector(15 downto 0); -- NEW
+        imm_data        : std_logic_vector(15 downto 0); 
     end record;
 
     -- ========================================================================
-    -- HARDWARE LATENCY CONSTANTS (TODO: update for real Altera IP)
+    -- HARDWARE LATENCY CONSTANTS
     -- ========================================================================
     constant LAT_FMADD      : integer := 22;
     constant LAT_FRCP       : integer := 14;
