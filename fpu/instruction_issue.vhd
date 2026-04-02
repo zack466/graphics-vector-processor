@@ -7,30 +7,22 @@ use work.processor_constants_pkg.all;
 
 entity instruction_issue is
     generic (
-        THREAD_WIDTH : integer := 5; -- 32 Hardware Threads
-        REG_WIDTH    : integer := 2  -- 4 Vector Registers per thread (v0 to v3)
+        THREAD_WIDTH : integer := 5;  -- 32 threads
+        REG_WIDTH    : integer := 2   -- 4 vector registers
     );
     port (
         clk             : in  std_logic;
         reset           : in  std_logic;
-        
-        -- Inputs from Top-Level Decoder Mux
         exec_ctrl_in    : in  exec_ctrl_t;
         valid_in        : in  std_logic;
         
-        -- State Output
         current_thread  : out std_logic_vector(THREAD_WIDTH-1 downto 0);
-        
-        -- Decoded Execution Outputs
         opcode_out      : out std_logic_vector(5 downto 0);
-        
-        -- Flattened Global Addresses (Thread ID concatenated with Register ID)
         rs1_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rs2_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rs3_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rd_addr_global  : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         
-        -- Modifiers & Routing Flags
         swiz_sel_a      : out swizzle_sel_t;
         swiz_sel_b      : out swizzle_sel_t;
         swiz_sel_c      : out swizzle_sel_t;
@@ -38,16 +30,12 @@ entity instruction_issue is
         cmp_invert      : out std_logic;
         cmp_swap        : out std_logic;
         is_logic_op     : out std_logic;
-        
         is_load         : out std_logic;
         imm_data        : out std_logic_vector(15 downto 0);
-        
-        -- Top-Level Control Signals
         wb_mux_sel      : out std_logic_vector(1 downto 0);
         vrf_we          : out std_logic;
         prf_we          : out std_logic;
 
-        -- Pipeline Control
         issue_valid     : out std_logic 
     );
 end entity;
@@ -56,7 +44,6 @@ architecture rtl of instruction_issue is
 
     signal count : unsigned(5 downto 0);
 
-    -- Explicitly initialize the generic record to prevent 'U' states
     signal latched_ctrl : exec_ctrl_t := (
         opcode         => OP_NOP,
         rs1_addr_local => "00", rs2_addr_local => "00", rs3_addr_local => "00", rd_addr_local => "00",
@@ -64,7 +51,7 @@ architecture rtl of instruction_issue is
         write_mask     => "0000", wb_mux_sel => "00", 
         cmp_invert     => '0', cmp_swap => '0',
         is_logic_op    => '0', vrf_we => '0', prf_we => '0',
-        is_load        => '0', imm_data => (others => '0') -- NEW
+        is_load        => '0', imm_data => (others => '0')
     );
 
     signal current_thread_int : std_logic_vector(THREAD_WIDTH-1 downto 0);
@@ -76,29 +63,27 @@ begin
     begin
         if rising_edge(clk) then
             if reset = '1' then
-                count <= to_unsigned(32, 6); -- Idle state
+                count <= to_unsigned(32, 6); 
                 
                 latched_ctrl.opcode         <= OP_NOP;
-                latched_ctrl.rs1_addr_local <= "00";
-                latched_ctrl.rs2_addr_local <= "00";
-                latched_ctrl.rs3_addr_local <= "00";
-                latched_ctrl.rd_addr_local  <= "00";
+                latched_ctrl.rs1_addr_local <= "00"; latched_ctrl.rs2_addr_local <= "00";
+                latched_ctrl.rs3_addr_local <= "00"; latched_ctrl.rd_addr_local  <= "00";
                 latched_ctrl.swiz_sel_a     <= ("00", "00", "00", "00");
                 latched_ctrl.swiz_sel_b     <= ("00", "00", "00", "00");
                 latched_ctrl.swiz_sel_c     <= ("00", "00", "00", "00");
-                latched_ctrl.write_mask     <= "0000";
-                latched_ctrl.wb_mux_sel     <= "00";
-                latched_ctrl.cmp_invert     <= '0';
-                latched_ctrl.cmp_swap       <= '0';
-                latched_ctrl.is_logic_op    <= '0';
-                latched_ctrl.vrf_we         <= '0';
-                latched_ctrl.prf_we         <= '0';
-                latched_ctrl.is_load        <= '0';             -- NEW
-                latched_ctrl.imm_data       <= (others => '0'); -- NEW
-
+                latched_ctrl.write_mask     <= "0000"; latched_ctrl.wb_mux_sel     <= "00";
+                latched_ctrl.cmp_invert     <= '0'; latched_ctrl.cmp_swap       <= '0';
+                latched_ctrl.is_logic_op    <= '0'; latched_ctrl.vrf_we         <= '0';
+                latched_ctrl.prf_we         <= '0'; latched_ctrl.is_load        <= '0';             
+                latched_ctrl.imm_data       <= (others => '0'); 
             else
                 if valid_in = '1' then
-                    count <= to_unsigned(1, 6);
+                    -- FIX: If it's a flush token, instantly set count to 32 so it only takes 1 clock cycle to issue!
+                    if exec_ctrl_in.opcode = OP_FLUSH then
+                        count <= to_unsigned(32, 6);
+                    else
+                        count <= to_unsigned(1, 6);
+                    end if;
                     latched_ctrl <= exec_ctrl_in;
                 elsif count < 32 then
                     count <= count + 1;
@@ -110,11 +95,10 @@ begin
     current_thread_int <= (others => '0') when valid_in = '1' 
                           else std_logic_vector(count(THREAD_WIDTH-1 downto 0));
 
-    ctrl_out           <= exec_ctrl_in when valid_in = '1' else latched_ctrl;
-    issue_valid        <= '1' when (valid_in = '1') or (count < 32) else '0';
+    ctrl_out    <= exec_ctrl_in when valid_in = '1' else latched_ctrl;
+    issue_valid <= '1' when (valid_in = '1') or (count < 32) else '0';
 
     current_thread  <= current_thread_int;
-    
     rs1_addr_global <= current_thread_int & ctrl_out.rs1_addr_local;
     rs2_addr_global <= current_thread_int & ctrl_out.rs2_addr_local;
     rs3_addr_global <= current_thread_int & ctrl_out.rs3_addr_local;
@@ -128,8 +112,8 @@ begin
     cmp_invert      <= ctrl_out.cmp_invert;
     cmp_swap        <= ctrl_out.cmp_swap;
     is_logic_op     <= ctrl_out.is_logic_op;
-    is_load         <= ctrl_out.is_load;   -- NEW
-    imm_data        <= ctrl_out.imm_data;  -- NEW
+    is_load         <= ctrl_out.is_load;  
+    imm_data        <= ctrl_out.imm_data; 
     wb_mux_sel      <= ctrl_out.wb_mux_sel;
     vrf_we          <= ctrl_out.vrf_we;
     prf_we          <= ctrl_out.prf_we;

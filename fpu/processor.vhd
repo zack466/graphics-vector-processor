@@ -126,6 +126,8 @@ architecture structural of processor is
     signal mem_vrf_wr_data : vector_t;
     signal mem_vrf_we      : std_logic;
 
+    signal exec_flush_active : std_logic;
+
 begin
 
     -- ========================================================================
@@ -150,6 +152,12 @@ begin
                 
                 if state = ADVANCE_PC and do_force_pc = '1' then
                     do_force_pc <= '0';
+                end if;
+
+                -- Automatically clear the run bit when the processor hits a SYSTEM RETURN instruction
+                if state = DECODE and ifu_inst_out(3 downto 0) = INST_TYPE_SYS and ifu_inst_out(31 downto 26) = OP_RETURN then
+                    report "Program returned.";
+                    csr_run <= '0';
                 end if;
             end if;
         end if;
@@ -176,7 +184,7 @@ begin
     end process;
 
     -- Process B: Combinational Next-State & Output Routing
-    process(state, csr_run, do_force_pc, ifu_inst_out, iss_issue_valid, mem_stall)
+    process(state, csr_run, do_force_pc, ifu_inst_out, iss_issue_valid, mem_stall, exec_flush_active)
         variable v_inst_type : std_logic_vector(3 downto 0);
     begin
         -- Default Combinational Outputs (Prevents Latches)
@@ -199,21 +207,39 @@ begin
             when DECODE =>
                 if csr_run = '0' then
                     next_state <= HALTED;
+                    
                 elsif v_inst_type = INST_TYPE_MEM then
-                    mem_op_valid <= '1';            -- Combinatorially assert to MCU instantly
+                    mem_op_valid <= '1';            
                     next_state <= MEM_WAIT_START;
+                    
+                elsif v_inst_type = INST_TYPE_SYS then
+                    if ifu_inst_out(31 downto 26) = OP_RETURN then
+                        next_state <= HALTED;
+                    elsif ifu_inst_out(31 downto 26) = OP_FLUSH then
+                        iss_valid_in <= '1';       -- Send the FLUSH token into the issuer
+                        next_state <= EXEC_WAIT;   -- Wait for the pipeline to clear
+                        -- next_state <= ADVANCE_PC;
+                    else
+                        next_state <= ADVANCE_PC;
+                    end if;
+                    
                 elsif v_inst_type = INST_TYPE_CTRL then
                     next_state <= ADVANCE_PC;
+                    
                 elsif v_inst_type = INST_TYPE_FPU or v_inst_type = INST_TYPE_ALU or 
                       v_inst_type = INST_TYPE_IMM or v_inst_type = INST_TYPE_RED then
                     iss_valid_in <= '1';
                     next_state <= EXEC_WAIT;
+                    
                 else
                     next_state <= ADVANCE_PC;
                 end if;
 
             when EXEC_WAIT =>
-                if iss_issue_valid = '0' then next_state <= ADVANCE_PC; end if;
+                -- Wait until the token finishes issuing AND clears the pipeline
+                if iss_issue_valid = '0' and exec_flush_active = '0' then 
+                    next_state <= ADVANCE_PC; 
+                end if;
 
             when MEM_WAIT_START =>
                 next_state <= MEM_WAIT;
@@ -361,7 +387,8 @@ begin
             prf_rs1_data      => prf_rs1_data, prf_rs2_data => prf_rs2_data,
             wb_rd_addr_out    => exec_wb_rd_addr, wb_vrf_data_out => exec_wb_vrf_data,
             wb_prf_data_out   => exec_wb_prf_data, wb_vrf_we_out => exec_wb_vrf_we,
-            wb_prf_we_out     => exec_wb_prf_we, wb_mask_out => exec_wb_mask
+            wb_prf_we_out     => exec_wb_prf_we, wb_mask_out => exec_wb_mask,
+            flush_active_out  => exec_flush_active
         );
 
     u_mem : entity work.memory_unit

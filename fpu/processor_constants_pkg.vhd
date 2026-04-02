@@ -8,12 +8,13 @@ package processor_constants_pkg is
     -- ========================================================================
     -- INSTRUCTION TYPES (Bottom 4 bits [3:0])
     -- ========================================================================
-    constant INST_TYPE_FPU  : std_logic_vector(3 downto 0) := "0000";
-    constant INST_TYPE_CTRL : std_logic_vector(3 downto 0) := "0001";
-    constant INST_TYPE_RED  : std_logic_vector(3 downto 0) := "0010";
-    constant INST_TYPE_ALU  : std_logic_vector(3 downto 0) := "0011";
-    constant INST_TYPE_IMM  : std_logic_vector(3 downto 0) := "0100";
-    constant INST_TYPE_MEM  : std_logic_vector(3 downto 0) := "0101"; -- NEW
+    constant INST_TYPE_FPU  : std_logic_vector(3 downto 0) := "0000"; -- Floating-point parallel operations
+    constant INST_TYPE_CTRL : std_logic_vector(3 downto 0) := "0001"; -- Branch instructions
+    constant INST_TYPE_RED  : std_logic_vector(3 downto 0) := "0010"; -- Floating-point reduction operations
+    constant INST_TYPE_ALU  : std_logic_vector(3 downto 0) := "0011"; -- Integer ALU operations
+    constant INST_TYPE_IMM  : std_logic_vector(3 downto 0) := "0100"; -- Immediate instructions
+    constant INST_TYPE_MEM  : std_logic_vector(3 downto 0) := "0101"; -- Load/Store
+    constant INST_TYPE_SYS  : std_logic_vector(3 downto 0) := "0110"; -- System & Environmens
 
     -- ========================================================================
     -- FPU MATH OPCODES [31:26] (When Type == 0000)
@@ -40,6 +41,12 @@ package processor_constants_pkg is
     constant OP_PAND    : std_logic_vector(5 downto 0) := "011000"; 
     constant OP_POR     : std_logic_vector(5 downto 0) := "011001"; 
     constant OP_PXOR    : std_logic_vector(5 downto 0) := "011010"; 
+
+    -- ========================================================================
+    -- SYSTEM OPCODES [31:26] (When Type == 0110)
+    -- ========================================================================
+    constant OP_FLUSH   : std_logic_vector(5 downto 0) := "111110"; -- Pipeline Barrier / Sync
+    constant OP_RETURN  : std_logic_vector(5 downto 0) := "111111"; -- Halt Execution
 
     -- ========================================================================
     -- CONTROL FLOW OPCODES [31:26] (When Type == 0001)

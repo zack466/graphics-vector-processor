@@ -120,8 +120,8 @@ begin
                         avs_readdata      <= ram(to_integer(v_read_fifo(v_read_head).addr) / (DATA_WIDTH/8) mod MEM_WORDS);
                         
                         -- LOG THE RETURNED READ
-                        report "[AVM MEM READ RET] Addr: 0x" & to_hstring(v_read_fifo(v_read_head).addr) &
-                               " | Data: 0x" & to_hstring(ram(to_integer(v_read_fifo(v_read_head).addr) / (DATA_WIDTH/8) mod MEM_WORDS)) severity note;
+                        -- report "[AVM MEM READ RET] Addr: 0x" & to_hstring(v_read_fifo(v_read_head).addr) &
+                        --        " | Data: 0x" & to_hstring(ram(to_integer(v_read_fifo(v_read_head).addr) / (DATA_WIDTH/8) mod MEM_WORDS)) severity note;
                         
                         v_read_fifo(v_read_head).addr       := v_read_fifo(v_read_head).addr + (DATA_WIDTH/8);
                         v_read_fifo(v_read_head).burst_left := v_read_fifo(v_read_head).burst_left - 1;
@@ -164,8 +164,8 @@ begin
                     ram(target_idx) <= temp_word;
 
                     -- LOG THE WRITE
-                    report "[AVM MEM WRITE] Addr: 0x" & to_hstring(to_unsigned(target_idx * (DATA_WIDTH/8), ADDR_WIDTH)) &
-                           " | Data: 0x" & to_hstring(temp_word) severity note;
+                    -- report "[AVM MEM WRITE] Addr: 0x" & to_hstring(to_unsigned(target_idx * (DATA_WIDTH/8), ADDR_WIDTH)) &
+                    --        " | Data: 0x" & to_hstring(temp_word) severity note;
 
                     -- Randomize delay for next beat
                     uniform(seed1, seed2, rand);
@@ -177,8 +177,8 @@ begin
                     v_read_fifo(v_read_tail).burst_left := to_integer(unsigned(avs_burstcount));
                     
                     -- LOG THE READ REQUEST
-                    report "[AVM MEM READ REQ] Addr: 0x" & to_hstring(unsigned(avs_address)) &
-                           " | Burst Len: " & integer'image(to_integer(unsigned(avs_burstcount))) severity note;
+                    -- report "[AVM MEM READ REQ] Addr: 0x" & to_hstring(unsigned(avs_address)) &
+                    --        " | Burst Len: " & integer'image(to_integer(unsigned(avs_burstcount))) severity note;
                     
                     uniform(seed1, seed2, rand);
                     v_read_fifo(v_read_tail).latency    := integer(rand * real(MAX_DELAY)) + 2; 

@@ -109,11 +109,22 @@ begin
     
         -- --------------------------------------------------------------------
         -- IN-TESTBENCH ASSEMBLER FUNCTIONS
-        -- Eliminates hand-assembly hex errors!
         -- --------------------------------------------------------------------
-        function asm_nop return word_t is
+        function asm_flush return word_t is
+            variable res : word_t := (others => '0');
         begin
-            return (others => '0'); -- All zeros is OP_NOP, INST_TYPE_FPU
+            res(31 downto 26) := OP_FLUSH;
+            res(3 downto 0) := INST_TYPE_SYS;
+            return res;
+        end function;
+
+        -- NEW: Return instruction to halt the processor
+        function asm_return return word_t is
+            variable res : word_t := (others => '0');
+        begin
+            res(31 downto 26) := OP_RETURN;
+            res(3 downto 0) := INST_TYPE_SYS;
+            return res;
         end function;
 
         function asm_ldi(is_hi : boolean; dest_reg : integer; imm : std_logic_vector(15 downto 0)) return word_t is
@@ -121,33 +132,33 @@ begin
         begin
             if is_hi then res(31 downto 26) := "000001"; else res(31 downto 26) := "000000"; end if;
             res(25 downto 10) := imm;
-            res(9 downto 6)   := "1111"; -- Write to all 4 vector elements
+            res(9 downto 6)   := "1111"; 
             res(5 downto 4)   := std_logic_vector(to_unsigned(dest_reg, 2));
-            res(3 downto 0)   := "0100"; -- INST_TYPE_IMM
+            res(3 downto 0)   := "0100"; 
             return res;
         end function;
 
         function asm_store(base : std_logic_vector(15 downto 0); off_reg : integer; src_reg : integer) return word_t is
             variable res : word_t := (others => '0');
         begin
-            res(31 downto 26) := "100001"; -- OP_STORE
+            res(31 downto 26) := "100001"; 
             res(25 downto 10) := base;
             res(9 downto 8)   := std_logic_vector(to_unsigned(off_reg, 2));
             res(7 downto 6)   := std_logic_vector(to_unsigned(src_reg, 2));
             res(5 downto 4)   := "00";
-            res(3 downto 0)   := "0101"; -- INST_TYPE_MEM
+            res(3 downto 0)   := "0101"; 
             return res;
         end function;
         
         function asm_jmp(target : integer) return word_t is
             variable res : word_t := (others => '0');
         begin
-            res(31 downto 26) := "110000"; -- OP_JMP
+            res(31 downto 26) := "110000"; 
             res(25 downto 24) := "00";
             res(23 downto 8)  := std_logic_vector(to_unsigned(target, 16));
             res(7 downto 6)   := "00";
             res(5 downto 4)   := "00";
-            res(3 downto 0)   := "0001"; -- INST_TYPE_CTRL
+            res(3 downto 0)   := "0001"; 
             return res;
         end function;
 
@@ -169,6 +180,28 @@ begin
             tb_avm_read <= '0';
             while mem_avm_readdatavalid = '0' loop wait until rising_edge(clk); end loop;
         end procedure;
+
+        -- NEW: Procedure to poll the CSR Run bit
+        procedure wait_for_halt(poll_interval : time) is
+        begin
+            loop
+                -- Standard Avalon-MM Read of Address 0 (Run Register)
+                csr_address <= "00";
+                csr_read <= '1';
+                wait until rising_edge(clk);
+                csr_read <= '0';
+                wait until rising_edge(clk);
+                
+                -- Check the lowest bit
+                if csr_readdata(0) = '0' then
+                    report "Processor halted detected via CSR!";
+                    exit;
+                end if;
+                
+                -- Wait before checking again so we don't spam the bus
+                wait for poll_interval;
+            end loop;
+        end procedure;
         
         variable rom_ptr : integer := 0;
 
@@ -182,37 +215,27 @@ begin
         -- ====================================================================
         report "Loading instruction memory...";
         
-        -- Load v0 with offsets (0x0000)
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
         prog_wr_data <= asm_ldi(false, 0, x"0000"); prog_we <= '1'; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
         
-        -- Load v1 LOWER half with data (0xBEEF)
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
         prog_wr_data <= asm_ldi(false, 1, x"BEEF"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
         
-        -- PIPELINE FLUSH 1: Wait for LDI_LO to write back to the VRF!
-        for i in 1 to 40 loop
-            prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-            prog_wr_data <= asm_nop; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        end loop;
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_flush; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
 
-        -- Load v1 UPPER half with data (0xDEAD)
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
         prog_wr_data <= asm_ldi(true,  1, x"DEAD"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
         
-        -- PIPELINE FLUSH 2: Wait for LDI_HI to write back to the VRF!
-        for i in 1 to 40 loop
-            prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-            prog_wr_data <= asm_nop; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        end loop;
-
-        -- Store v1 to DDR3 (Base: 0x0000, Offsets: v0)
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_store(x"0000", 0, 1); wait until rising_edge(clk); 
+        prog_wr_data <= asm_flush; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_store(x"0000", 0, 1); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
         
-        -- Infinite Loop JMP
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr + 1, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_jmp(rom_ptr + 1); wait until rising_edge(clk); 
+        -- REPLACED THE JUMP WITH A RETURN INSTRUCTION
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_return; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
 
         prog_we <= '0'; wait for 50 ns; wait until rising_edge(clk);
 
@@ -223,11 +246,10 @@ begin
         write_csr(1, x"00000000"); -- CSR[1] = Start PC (0)
         write_csr(0, x"00000001"); -- CSR[0] = Run (1)
 
-        -- Wait for execution, pipeline delays, and AVM bursts
-        wait for 39000 ns; wait until rising_edge(clk);
-
-        report "Halting processor...";
-        write_csr(0, x"00000000"); 
+        -- REPLACED HARDCODED WAIT WITH POLLING PROCEDURE
+        report "Waiting for processor to finish executing...";
+        wait_for_halt(500 ns);
+        
         wait for 100 ns; wait until rising_edge(clk);
 
         -- ====================================================================
@@ -236,14 +258,8 @@ begin
         report "Taking over Avalon Bus and checking DDR3 Memory...";
         tb_takeover <= '1'; wait until rising_edge(clk);
         
-        -- Because all 32 threads have offset 0, the Memory Unit will write 0xDEADBEEF 
-        -- to address 0x0000 thirty-two times in a row.
         read_memory(x"00000000");
 
-        report to_hstring(mem_avm_readdata(31 downto 0));
-        report to_hstring(mem_avm_readdata(63 downto 32));
-        report to_hstring(mem_avm_readdata(95 downto 64));
-        report to_hstring(mem_avm_readdata(127 downto 96));
         assert mem_avm_readdata(31 downto 0)   = x"DEADBEEF" report "Mismatch Element 0" severity error;
         assert mem_avm_readdata(63 downto 32)  = x"DEADBEEF" report "Mismatch Element 1" severity error;
         assert mem_avm_readdata(95 downto 64)  = x"DEADBEEF" report "Mismatch Element 2" severity error;

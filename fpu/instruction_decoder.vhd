@@ -252,6 +252,19 @@ begin
                 v_mem.is_store := '0';
             end if;
 
+        elsif inst_type = INST_TYPE_SYS then
+            -- ----------------------------------------------------------------
+            -- SYSTEM INSTRUCTION MAP
+            -- [31:26] Opcode | [25:4] Reserved | [3:0] Type
+            -- ----------------------------------------------------------------
+            -- We pass the opcode through v_fpu because the top-level 
+            -- exec_mux_ctrl uses v_fpu as the default route. 
+            v_fpu.opcode := internal_opcode;
+            
+            -- No register reads or writes are necessary for FLUSH or RETURN
+            v_fpu.vrf_we := '0';
+            v_fpu.prf_we := '0';
+
         end if;
 
         -- ====================================================================

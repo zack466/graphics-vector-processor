@@ -271,7 +271,7 @@ begin
                         if tx_valid = '1' and tx_ready = '1' then
                             thread_served(target_th_tx) <= '1';
                             words_handled <= words_handled + 1;
-                            report "Writing data: " & to_hstring(tx_data);
+                            -- report "Writing data: " & to_hstring(tx_data);
                             
                             if words_handled = burst_len - 1 then
                                 tx_valid <= '0';
