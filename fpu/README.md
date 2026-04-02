@@ -4,7 +4,7 @@ TODO:
 * verify that M10K blocks are inferred as desired in Quartus (vector_reg_file.vhd)
 * check sin/cos resource usage, and switch to flopoco or something else if needed
 * create and verify each component using testbenches
-* finish integrating the memory controller, instruction fetcher, instruction issuer, instruction decoder, and the FPU lanes with the rest of the processor architecture
+* finish integrating the memory controller, instruction fetcher, instruction issuer, instruction decoder, and execution unit
 * top-level control and status register, handle 1) loading assembly into internal ROM, 2) loading pixel data into DDR3 RAM, 3) tell GPU start executing at a given PC, and 4) know when GPU is finished / if there was an error during execution
 * add immediate FPU instructions, don't support things like swizzling or mask, but allow encoding low-precision immediate constants, for things like scalar multiplication, negation, etc
   * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
@@ -49,7 +49,7 @@ Each lane contains a Unified Multiply-Add (MADD) datapath and transcendental uni
 * **Comparison Modifiers:** Native support for `Swap Operands` and `Invert Result` on comparison instructions. This allows the hardware to evaluate all six algebraic relations (=, ≠, <, ≤, >, ≥) using only `Equal` and `Less Than` hardware cores.
 
 **2.2. Dedicated Integer ALU Lane**
-A lightweight, single-lane integer Arithmetic Logic Unit (ALU) operates in parallel with the floating-point cores.
+A lightweight, single-lane integer Arithmetic Logic Unit (ALU) operates concurrently with the floating-point cores.
 * **Exact Mathematics:** Provides robust 32-bit two's-complement arithmetic (`IADD`, `ISUB`, shifts, and bitwise logic) essential for exact memory address calculation, loop counting, and pointer offset math.
 * **Pipeline Synchronization:** While integer math evaluates combinationally in zero cycles, the hardware injects the result into a 37-stage shift register. This synchronizes the ALU output perfectly with the `FPU_MAX_LATENCY`, allowing it to share the unified Writeback Controller seamlessly.
 
