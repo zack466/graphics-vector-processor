@@ -47,6 +47,8 @@ package processor_constants_pkg is
     -- ========================================================================
     constant OP_FLUSH   : std_logic_vector(5 downto 0) := "111110"; -- Pipeline Barrier / Sync
     constant OP_RETURN  : std_logic_vector(5 downto 0) := "111111"; -- Halt Execution
+    constant OP_BREAK   : std_logic_vector(5 downto 0) := "111100"; -- Hardware breakpoint
+    constant OP_INT     : std_logic_vector(5 downto 0) := "111101"; -- Raise interrupt
 
     -- ========================================================================
     -- CONTROL FLOW OPCODES [31:26] (When Type == 0001)

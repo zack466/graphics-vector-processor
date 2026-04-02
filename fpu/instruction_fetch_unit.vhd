@@ -85,8 +85,8 @@ begin
                 fetch_mask_reg  <= (others => '1');
                 
             elsif stall = '0' then
-                report "Current PC: " & to_string(to_integer(pc));
-                report "Current instruction: " & to_hstring(instruction_out);
+                -- report "Current PC: " & to_string(to_integer(pc));
+                -- report "Current instruction: " & to_hstring(instruction_out);
                 
                 -- Shift mask into delay register to align with imem_data arriving next cycle
                 fetch_mask_reg <= active_mask;

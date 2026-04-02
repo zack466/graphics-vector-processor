@@ -56,6 +56,9 @@ architecture sim of tb_processor is
     signal csr_writedata : std_logic_vector(31 downto 0) := (others => '0');
     signal csr_read      : std_logic := '0';
     signal csr_readdata  : std_logic_vector(31 downto 0);
+    
+    -- NEW: Host IRQ Pin
+    signal host_irq      : std_logic;
 
 begin
 
@@ -88,7 +91,8 @@ begin
             avm_waitrequest => mem_avm_waitrequest,
             prog_we => prog_we, prog_wr_addr => prog_wr_addr, prog_wr_data => prog_wr_data,
             csr_address => csr_address, csr_write => csr_write, 
-            csr_writedata => csr_writedata, csr_read => csr_read, csr_readdata => csr_readdata
+            csr_writedata => csr_writedata, csr_read => csr_read, csr_readdata => csr_readdata,
+            host_irq_out => host_irq -- NEW: Wire up the interrupt pin
         );
 
     u_memory : entity work.avm_sim_memory
@@ -113,17 +117,32 @@ begin
         function asm_flush return word_t is
             variable res : word_t := (others => '0');
         begin
-            res(31 downto 26) := OP_FLUSH;
-            res(3 downto 0) := INST_TYPE_SYS;
+            res(31 downto 26) := "111110"; -- OP_FLUSH
+            res(3 downto 0) := "0110";     -- INST_TYPE_SYS
             return res;
         end function;
 
-        -- NEW: Return instruction to halt the processor
         function asm_return return word_t is
             variable res : word_t := (others => '0');
         begin
-            res(31 downto 26) := OP_RETURN;
-            res(3 downto 0) := INST_TYPE_SYS;
+            res(31 downto 26) := "111111"; -- OP_RETURN
+            res(3 downto 0) := "0110";     -- INST_TYPE_SYS
+            return res;
+        end function;
+
+        function asm_break return word_t is
+            variable res : word_t := (others => '0');
+        begin
+            res(31 downto 26) := "111100"; -- OP_BREAK
+            res(3 downto 0) := "0110";     -- INST_TYPE_SYS
+            return res;
+        end function;
+        
+        function asm_int return word_t is
+            variable res : word_t := (others => '0');
+        begin
+            res(31 downto 26) := "111101"; -- OP_INT
+            res(3 downto 0) := "0110";     -- INST_TYPE_SYS
             return res;
         end function;
 
@@ -149,18 +168,6 @@ begin
             res(3 downto 0)   := "0101"; 
             return res;
         end function;
-        
-        function asm_jmp(target : integer) return word_t is
-            variable res : word_t := (others => '0');
-        begin
-            res(31 downto 26) := "110000"; 
-            res(25 downto 24) := "00";
-            res(23 downto 8)  := std_logic_vector(to_unsigned(target, 16));
-            res(7 downto 6)   := "00";
-            res(5 downto 4)   := "00";
-            res(3 downto 0)   := "0001"; 
-            return res;
-        end function;
 
         -- --------------------------------------------------------------------
         -- HELPER PROCEDURES
@@ -181,24 +188,49 @@ begin
             while mem_avm_readdatavalid = '0' loop wait until rising_edge(clk); end loop;
         end procedure;
 
-        -- NEW: Procedure to poll the CSR Run bit
         procedure wait_for_halt(poll_interval : time) is
         begin
             loop
-                -- Standard Avalon-MM Read of Address 0 (Run Register)
-                csr_address <= "00";
-                csr_read <= '1';
-                wait until rising_edge(clk);
-                csr_read <= '0';
-                wait until rising_edge(clk);
+                -- 1. CHECK FOR HARDWARE INTERRUPT (Unchanged)
+                if host_irq = '1' then
+                    report "[HOST ISR] GPU Hardware Interrupt Detected! Clearing IRQ Pin...";
+                    csr_address <= "10"; csr_writedata <= x"00000001"; csr_write <= '1';
+                    wait until rising_edge(clk); csr_write <= '0'; wait until rising_edge(clk);
+                end if;
+            
+                -- 2. CHECK IF PROCESSOR HAS HALTED
+                csr_address <= "00"; csr_read <= '1';
+                wait until rising_edge(clk); csr_read <= '0'; wait until rising_edge(clk);
                 
-                -- Check the lowest bit
                 if csr_readdata(0) = '0' then
-                    report "Processor halted detected via CSR!";
-                    exit;
+                    
+                    -- It halted! Let's check CSR[3] to see if it was a breakpoint
+                    csr_address <= "11"; csr_read <= '1';
+                    wait until rising_edge(clk); csr_read <= '0'; wait until rising_edge(clk);
+                    
+                    if csr_readdata(0) = '1' then
+                        report "[DEBUGGER] Breakpoint Hit! Resuming execution...";
+                        
+                        -- A real debugger would read the VRF and PC here to inspect state.
+                        -- For now, we just clear the break flag and resume.
+                        
+                        -- Clear the Break Flag (Write 1 to CSR[3])
+                        csr_address <= "11"; csr_writedata <= x"00000001"; csr_write <= '1';
+                        wait until rising_edge(clk); csr_write <= '0'; wait until rising_edge(clk);
+                        
+                        -- Resume the Processor (Write 1 to CSR[0])
+                        csr_address <= "00"; csr_writedata <= x"00000001"; csr_write <= '1';
+                        wait until rising_edge(clk); csr_write <= '0'; wait until rising_edge(clk);
+                        
+                        report "[DEBUGGER] Processor resumed.";
+                        -- Do NOT exit the loop, keep polling!
+                    else
+                        -- It wasn't a breakpoint, so it must be a normal RETURN
+                        report "[HOST] GPU execution complete (Normal Return).";
+                        exit;
+                    end if;
                 end if;
                 
-                -- Wait before checking again so we don't spam the bus
                 wait for poll_interval;
             end loop;
         end procedure;
@@ -233,7 +265,9 @@ begin
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
         prog_wr_data <= asm_store(x"0000", 0, 1); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
         
-        -- REPLACED THE JUMP WITH A RETURN INSTRUCTION
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_break; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
         prog_wr_data <= asm_return; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
 
@@ -246,9 +280,9 @@ begin
         write_csr(1, x"00000000"); -- CSR[1] = Start PC (0)
         write_csr(0, x"00000001"); -- CSR[0] = Run (1)
 
-        -- REPLACED HARDCODED WAIT WITH POLLING PROCEDURE
         report "Waiting for processor to finish executing...";
-        wait_for_halt(500 ns);
+        -- Using a short 100ns poll interval so the simulated ISR catches the IRQ quickly!
+        wait_for_halt(100 ns); 
         
         wait for 100 ns; wait until rising_edge(clk);
 

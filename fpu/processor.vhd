@@ -44,7 +44,8 @@ entity processor is
         csr_write         : in  std_logic;
         csr_writedata     : in  std_logic_vector(31 downto 0);
         csr_read          : in  std_logic;
-        csr_readdata      : out std_logic_vector(31 downto 0)
+        csr_readdata      : out std_logic_vector(31 downto 0);
+        host_irq_out      : out std_logic
     );
 end entity processor;
 
@@ -63,6 +64,8 @@ architecture structural of processor is
     signal csr_run      : std_logic := '0';
     signal csr_start_pc : std_logic_vector(15 downto 0) := (others => '0');
     signal do_force_pc  : std_logic := '0';
+    signal irq_pending  : std_logic := '0'; -- Interrupt raised
+    signal break_hit    : std_logic := '0'; -- Breakpoint flag
 
     -- ========================================================================
     -- INTERCONNECT SIGNALS
@@ -131,6 +134,23 @@ architecture structural of processor is
 begin
 
     -- ========================================================================
+    -- SIMULATION DEBUG MONITOR
+    -- ========================================================================
+    -- synthesis translate_off
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            -- We log ONLY when the FSM explicitly commits an instruction 
+            -- from the Decode stage into the Execution Unit.
+            if state = DECODE and csr_run = '1' then
+                report "[EXEC COMMIT] PC: " & integer'image(to_integer(unsigned(ifu_imem_addr))) & 
+                       " | Instr: 0x" & to_hstring(ifu_inst_out);
+            end if;
+        end if;
+    end process;
+    -- synthesis translate_on
+
+    -- ========================================================================
     -- 1. CSR INTERFACE
     -- ========================================================================
     process(clk)
@@ -139,33 +159,54 @@ begin
             if reset = '1' then
                 csr_run <= '0';
                 do_force_pc <= '0';
+                irq_pending <= '0';
+                break_hit <= '0'; -- Reset the flag
             else
+                -- [A] HOST AVALON WRITES
                 if csr_write = '1' then
                     case csr_address is
                         when "00" => csr_run <= csr_writedata(0);
                         when "01" => 
                             csr_start_pc <= csr_writedata(15 downto 0);
                             do_force_pc <= '1'; 
+                        when "10" => 
+                            if csr_writedata(0) = '1' then irq_pending <= '0'; end if;
+                        
+                        -- NEW: Write 1 to clear the Breakpoint flag
+                        when "11" => 
+                            if csr_writedata(0) = '1' then break_hit <= '0'; end if;
+                            
                         when others => null;
                     end case;
                 end if;
                 
-                if state = ADVANCE_PC and do_force_pc = '1' then
-                    do_force_pc <= '0';
-                end if;
+                if state = ADVANCE_PC and do_force_pc = '1' then do_force_pc <= '0'; end if;
 
-                -- Automatically clear the run bit when the processor hits a SYSTEM RETURN instruction
-                if state = DECODE and ifu_inst_out(3 downto 0) = INST_TYPE_SYS and ifu_inst_out(31 downto 26) = OP_RETURN then
-                    report "Program returned.";
-                    csr_run <= '0';
+                -- [B] GPU HARDWARE EVENTS
+                if state = DECODE and ifu_inst_out(3 downto 0) = INST_TYPE_SYS then
+                    if ifu_inst_out(31 downto 26) = OP_RETURN then
+                        csr_run <= '0';
+                        
+                    elsif ifu_inst_out(31 downto 26) = OP_BREAK then
+                        csr_run <= '0';   -- Halt the processor
+                        break_hit <= '1'; -- Flag that it was a breakpoint!
+                        
+                    elsif ifu_inst_out(31 downto 26) = OP_INT then
+                        irq_pending <= '1';
+                    end if;
                 end if;
             end if;
         end if;
     end process;
     
-    csr_readdata <= x"0000000" & "000" & csr_run when csr_address = "00" else
-                    x"0000" & csr_start_pc when csr_address = "01" else
+    -- Update the CSR Read multiplexer
+    csr_readdata <= x"0000000" & "000" & csr_run      when csr_address = "00" else
+                    x"0000"    & csr_start_pc         when csr_address = "01" else
+                    x"0000000" & "000" & irq_pending  when csr_address = "10" else
+                    x"0000000" & "000" & break_hit    when csr_address = "11" else
                     (others => '0');
+
+    host_irq_out <= irq_pending;
 
     -- ========================================================================
     -- 2. TOP-LEVEL STATE MACHINE (Two-Process Methodology)
@@ -215,11 +256,16 @@ begin
                 elsif v_inst_type = INST_TYPE_SYS then
                     if ifu_inst_out(31 downto 26) = OP_RETURN then
                         next_state <= HALTED;
+                    elsif ifu_inst_out(31 downto 26) = OP_BREAK then
+                        -- FIX: Advance the PC before halting! 
+                        -- The FSM will step the PC, fetch the next instruction, 
+                        -- and naturally halt upon arriving back at DECODE because csr_run is 0.
+                        next_state <= ADVANCE_PC;
                     elsif ifu_inst_out(31 downto 26) = OP_FLUSH then
-                        iss_valid_in <= '1';       -- Send the FLUSH token into the issuer
-                        next_state <= EXEC_WAIT;   -- Wait for the pipeline to clear
-                        -- next_state <= ADVANCE_PC;
+                        iss_valid_in <= '1';       
+                        next_state <= EXEC_WAIT;   
                     else
+                        -- OP_INT falls through here! It fires the IRQ but doesn't stop the PC!
                         next_state <= ADVANCE_PC;
                     end if;
                     
