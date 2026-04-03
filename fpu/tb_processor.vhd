@@ -51,7 +51,7 @@ architecture sim of tb_processor is
     signal prog_wr_data : word_t := (others => '0');
 
     -- CSR Interface
-    signal csr_address   : std_logic_vector(1 downto 0) := "00";
+    signal csr_address   : std_logic_vector(2 downto 0) := "000";
     signal csr_write     : std_logic := '0';
     signal csr_writedata : std_logic_vector(31 downto 0) := (others => '0');
     signal csr_read      : std_logic := '0';
@@ -172,9 +172,9 @@ begin
         -- --------------------------------------------------------------------
         -- HELPER PROCEDURES
         -- --------------------------------------------------------------------
-        procedure write_csr(addr : integer; data : std_logic_vector(31 downto 0)) is
+        procedure write_csr(addr : std_logic_vector(2 downto 0); data : std_logic_vector(31 downto 0)) is
         begin
-            csr_address <= std_logic_vector(to_unsigned(addr, 2));
+            csr_address <= addr;
             csr_writedata <= data; csr_write <= '1';
             wait until rising_edge(clk); csr_write <= '0'; wait until rising_edge(clk);
         end procedure;
@@ -194,18 +194,18 @@ begin
                 -- 1. CHECK FOR HARDWARE INTERRUPT (Unchanged)
                 if host_irq = '1' then
                     report "[HOST ISR] GPU Hardware Interrupt Detected! Clearing IRQ Pin...";
-                    csr_address <= "10"; csr_writedata <= x"00000001"; csr_write <= '1';
+                    csr_address <= CSR_ADDR_IRQ_ACK; csr_writedata <= x"00000001"; csr_write <= '1';
                     wait until rising_edge(clk); csr_write <= '0'; wait until rising_edge(clk);
                 end if;
             
                 -- 2. CHECK IF PROCESSOR HAS HALTED
-                csr_address <= "00"; csr_read <= '1';
+                csr_address <= CSR_ADDR_RUN; csr_read <= '1';
                 wait until rising_edge(clk); csr_read <= '0'; wait until rising_edge(clk);
                 
                 if csr_readdata(0) = '0' then
                     
                     -- It halted! Let's check CSR[3] to see if it was a breakpoint
-                    csr_address <= "11"; csr_read <= '1';
+                    csr_address <= CSR_ADDR_BREAK; csr_read <= '1';
                     wait until rising_edge(clk); csr_read <= '0'; wait until rising_edge(clk);
                     
                     if csr_readdata(0) = '1' then
@@ -215,11 +215,11 @@ begin
                         -- For now, we just clear the break flag and resume.
                         
                         -- Clear the Break Flag (Write 1 to CSR[3])
-                        csr_address <= "11"; csr_writedata <= x"00000001"; csr_write <= '1';
+                        csr_address <= CSR_ADDR_BREAK; csr_writedata <= x"00000001"; csr_write <= '1';
                         wait until rising_edge(clk); csr_write <= '0'; wait until rising_edge(clk);
                         
                         -- Resume the Processor (Write 1 to CSR[0])
-                        csr_address <= "00"; csr_writedata <= x"00000001"; csr_write <= '1';
+                        csr_address <= CSR_ADDR_RUN; csr_writedata <= x"00000001"; csr_write <= '1';
                         wait until rising_edge(clk); csr_write <= '0'; wait until rising_edge(clk);
                         
                         report "[DEBUGGER] Processor resumed.";
@@ -277,8 +277,8 @@ begin
         -- 2. START PROCESSOR
         -- ====================================================================
         report "Setting Start PC and running processor...";
-        write_csr(1, x"00000000"); -- CSR[1] = Start PC (0)
-        write_csr(0, x"00000001"); -- CSR[0] = Run (1)
+        write_csr(CSR_ADDR_START_PC, x"00000000");  -- Start PC
+        write_csr(CSR_ADDR_RUN, x"00000001");       -- Run
 
         report "Waiting for processor to finish executing...";
         -- Using a short 100ns poll interval so the simulated ISR catches the IRQ quickly!
@@ -294,6 +294,10 @@ begin
         
         read_memory(x"00000000");
 
+        report to_hstring(mem_avm_readdata(31 downto 0));
+        report to_hstring(mem_avm_readdata(63 downto 32));
+        report to_hstring(mem_avm_readdata(95 downto 64));
+        report to_hstring(mem_avm_readdata(127 downto 96));
         assert mem_avm_readdata(31 downto 0)   = x"DEADBEEF" report "Mismatch Element 0" severity error;
         assert mem_avm_readdata(63 downto 32)  = x"DEADBEEF" report "Mismatch Element 1" severity error;
         assert mem_avm_readdata(95 downto 64)  = x"DEADBEEF" report "Mismatch Element 2" severity error;

@@ -119,6 +119,15 @@ package processor_constants_pkg is
     constant OP_LOAD    : std_logic_vector(5 downto 0) := "100000"; -- NEW
     constant OP_STORE   : std_logic_vector(5 downto 0) := "100001"; -- NEW
 
+    -- ========================================================================
+    -- CSR (CONTROL STATUS REGISTER) ADDRESS MAP (3-Bit)
+    -- ========================================================================
+    constant CSR_ADDR_RUN       : std_logic_vector(2 downto 0) := "000"; -- [R/W]   Run/Halt Control
+    constant CSR_ADDR_START_PC  : std_logic_vector(2 downto 0) := "001"; -- [W]     Force Start PC
+    constant CSR_ADDR_IRQ_ACK   : std_logic_vector(2 downto 0) := "010"; -- [R/W1C] Hardware Interrupt Ack
+    constant CSR_ADDR_BREAK     : std_logic_vector(2 downto 0) := "011"; -- [R/W1C] Breakpoint Hit Flag
+    constant CSR_ADDR_CURR_PC   : std_logic_vector(2 downto 0) := "100"; -- [R]     Current Program Counter
+    constant CSR_ADDR_EXEC_MASK : std_logic_vector(2 downto 0) := "101"; -- [R]     Active Thread Mask
 
     -- ========================================================================
     -- CONTROL RECORDS (Expanded explicitly to remove downstream decoding)

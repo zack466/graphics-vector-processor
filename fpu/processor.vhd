@@ -40,7 +40,7 @@ entity processor is
         -- ==========================================
         -- CSR Avalon-MM Slave (External Control)
         -- ==========================================
-        csr_address       : in  std_logic_vector(1 downto 0);
+        csr_address       : in  std_logic_vector(2 downto 0);
         csr_write         : in  std_logic;
         csr_writedata     : in  std_logic_vector(31 downto 0);
         csr_read          : in  std_logic;
@@ -151,7 +151,7 @@ begin
     -- synthesis translate_on
 
     -- ========================================================================
-    -- 1. CSR INTERFACE
+    -- 1. CSR INTERFACE & HARDWARE HANDSHAKES
     -- ========================================================================
     process(clk)
     begin
@@ -160,27 +160,33 @@ begin
                 csr_run <= '0';
                 do_force_pc <= '0';
                 irq_pending <= '0';
-                break_hit <= '0'; -- Reset the flag
+                break_hit <= '0';
             else
                 -- [A] HOST AVALON WRITES
                 if csr_write = '1' then
                     case csr_address is
-                        when "00" => csr_run <= csr_writedata(0);
-                        when "01" => 
+                        when CSR_ADDR_RUN => 
+                            csr_run <= csr_writedata(0);
+                            
+                        when CSR_ADDR_START_PC => 
                             csr_start_pc <= csr_writedata(15 downto 0);
                             do_force_pc <= '1'; 
-                        when "10" => 
+                            
+                        when CSR_ADDR_IRQ_ACK => 
                             if csr_writedata(0) = '1' then irq_pending <= '0'; end if;
                         
-                        -- NEW: Write 1 to clear the Breakpoint flag
-                        when "11" => 
+                        when CSR_ADDR_BREAK => 
                             if csr_writedata(0) = '1' then break_hit <= '0'; end if;
                             
+                        -- Read-only addresses are ignored on write
                         when others => null;
                     end case;
                 end if;
                 
-                if state = ADVANCE_PC and do_force_pc = '1' then do_force_pc <= '0'; end if;
+                -- Clear force PC flag once consumed by FSM
+                if state = ADVANCE_PC and do_force_pc = '1' then 
+                    do_force_pc <= '0'; 
+                end if;
 
                 -- [B] GPU HARDWARE EVENTS
                 if state = DECODE and ifu_inst_out(3 downto 0) = INST_TYPE_SYS then
@@ -188,8 +194,8 @@ begin
                         csr_run <= '0';
                         
                     elsif ifu_inst_out(31 downto 26) = OP_BREAK then
-                        csr_run <= '0';   -- Halt the processor
-                        break_hit <= '1'; -- Flag that it was a breakpoint!
+                        csr_run <= '0';
+                        break_hit <= '1';
                         
                     elsif ifu_inst_out(31 downto 26) = OP_INT then
                         irq_pending <= '1';
@@ -199,12 +205,17 @@ begin
         end if;
     end process;
     
-    -- Update the CSR Read multiplexer
-    csr_readdata <= x"0000000" & "000" & csr_run      when csr_address = "00" else
-                    x"0000"    & csr_start_pc         when csr_address = "01" else
-                    x"0000000" & "000" & irq_pending  when csr_address = "10" else
-                    x"0000000" & "000" & break_hit    when csr_address = "11" else
-                    (others => '0');
+    -- ========================================================================
+    -- CSR AVALON READ MULTIPLEXER
+    -- ========================================================================
+    csr_readdata <= 
+        x"0000000" & "000" & csr_run      when csr_address = CSR_ADDR_RUN else
+        x"0000"    & csr_start_pc         when csr_address = CSR_ADDR_START_PC else
+        x"0000000" & "000" & irq_pending  when csr_address = CSR_ADDR_IRQ_ACK else
+        x"0000000" & "000" & break_hit    when csr_address = CSR_ADDR_BREAK else
+        x"0000"    & ifu_imem_addr        when csr_address = CSR_ADDR_CURR_PC else
+        x"00000000"                       when csr_address = CSR_ADDR_EXEC_MASK else -- Pad upper bits if WARP_SIZE is 32
+        (others => '0');
 
     host_irq_out <= irq_pending;
 
