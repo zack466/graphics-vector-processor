@@ -1,7 +1,7 @@
 # Instruction Set
 
 Smallest element of computation is a 128-bit vector, consisting of four 32-bit floats (or signed/unsigned integers?) WXYZ.
-- each core should have access to some local constants too (like thread ID, x/y coordinates, etc)
+- each core should have access to some local registers too (like thread ID, x/y coordinates, etc)
 
 Supported instructions:
 - parallel floating-point add/sub/multiply/divide/shift

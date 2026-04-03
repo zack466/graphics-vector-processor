@@ -82,7 +82,7 @@ begin
     R6 <= OpB.z when scalar = '0' else opB.a;
     R7 <= OpB.a;
 
-    parallel_operation: process (clock, R0, R1, R2, R3, R4, R5, R6, R7) is
+    parallel_operation: process (clock) is
     begin
         if rising_edge(clock) then
             if parOp = ParOP_ADD then
@@ -109,7 +109,7 @@ begin
         end if;
     end process;
 
-    reduction_operation: process (R8, R9, R10, R11) is
+    reduction_operation: process (R0, R1, R2, R3, R8, R9, R10, R11, redOp, outMask) is
     begin
         R12 <= R8 when outMask(0) = '1' else R0;
         R13 <= R9 when outMask(1) = '1' else R1;
