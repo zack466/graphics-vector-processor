@@ -11,7 +11,7 @@ This project is vector-based graphics processor in VHDL, intended to run on a In
 The processor acts on 128-bit tuples (x, y, z, a) of standard IEEE 32-bit floating-point numbers.
 
 ## Technical Stack & Architecture
-- **Simulation:** Uses `GHDL` for all testbenching and simulation.
+- **Simulation:** Uses `GHDL` for all testbenching and simulation. Note that in some broken tests, execution may hang.
 - **Synthesis:** Will `Quartus` for synthesis. Quartus project files are in a separate repository.
 - **Waveform Viewer:** Uses `gtkwave` to view waveforms.
 

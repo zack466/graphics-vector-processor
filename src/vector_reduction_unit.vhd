@@ -101,6 +101,7 @@ begin
     -- ========================================================================
     -- 2. HARDWARE IP INSTANTIATION
     -- ========================================================================
+    -- NOTE: must be modified for synthesis
     u_scalar_product : fp_scalar_product
         generic map (latency => LAT_REDUCT)
         port map (

@@ -1,12 +1,17 @@
 TODO:
-* verify that all of the entity interfaces match up with the Altera floating-point IP (will just take time generating all of them on Quartus)
-  * we can probably substitute in less precise but also less resource-intensive IP if needed later on
-* verify that M10K blocks are inferred as desired in Quartus (vector_reg_file.vhd)
+* fully integrate all the components into a module that can be used in platform designer, works with memory and controlled by CSR
 * check sin/cos resource usage, and switch to flopoco or something else if needed
-* top-level control and status register, handle 1) loading assembly into internal ROM, 2) loading pixel data into DDR3 RAM, 3) tell GPU start executing at a given PC, and 4) know when GPU is finished / if there was an error during execution
+  * test if flopoco arithmetic modules use less resources (I'm ok with losing out on a bit of precision)
+  * everything can be done with flopoco floating point format, should only need to convert to IEEE when outputting to framebuffer for compatibility
 * add immediate FPU instructions, don't support things like swizzling or mask, but allow encoding low-precision immediate constants, for things like scalar multiplication, negation, etc
   * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
-* finish memory controller, test with real DDR3 memory as well
+* test memory controller with real DDR3 memory
+* improve routing congestion, either pipeline the swizzle network, decrease its capabilities, or remove it altogether
+  * (fixed) modified vector registers to use M10K blocks, improved ALM util and reduced congestion by a ton
+  * also, scatter gather mcu using about 3000 ALMs, seems like a lot more than should be necessary
+    * fixed as well?
+* test all of the instructions in simulation, run programs and dump pixel outputs
+* add warp offset to CSR, route into execution unit, and add ALU instruction to write it to a register
 
 # Graphics Vector Processor Design Document
 

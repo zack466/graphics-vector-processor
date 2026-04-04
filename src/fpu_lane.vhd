@@ -85,6 +85,7 @@ begin
     -- ========================================================================
     -- HARDWARE IP CORES (Using actual latencies)
     -- ========================================================================
+    -- NOTE: must be modified for synthesis
     u_fp_madd : entity work.fp_mult_add generic map(latency=>LAT_FMADD) port map(clk=>clk, en=>'1', a=>madd_a_in, b=>madd_b_in, c=>madd_c_in, q=>raw_madd);
     u_fp_rcp  : entity work.fp_rcp      generic map(latency=>LAT_FRCP)  port map(clk=>clk, en=>'1', a=>op_a, q=>raw_rcp);
     u_fp_sqrt : entity work.fp_sqrt     generic map(latency=>LAT_FSQRT) port map(clk=>clk, en=>'1', a=>op_a, q=>raw_sqrt);
