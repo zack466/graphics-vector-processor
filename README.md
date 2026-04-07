@@ -39,7 +39,7 @@ A dedicated 16-cycle Altera floating-point 4D scalar product block handles cross
 The ISA uses a 32-bit word where the bottom 4 bits (`Type`) determine the decoding scheme (`FPU`, `CTRL`, `RED`, `ALU`, `IMM`, `MEM`, `SYS`). Decoded instructions are flattened into a unified execution control record (`exec_ctrl_t`) to pass cleanly through the issue stage regardless of the target execution lane.
 
 **4.1. Hardware Modifiers (Logic & Math)**
-* **Dual-Port Swizzle:** Combinational crossbar routing for operands. Supports component rearrangement (e.g., `.xxxx`, `.zyxw`).
+* **Dual-Port Swizzle:** Combinational crossbar routing for operands. To reduce FPGA routing pressure, this currently supports passthrough (`.xyzw`) and scalar broadcasting/splatting (`.xxxx`, `.yyyy`, `.zzzz`, `.wwww`). Arbitrary cross-component swizzling has been removed but could be added later via a dedicated instruction.
 * **Predicate Modifiers (Collapse):** When evaluating a branch, the hardware collapses the 4-bit predicate vector into a 1-bit decision using four modes:
     * **ANY:** True if any component is 1.
     * **ALL:** True if all components are 1.

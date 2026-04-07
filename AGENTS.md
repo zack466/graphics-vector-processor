@@ -24,3 +24,5 @@ When writing designs/testbenches in VHDL, always abide by these guideleines:
 
 ## Development Process
 After making changes or fixing a bug, log your progress and append it to a file called `journal.md` in the project's root directory.
+Furthermore, changes to the design of the project should be kept up-to-date in `README.md`, which contains the design document.
+Additionally, all implementation designs should be well-documented, and VHDL entities should include a block of comments explaining how the entity is used, inputs/outputs, and exact timing/clock constraints.

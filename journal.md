@@ -10,7 +10,6 @@
 
 # TODO (priority)
 * make a robust test framework for processor instructions
-* make swizzling less resource/routing intensive
 
 # Agent changes
 
@@ -105,3 +104,16 @@
   Fixed `tb_full_execution_integration` to correctly verify the new swizzle modes:
   - Phase 6's verification updated since `.xz = v0.yxxa * v0.zzyy` was removed. It now tests `.xz = v0.yyyy * v0.zzzz`. The expected Z component check was adjusted to match `(i * 4 + 1) * (i * 4 + 2)`.
   - Phase 8's reduction assertion updated. Instead of testing `SUM(v0.yyzz)`, it now tests `SUM(v0.yyyy)`. The expected result checks were adjusted to match `4 * v0.y = 16*i + 4` instead of `16*i + 6`.
+
+  ---
+  Documentation Updates
+
+  README.md
+  - Updated section "4.1. Hardware Modifiers" to note the new swizzle limitations (only passthrough and splatting are supported to reduce routing pressure).
+
+  ---
+  Added Documentation to Swizzle Network
+
+  swizzle_network.vhd
+  - Added a header block explaining the purpose of the swizzle network, the recent optimization limiting it to passthrough and splatting, its I/O interfaces, and its 0-cycle combinational timing constraint.
+  - Added section comments to the main processing block detailing exactly how the inputs are evaluated and routed.
