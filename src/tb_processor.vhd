@@ -146,6 +146,29 @@ begin
             return res;
         end function;
 
+        function asm_alu(op : std_logic_vector(5 downto 0); rd, rs1, rs2 : integer; mask : integer) return word_t is
+            variable res : word_t := (others => '0');
+        begin
+            res(31 downto 26) := op;
+            res(25 downto 22) := std_logic_vector(to_unsigned(mask, 4));
+            res(21 downto 20) := std_logic_vector(to_unsigned(rd, 2));
+            res(19 downto 18) := std_logic_vector(to_unsigned(rs1, 2));
+            res(17 downto 16) := std_logic_vector(to_unsigned(rs2, 2));
+            res(3 downto 0)   := "0011"; -- TYPE_ALU
+            return res;
+        end function;
+
+        function asm_thread_id(dest_reg : integer; mask : integer) return word_t is
+            variable res : word_t := (others => '0');
+        begin
+            res(31 downto 26) := "001110"; -- OP_THREAD_ID
+            res(25 downto 22) := std_logic_vector(to_unsigned(mask, 4));
+            res(21 downto 20) := std_logic_vector(to_unsigned(dest_reg, 2));
+            res(19 downto 4)  := (others => '0'); 
+            res(3 downto 0)   := "0011";   -- INST_TYPE_ALU
+            return res;
+        end function;
+        
         function asm_ldi(is_hi : boolean; dest_reg : integer; imm : std_logic_vector(15 downto 0)) return word_t is
             variable res : word_t := (others => '0');
         begin
@@ -247,27 +270,33 @@ begin
         -- ====================================================================
         report "Loading instruction memory...";
         
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_ldi(false, 0, x"0000"); prog_we <= '1'; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        -- Program (Optimized - No Flushes needed with 28-cycle latency):
+        -- v1 = 0xBEEF (LDI_LO)
+        -- v1 = 0xDEADBEEF (LDI_HI)
+        -- v1.w = thread_id (Overwrites ONLY W component with unique index)
+        -- v0 = thread_id (Full broadcast)
+        -- v2 = 4 (LDI_LO)
+        -- v0 = v0 << v2 (Byte address calculation: index * 16)
+        -- store base=0x0000, offset=v0, src=v1
+        -- break
+        -- return
         
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_ldi(false, 1, x"BEEF"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        
+        prog_wr_data <= asm_ldi(false, 1, x"BEEF"); prog_we <= '1'; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_flush; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-
+        prog_wr_data <= asm_ldi(true, 1, x"DEAD"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_ldi(true,  1, x"DEAD"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        
+        prog_wr_data <= asm_thread_id(1, 8); wait until rising_edge(clk); rom_ptr := rom_ptr + 1; -- Mask 8 = W only
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_flush; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-
+        prog_wr_data <= asm_thread_id(0, 15); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_ldi(false, 2, x"0004"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+        prog_wr_data <= asm_alu(OP_ISHL, 0, 0, 2, 15); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
         prog_wr_data <= asm_store(x"0000", 0, 1); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
         prog_wr_data <= asm_break; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        
         prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
         prog_wr_data <= asm_return; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
 
@@ -276,9 +305,10 @@ begin
         -- ====================================================================
         -- 2. START PROCESSOR
         -- ====================================================================
-        report "Setting Start PC and running processor...";
-        write_csr(CSR_ADDR_START_PC, x"00000000");  -- Start PC
-        write_csr(CSR_ADDR_RUN, x"00000001");       -- Run
+        report "Setting Warp Offset, Start PC and running processor...";
+        write_csr(CSR_ADDR_WARP_OFFSET, x"00000040"); -- Warp Offset = 64
+        write_csr(CSR_ADDR_START_PC,    x"00000000"); -- Start PC
+        write_csr(CSR_ADDR_RUN,         x"00000001"); -- Run
 
         report "Waiting for processor to finish executing...";
         -- Using a short 100ns poll interval so the simulated ISR catches the IRQ quickly!
@@ -292,16 +322,21 @@ begin
         report "Taking over Avalon Bus and checking DDR3 Memory...";
         tb_takeover <= '1'; wait until rising_edge(clk);
         
-        read_memory(x"00000000");
+        for i in 0 to 31 loop
+            -- Each thread i stored to address (64 + i) * 16
+            read_memory(std_logic_vector(to_unsigned((64 + i) * 16, 32)));
 
-        report to_hstring(mem_avm_readdata(31 downto 0));
-        report to_hstring(mem_avm_readdata(63 downto 32));
-        report to_hstring(mem_avm_readdata(95 downto 64));
-        report to_hstring(mem_avm_readdata(127 downto 96));
-        assert mem_avm_readdata(31 downto 0)   = x"DEADBEEF" report "Mismatch Element 0" severity error;
-        assert mem_avm_readdata(63 downto 32)  = x"DEADBEEF" report "Mismatch Element 1" severity error;
-        assert mem_avm_readdata(95 downto 64)  = x"DEADBEEF" report "Mismatch Element 2" severity error;
-        assert mem_avm_readdata(127 downto 96) = x"DEADBEEF" report "Mismatch Element 3" severity error;
+            report "Thread " & integer'image(i) & " at Addr " & to_hstring(std_logic_vector(to_unsigned((64 + i) * 16, 32))) & 
+                   ": " & to_hstring(mem_avm_readdata(127 downto 96)) & " " &
+                          to_hstring(mem_avm_readdata(95 downto 64)) & " " &
+                          to_hstring(mem_avm_readdata(63 downto 32)) & " " &
+                          to_hstring(mem_avm_readdata(31 downto 0));
+            
+            assert mem_avm_readdata(31 downto 0)   = x"DEADBEEF" report "Mismatch Element 0 at Thread " & integer'image(i) severity error;
+            assert mem_avm_readdata(63 downto 32)  = x"DEADBEEF" report "Mismatch Element 1 at Thread " & integer'image(i) severity error;
+            assert mem_avm_readdata(95 downto 64)  = x"DEADBEEF" report "Mismatch Element 2 at Thread " & integer'image(i) severity error;
+            assert mem_avm_readdata(127 downto 96) = std_logic_vector(to_unsigned(64 + i, 32)) report "Mismatch Element 3 (Index) at Thread " & integer'image(i) severity error;
+        end loop;
 
         report "--- FULL PROCESSOR EXECUTION VERIFIED ---";
         std.env.stop;

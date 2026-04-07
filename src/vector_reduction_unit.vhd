@@ -33,7 +33,13 @@ architecture rtl of vector_reduction_unit is
     signal cond_a : vector_t;
     signal cond_b : vector_t;
 
-    signal valid_pipe : std_logic_vector(LAT_REDUCT downto 0) := (others => '0');
+    signal valid_pipe : std_logic_vector(FPU_MAX_LATENCY downto 0) := (others => '0');
+
+    -- Shared Pipeline for results to match FPU_MAX_LATENCY
+    type res_pipe_t is array (1 to FPU_MAX_LATENCY) of word_t;
+    signal res_pipe : res_pipe_t := (others => (others => '0'));
+    
+    signal raw_result : word_t;
 
     component fp_scalar_product is
         generic( latency : integer := 37 );
@@ -112,11 +118,11 @@ begin
             a1     => cond_a(1), b1 => cond_b(1),
             a2     => cond_a(2), b2 => cond_b(2),
             a3     => cond_a(3), b3 => cond_b(3),
-            q      => result
+            q      => raw_result
         );
 
     -- ========================================================================
-    -- 3. VALID SIGNAL PIPELINE
+    -- 3. VALID SIGNAL & DATA PIPELINE
     -- ========================================================================
     process(clk)
     begin
@@ -125,13 +131,27 @@ begin
                 valid_pipe <= (others => '0');
             else
                 valid_pipe(0) <= valid_in;
-                for i in 1 to LAT_REDUCT loop
+                for i in 1 to FPU_MAX_LATENCY - 1 loop
                     valid_pipe(i) <= valid_pipe(i-1);
+                end loop;
+                
+                -- Shift Data Pipeline and Inject IP result
+                for i in 1 to FPU_MAX_LATENCY loop
+                    if i = 1 then
+                        res_pipe(i) <= (others => '0');
+                    else
+                        res_pipe(i) <= res_pipe(i-1);
+                    end if;
+                    
+                    if LAT_REDUCT = i - 1 then
+                        res_pipe(i) <= raw_result;
+                    end if;
                 end loop;
             end if;
         end if;
     end process;
 
-    valid_out <= valid_pipe(LAT_REDUCT);
+    result    <= res_pipe(FPU_MAX_LATENCY);
+    valid_out <= valid_pipe(FPU_MAX_LATENCY - 1);
 
 end architecture rtl;

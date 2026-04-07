@@ -237,8 +237,8 @@ package processor_constants_pkg is
     constant LAT_FCMP_EQ    : integer := 3;
     constant LAT_I2F        : integer := 6; 
     constant LAT_F2I        : integer := 6; 
-    constant LAT_REDUCT     : integer := 37;    -- 4d scalar product
+    constant LAT_REDUCT     : integer := 16;    -- 4d scalar product (Optimized IP)
 
-    constant FPU_MAX_LATENCY : integer := 37;
+    constant FPU_MAX_LATENCY : integer := 28;
 
 end package;

@@ -43,30 +43,30 @@ entity vector_reg_file is
         clk          : in  std_logic;
         reset        : in  std_logic; 
         
-        -- PORT A: FPU Math Pipeline
-        -- Provides 3 simultaneous vector reads and 1 masked vector write
-        rs1_addr     : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-        rs2_addr     : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-        rs3_addr     : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-        rs1_data     : out vector_t;
-        rs2_data     : out vector_t;
-        rs3_data     : out vector_t;
-        
-        rd_addr_A    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-        rd_data_A    : in  vector_t;
-        write_mask_A : in  std_logic_vector(3 downto 0);
-        we_A         : in  std_logic;
+    -- PORT A: FPU Math Pipeline
+    -- Provides 3 simultaneous vector reads and 1 masked vector write
+    rs1_addr     : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+    rs2_addr     : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+    rs3_addr     : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+    rs1_data     : out vector_t;
+    rs2_data     : out vector_t;
+    rs3_data     : out vector_t;
+    
+    rd_addr_A    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+    rd_data_A    : in  vector_t;
+    write_mask_A : in  std_logic_vector(3 downto 0);
+    we_A         : in  std_logic;
 
-        -- PORT B: Memory Controller Unit (MCU)
-        -- Provides 1 vector read (for store instructions) and 1 vector write (for load instructions)
-        rd_addr_B    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-        rd_data_B    : out vector_t;
-        
-        wr_addr_B    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-        wr_data_B    : in  vector_t;
-        write_mask_B : in  std_logic_vector(3 downto 0);
-        we_B         : in  std_logic
-    );
+    -- PORT B: Memory Controller Unit (MCU)
+    -- Provides 1 vector read (for store instructions) and 1 vector write (for load instructions)
+    rd_addr_B    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+    rd_data_B    : out vector_t;
+    
+    wr_addr_B    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+    wr_data_B    : in  vector_t;
+    write_mask_B : in  std_logic_vector(3 downto 0);
+    we_B         : in  std_logic
+);
 end entity;
 
 architecture rtl of vector_reg_file is

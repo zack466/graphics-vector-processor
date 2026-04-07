@@ -166,11 +166,20 @@ begin
             result => alu_res, comp_flag => alu_comp_flag, valid_out => open
         );
 
-    wb_vrf_data_out <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_w) when wb_mux_sel_out = WB_MUX_FPU else 
-                       (red_res_scalar, red_res_scalar, red_res_scalar, red_res_scalar) when wb_mux_sel_out = WB_MUX_RED else
-                       (alu_res, alu_res, alu_res, alu_res);
-                
-    wb_prf_data_out <= (alu_comp_flag, alu_comp_flag, alu_comp_flag, alu_comp_flag) when wb_mux_sel_out = WB_MUX_ALU else
+    wb_vrf_data_out(0) <= fpu_res_x    when wb_mux_sel_out = WB_MUX_FPU else 
+                         red_res_scalar when wb_mux_sel_out = WB_MUX_RED else
+                         alu_res;
+    wb_vrf_data_out(1) <= fpu_res_y    when wb_mux_sel_out = WB_MUX_FPU else 
+                         red_res_scalar when wb_mux_sel_out = WB_MUX_RED else
+                         alu_res;
+    wb_vrf_data_out(2) <= fpu_res_z    when wb_mux_sel_out = WB_MUX_FPU else 
+                         red_res_scalar when wb_mux_sel_out = WB_MUX_RED else
+                         alu_res;
+    wb_vrf_data_out(3) <= fpu_res_w    when wb_mux_sel_out = WB_MUX_FPU else 
+                         red_res_scalar when wb_mux_sel_out = WB_MUX_RED else
+                         alu_res;
+                         
+    wb_prf_data_out <= (alu_comp_flag & alu_comp_flag & alu_comp_flag & alu_comp_flag) when wb_mux_sel_out = WB_MUX_ALU else
                        (comp_flag_w & comp_flag_z & comp_flag_y & comp_flag_x);
 
 end architecture rtl;
