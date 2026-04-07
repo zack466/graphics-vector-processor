@@ -1,6 +1,7 @@
 # Source files (Order matters: Entities/Packages must precede Architectures)
 SOURCES = vector_types.vhd \
 		  processor_constants_pkg.vhd \
+		  sync_fifo.vhd \
 		  fp_sim_entities.vhd fp_sim_arch.vhd \
 		  vector_reg_file.vhd swizzle_network.vhd \
 		  fpu_lane.vhd alu_lane.vhd instruction_issue.vhd \
@@ -45,7 +46,7 @@ WORKDIR = work/
 
 # Note: VHDL-2008 flag (-std=08) is critical for float_pkg support
 BUILDFLAGS = --std=08 --workdir=$(WORKDIR)
-RUNFLAGS = --ieee-asserts=disable --wave=$(WAVEFORM) --stop-time=100ms
+RUNFLAGS = --ieee-asserts=disable --wave=$(WAVEFORM) --stop-time=10ms
 
 # Add work directory prefix to testbench executables
 TESTBENCH_EXECS = $(addprefix $(WORKDIR), $(TESTBENCHES))

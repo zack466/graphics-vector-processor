@@ -118,6 +118,7 @@ begin
     -- MAIN STIMULUS PROCESS
     -- ========================================================================
     p_stim : process
+        variable v_rx_caught : integer := 0;
     begin
         wait for 50 ns; wait until rising_edge(clk);
         reset <= '0';
@@ -151,8 +152,18 @@ begin
 
         report "TEST 1: Triggering Full Vector Load (Memory 0x4000 -> Reg 2)...";
         dest_src_reg_idx <= "10"; is_store <= '0'; 
+        
+        -- Safely count incoming RX pulses while waiting for mem_stall to drop
+        v_rx_caught := 0;
         mem_op_valid <= '1'; wait until rising_edge(clk); mem_op_valid <= '0';
-        loop wait until rising_edge(clk); exit when mem_stall = '0'; end loop;
+        loop 
+            wait until rising_edge(clk);
+            if rx_valid = '1' then v_rx_caught := v_rx_caught + 1; end if;
+            exit when mem_stall = '0' and v_rx_caught = WARP_SIZE;
+        end loop;
+        
+        -- Allow 4 cycles for the Port B write to propagate through your VRF collision FIFO
+        wait for 40 ns; wait until rising_edge(clk);
 
         for i in 0 to WARP_SIZE - 1 loop
             rs1_addr <= std_logic_vector(to_unsigned(i * 4 + 2, 7));
@@ -185,19 +196,24 @@ begin
         report "TEST 2: Reading back Full Vector (Unmasked) to verify Overwrite vs Preservation...";
         dest_src_reg_idx <= "10"; -- Overwrite Reg 2 with readback
         is_store <= '0'; exec_mask <= x"FFFFFFFF"; -- Read all threads
+        
+        v_rx_caught := 0;
         mem_op_valid <= '1'; wait until rising_edge(clk); mem_op_valid <= '0';
-        loop wait until rising_edge(clk); exit when mem_stall = '0'; end loop;
+        loop 
+            wait until rising_edge(clk);
+            if rx_valid = '1' then v_rx_caught := v_rx_caught + 1; end if;
+            exit when mem_stall = '0' and v_rx_caught = WARP_SIZE;
+        end loop;
+        wait for 40 ns; wait until rising_edge(clk);
 
         for i in 0 to WARP_SIZE - 1 loop
             rs1_addr <= std_logic_vector(to_unsigned(i * 4 + 2, 7));
             wait until rising_edge(clk); wait until rising_edge(clk);
             
             if (i mod 2) = 0 then
-                -- Even thread: Was active in mask, should be overwritten with Reg 3 Data
                 assert rs1_data(0) = x"1111_00" & std_logic_vector(to_unsigned(i, 8)) report "OVERWRITE FAILED T" & integer'image(i) severity error;
                 assert rs1_data(1) = x"2222_00" & std_logic_vector(to_unsigned(i, 8)) report "OVERWRITE FAILED T" & integer'image(i) severity error;
             else
-                -- Odd thread: Was inactive in mask, original memory (Reg 1 Data) should be preserved
                 assert rs1_data(0) = x"AAAA_00" & std_logic_vector(to_unsigned(i, 8)) report "PRESERVATION FAILED T" & integer'image(i) severity error;
                 assert rs1_data(1) = x"BBBB_00" & std_logic_vector(to_unsigned(i, 8)) report "PRESERVATION FAILED T" & integer'image(i) severity error;
             end if;
@@ -222,8 +238,15 @@ begin
         
         -- Sequence 3: Immediately Read 0x8000 back to Reg 2
         base_addr <= x"00008000"; dest_src_reg_idx <= "10"; is_store <= '0'; 
+        
+        v_rx_caught := 0;
         mem_op_valid <= '1'; wait until rising_edge(clk); mem_op_valid <= '0';
-        loop wait until rising_edge(clk); exit when mem_stall = '0'; end loop;
+        loop 
+            wait until rising_edge(clk);
+            if rx_valid = '1' then v_rx_caught := v_rx_caught + 1; end if;
+            exit when mem_stall = '0' and v_rx_caught = WARP_SIZE;
+        end loop;
+        wait for 40 ns; wait until rising_edge(clk);
 
         for i in 0 to WARP_SIZE - 1 loop
             rs1_addr <= std_logic_vector(to_unsigned(i * 4 + 2, 7));

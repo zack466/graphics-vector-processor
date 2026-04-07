@@ -130,8 +130,9 @@ begin
             if reset = '1' then
                 valid_pipe <= (others => '0');
             else
+                -- Valid Pipeline Shift Register
                 valid_pipe(0) <= valid_in;
-                for i in 1 to FPU_MAX_LATENCY - 1 loop
+                for i in 1 to FPU_MAX_LATENCY loop
                     valid_pipe(i) <= valid_pipe(i-1);
                 end loop;
                 
@@ -152,6 +153,6 @@ begin
     end process;
 
     result    <= res_pipe(FPU_MAX_LATENCY);
-    valid_out <= valid_pipe(FPU_MAX_LATENCY - 1);
+    valid_out <= valid_pipe(FPU_MAX_LATENCY);
 
 end architecture rtl;

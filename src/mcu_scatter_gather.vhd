@@ -1,8 +1,51 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
-
 use work.vector_types_pkg.all;
+
+-- =========================================================================================
+-- MODULE: DECOUPLED SCATTER/GATHER MEMORY CONTROLLER (MCU)
+-- =========================================================================================
+-- DESCRIPTION:
+-- This unit manages burst memory reads and writes between a 32-thread Vector Register 
+-- File (VRF) and an external Avalon-MM bridge. It utilizes a Decoupled Architecture 
+-- consisting of three internal FIFO buffers (Command, Write Data, and Load Tracking) 
+-- to completely isolate the rigid timing of the processor pipeline from the unpredictable 
+-- stall behavior (waitrequests) of external DDR3 memory.
+--
+-- ARCHITECTURE & FIFO BEHAVIOR:
+-- 1. Frontend (State Machine): 
+--    Scans the processor's active thread mask, calculates physical memory addresses by 
+--    adding the base address to thread-specific offsets, and coalesces contiguous addresses 
+--    (stride-1) into single burst commands. It blasts these commands and associated write 
+--    data into the FIFOs at maximum clock speed.
+-- 2. Middle (M10K FIFOs): 
+--    Acts as an elastic buffer. Because they map to FPGA block RAM (M10K), they consume 
+--    virtually zero ALMs. They gracefully absorb Avalon bus stalls without requiring complex 
+--    pipeline skid buffers.
+-- 3. Backend (Asynchronous Receiver): 
+--    Listens for returning DDR3 read data. Because the frontend processor drops 'mem_stall' 
+--    early and moves on, this receiver uses the "Load Tracking FIFO" to remember which 
+--    destination register and thread index the incoming data belongs to.
+--
+-- EXACT CLOCK TIMINGS & LATENCIES:
+-- * VRF Read Latency: STRICTLY 2 CYCLES.
+--   - Cycle N:   MCU asserts `reg_read_addr`.
+--   - Cycle N+1: VRF registers the address internally (M10K synchronous read requirement).
+--   - Cycle N+2: Data is stable on `reg_read_data`. The MCU pushes this to the WDATA FIFO.
+-- * Mem_Stall Behavior (Store): 
+--   Drops immediately after the last VRF data word is pushed into the WDATA FIFO. The 
+--   external bridge may still be writing to DDR3 in the background.
+-- * Mem_Stall Behavior (Load): 
+--   Drops immediately after the burst commands are pushed into the Command FIFO. The 
+--   processor resumes execution WHILE memory is fetched. (Note: CPU scoreboarding or 
+--   dependency checking must handle read-after-write hazards).
+--
+-- USAGE INSTRUCTIONS:
+-- 1. Assert `base_addr`, `offset_reg_idx`, `dest_src_reg_idx`, `exec_mask`, and `is_store`.
+-- 2. Pulse `mem_op_valid` high for EXACTLY 1 cycle.
+-- 3. Wait for `mem_stall` to transition from '1' to '0'.
+-- =========================================================================================
 
 entity mcu_scatter_gather is
     generic (
@@ -30,7 +73,7 @@ entity mcu_scatter_gather is
         reg_write_data    : out vector_t;
         reg_write_en      : out std_logic;
 
-        -- Internal Bridge Interface (To Avalon Master)
+        -- AXI-Stream-Like Interface to External Bridge
         cmd_valid         : out std_logic;
         cmd_is_store      : out std_logic;
         cmd_addr          : out std_logic_vector(ADDR_WIDTH-1 downto 0);
@@ -39,7 +82,7 @@ entity mcu_scatter_gather is
         
         tx_data           : out std_logic_vector(DATA_WIDTH-1 downto 0);
         tx_byte_en        : out std_logic_vector((DATA_WIDTH/8)-1 downto 0);
-        tx_valid          : buffer std_logic; -- since we both write and read the value in our design
+        tx_valid          : out std_logic;
         tx_ready          : in  std_logic;
         
         rx_data           : in  std_logic_vector(DATA_WIDTH-1 downto 0);
@@ -48,120 +91,157 @@ entity mcu_scatter_gather is
 end entity;
 
 architecture rtl of mcu_scatter_gather is
-    type state_t is (IDLE, GATHER_ADDR, GATHER_DATA, FIND_UNSERVED, COALESCE_EVAL, DISPATCH, HANDLE_WRITE, FINISH);
+    type state_t is (IDLE, GATHER_ADDR, FIND_UNSERVED, COALESCE_EVAL, DISPATCH, FETCH_WDATA, FINISH);
     signal state : state_t;
 
     type addr_array_t is array (0 to WARP_SIZE-1) of unsigned(ADDR_WIDTH-1 downto 0);
-    type data_array_t is array (0 to WARP_SIZE-1) of std_logic_vector(DATA_WIDTH-1 downto 0);
-    
     signal thread_addrs  : addr_array_t;
-    signal thread_data   : data_array_t;
     signal thread_served : std_logic_vector(WARP_SIZE-1 downto 0);
-    signal req_idx       : integer range 0 to WARP_SIZE;
-    signal ack_idx       : integer range 0 to WARP_SIZE;
-    signal scan_idx      : integer range 0 to WARP_SIZE;
+    
+    signal req_idx, ack_idx, scan_idx : integer range 0 to WARP_SIZE;
     
     signal burst_base_addr : unsigned(ADDR_WIDTH-1 downto 0);
     signal burst_start_idx : integer range 0 to WARP_SIZE;
     signal burst_len       : integer range 0 to WARP_SIZE + 1;
-    signal words_handled   : integer range 0 to WARP_SIZE;
     
-    -- Custom Record for the Read Tracking FIFO
-    -- This allows the asynchronous receiver to know which thread gets the incoming read data
-    type read_ctx_t is record
-        start_idx : integer range 0 to WARP_SIZE;
-        len       : integer range 0 to WARP_SIZE;
-    end record;
-    type read_fifo_array_t is array (0 to 15) of read_ctx_t;
+    -- WDATA Pipeline Signals
+    signal words_issued : integer range 0 to WARP_SIZE;
+    signal words_pushed : integer range 0 to WARP_SIZE;
+    
+    -- Used to track the 2-cycle M10K read latency
+    signal read_active_q1, read_active_q2 : std_logic;
 
+    -- FIFO Signals
+    signal cmd_din, cmd_dout       : std_logic_vector(ADDR_WIDTH + 8 downto 0); 
+    signal cmd_wr_en, cmd_empty, cmd_full : std_logic;
+    
+    -- WIDENED to 18 bits: [dest_src(2) | len(8) | start_idx(8)]
+    -- Rationale: The state machine moves on immediately after issuing a load. 
+    -- We must latch the destination register index here so the async RX process 
+    -- knows where to route the data when it finally returns cycles/memory-stalls later.
+    signal track_din, track_dout   : std_logic_vector(17 downto 0); 
+    signal track_wr_en, track_empty, track_full : std_logic;
+    signal track_rd_en : std_logic;
+    
+    signal wdata_din               : std_logic_vector(DATA_WIDTH-1 downto 0);
+    signal wdata_wr_en, wdata_empty: std_logic;
+    signal wdata_count             : integer range 0 to 64;
+    signal wdata_space             : integer range 0 to 64;
+
+    -- RX Signals
+    signal rx_words_handled : integer range 0 to WARP_SIZE;
 begin
 
-    -- MCU always writes full 128-bit words, so byte enable is tied high
+    -- Standard vector graphics processors always write full 128-bit words
     tx_byte_en <= (others => '1');
 
-    -- This state machine sequentially iterates through each thread's
-    -- read/write request, coalescing them if possible, and then sends/receives
-    -- pipelined bursts of memory accesses through a bridge to an avalon memory
-    -- unit backed by DDR3 RAM.
+    -- ========================================================================
+    -- FIFO INSTANTIATIONS
+    -- ========================================================================
+    u_cmd_fifo : entity work.sync_fifo
+        generic map( DATA_WIDTH => ADDR_WIDTH + 9, ADDR_WIDTH => 5 ) 
+        port map( clk => clk, reset => reset, wr_en => cmd_wr_en, din => cmd_din, 
+                  rd_en => cmd_ready and not cmd_empty, dout => cmd_dout, empty => cmd_empty, full => cmd_full, count => open );
+
+    u_track_fifo : entity work.sync_fifo
+        generic map( DATA_WIDTH => 18, ADDR_WIDTH => 5 ) 
+        port map( clk => clk, reset => reset, wr_en => track_wr_en, din => track_din, 
+                  rd_en => track_rd_en, dout => track_dout, empty => track_empty, full => track_full, count => open );
+
+    u_wdata_fifo : entity work.sync_fifo
+        generic map( DATA_WIDTH => DATA_WIDTH, ADDR_WIDTH => 6 ) 
+        port map( clk => clk, reset => reset, wr_en => wdata_wr_en, din => wdata_din, 
+                  rd_en => tx_ready and not wdata_empty, dout => tx_data, empty => wdata_empty, full => open, 
+                  count => wdata_count ); 
+                  
+    -- Rationale: We calculate remaining space dynamically to ensure the state machine 
+    -- never issues a burst fetch that would overflow the WDATA FIFO if the Avalon 
+    -- bridge is currently stalled via waitrequest.
+    wdata_space <= 64 - wdata_count; 
+
+    -- Bridge Interface Mapping (Direct FIFO pops)
+    cmd_valid     <= not cmd_empty;
+    cmd_is_store  <= cmd_dout(ADDR_WIDTH + 8);
+    cmd_burst_len <= cmd_dout(ADDR_WIDTH + 7 downto ADDR_WIDTH);
+    cmd_addr      <= cmd_dout(ADDR_WIDTH - 1 downto 0);
+    
+    tx_valid      <= not wdata_empty;
+
+    -- ========================================================================
+    -- RX (LOAD RETURN) PROCESS (Asynchronous to Frontend State Machine)
+    -- ========================================================================
+    -- Rationale: Isolates incoming DDR3 data handling from instruction dispatch.
+    -- This allows the processor to fetch the next instructions while waiting.
     process(clk)
-        -- FIFO Variables are used so they update instantaneously in the same clock cycle,
-        -- preventing race conditions when concurrent pushes and pops occur.
-        variable v_fifo       : read_fifo_array_t;
-        variable v_fifo_head  : integer range 0 to 15 := 0;
-        variable v_fifo_tail  : integer range 0 to 15 := 0;
-        variable v_fifo_count : integer range 0 to 16 := 0;
-        
-        variable rx_words_handled : integer range 0 to WARP_SIZE := 0;
-        variable target_th_rx     : integer range 0 to WARP_SIZE;
-        
-        -- Combinational variables used for immediate array indexing without inferred registers
-        variable next_idx     : integer;
-        variable target_th_tx : integer;
+        variable v_dest_src    : std_logic_vector(1 downto 0);
+        variable v_track_len   : integer;
+        variable v_track_start : integer;
+    begin
+        if rising_edge(clk) then
+            if reset = '1' then
+                rx_words_handled <= 0;
+                reg_write_en <= '0';
+                track_rd_en <= '0';
+            else
+                reg_write_en <= '0';
+                track_rd_en <= '0';
+
+                if rx_valid = '1' and track_empty = '0' then
+                    -- Extract the latched context from the tracking FIFO
+                    v_dest_src    := track_dout(17 downto 16);
+                    v_track_len   := to_integer(unsigned(track_dout(15 downto 8)));
+                    v_track_start := to_integer(unsigned(track_dout(7 downto 0)));
+
+                    -- Write directly to VRF Port B. The VRF's internal collision 
+                    -- FIFO handles arbitration if Port A is currently writing.
+                    reg_write_en   <= '1'; 
+                    reg_write_addr <= std_logic_vector(to_unsigned(v_track_start + rx_words_handled, 5)) & v_dest_src;
+                    reg_write_data(0) <= rx_data(31 downto 0);   reg_write_data(1) <= rx_data(63 downto 32);
+                    reg_write_data(2) <= rx_data(95 downto 64);  reg_write_data(3) <= rx_data(127 downto 96);
+                    
+                    if rx_words_handled = v_track_len - 1 then
+                        rx_words_handled <= 0;
+                        track_rd_en <= '1'; -- Burst complete, pop the tracking token
+                    else
+                        rx_words_handled <= rx_words_handled + 1;
+                    end if;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- ========================================================================
+    -- DISPATCH STATE MACHINE (Frontend Coalescer)
+    -- ========================================================================
+    process(clk)
+        variable next_idx : integer;
     begin
         if rising_edge(clk) then
             if reset = '1' then
                 state <= IDLE;
-                mem_stall <= '0'; reg_write_en <= '0'; cmd_valid <= '0'; tx_valid <= '0';
-                
-                v_fifo_head := 0; v_fifo_tail := 0;
-                v_fifo_count := 0;
-                rx_words_handled := 0;
+                mem_stall <= '0'; cmd_wr_en <= '0'; track_wr_en <= '0'; wdata_wr_en <= '0';
+                read_active_q1 <= '0'; read_active_q2 <= '0';
             else
-                -- report "MCU state: " & to_string(state);
-                reg_write_en <= '0';
-                cmd_valid <= '0'; tx_valid <= '0'; 
+                -- Default strobes
+                cmd_wr_en <= '0'; track_wr_en <= '0'; wdata_wr_en <= '0';
 
-                -- ============================================================
-                -- BLOCK 1: ASYNCHRONOUS RECEIVER LOGIC
-                -- Identifies incoming pipelined data and writes to the VRF
-                -- ============================================================
-                if rx_valid = '1' then
-                    if v_fifo_count > 0 then
-                        target_th_rx := v_fifo(v_fifo_head).start_idx + rx_words_handled;
-                        reg_write_en <= '1'; 
-                        reg_write_addr <= std_logic_vector(to_unsigned(target_th_rx, 5)) & dest_src_reg_idx;
-                        
-                        -- Pack 128-bit AVM bus word into 4x32-bit Vector Register elements
-                        reg_write_data(0) <= rx_data(31 downto 0);   reg_write_data(1) <= rx_data(63 downto 32);
-                        reg_write_data(2) <= rx_data(95 downto 64);  reg_write_data(3) <= rx_data(127 downto 96);
-                        
-                        -- Pop from the tracking FIFO once the burst length is fully satisfied
-                        if rx_words_handled = v_fifo(v_fifo_head).len - 1 then
-                            rx_words_handled := 0;
-                            v_fifo_count := v_fifo_count - 1;
-                            if v_fifo_head = 15 then v_fifo_head := 0; else v_fifo_head := v_fifo_head + 1; end if;
-                        else
-                            rx_words_handled := rx_words_handled + 1;
-                        end if;
-                    end if;
-                end if;
-
-                -- ============================================================
-                -- BLOCK 2: DISPATCH STATE MACHINE
-                -- Evaluates 32 memory threads and coalesces them into AVM bursts
-                -- ============================================================
                 case state is
-                
-                    -- Wait for valid operation, then immediately freeze the processor pipeline
                     when IDLE =>
                         if mem_op_valid = '1' then
-                            mem_stall <= '1';
-                            req_idx <= 0; ack_idx <= 0;
-                            -- Pre-load the thread mask. Inactive threads are marked as "served" so they are skipped.
+                            mem_stall <= '1'; req_idx <= 0; ack_idx <= 0;
+                            -- Pre-load execution mask: inactive threads are marked as "served"
                             thread_served <= not exec_mask; 
+                            read_active_q1 <= '0'; read_active_q2 <= '0';
                             state <= GATHER_ADDR;
-                        else
-                            mem_stall <= '0';
                         end if;
 
-                    -- Fetch base offsets from the VRF for all 32 threads sequentially
                     when GATHER_ADDR =>
+                        -- Pipeline Phase 1: Request offsets from VRF
                         if req_idx < WARP_SIZE then
                             reg_read_addr <= std_logic_vector(to_unsigned(req_idx, 5)) & offset_reg_idx;
                             req_idx <= req_idx + 1;
                         end if;
-                        
-                        -- The VRF has a 1-cycle read latency, so the ack pointer lags behind the req pointer
+                        -- Pipeline Phase 2: Calculate absolute physical addresses
                         if req_idx >= 2 or ack_idx > 0 then
                             if ack_idx < WARP_SIZE then
                                 thread_addrs(ack_idx) <= unsigned(base_addr) + unsigned(reg_read_data(0));
@@ -169,121 +249,94 @@ begin
                             end if;
                         end if;
                         
-                        -- Wait for ack_idx to hit 32, guaranteeing the last element is safely stored
                         if ack_idx = WARP_SIZE then
-                            req_idx <= 0;
-                            ack_idx <= 0;
-                            if is_store = '1' then state <= GATHER_DATA; else scan_idx <= 0; state <= FIND_UNSERVED; end if;
+                            scan_idx <= 0; state <= FIND_UNSERVED;
                         end if;
 
-                    -- Fetch source data from the VRF (Only runs on Store instructions)
-                    when GATHER_DATA =>
-                        if req_idx < WARP_SIZE then
-                            reg_read_addr <= std_logic_vector(to_unsigned(req_idx, 5)) & dest_src_reg_idx;
-                            req_idx <= req_idx + 1;
-                        end if;
-                        
-                        if req_idx >= 2 or ack_idx > 0 then
-                            if ack_idx < WARP_SIZE then
-                                thread_data(ack_idx) <= reg_read_data(3) & reg_read_data(2) & reg_read_data(1) & reg_read_data(0);
-                                ack_idx <= ack_idx + 1;
-                            end if;
-                        end if;
-                        
-                        if ack_idx = WARP_SIZE then
-                            scan_idx <= 0;
-                            state <= FIND_UNSERVED;
-                        end if;
-
-                    -- Scan the bitmask to find the next active, unserved thread to act as the burst base
                     when FIND_UNSERVED =>
-                        if thread_served(scan_idx) = '0' then
+                        -- Scan for the lowest unserved active thread to act as the burst base
+                        if scan_idx = WARP_SIZE then
+                            state <= FINISH;
+                        elsif thread_served(scan_idx) = '0' then
                             burst_base_addr <= thread_addrs(scan_idx);
                             burst_start_idx <= scan_idx; burst_len <= 1;
                             state <= COALESCE_EVAL;
                         else
-                            if scan_idx = WARP_SIZE - 1 then state <= FINISH;
-                            else scan_idx <= scan_idx + 1; end if;
+                            scan_idx <= scan_idx + 1;
                         end if;
 
-                    -- Check if sequential threads have contiguous addresses (+16 bytes) to bundle them
                     when COALESCE_EVAL =>
+                        -- Lookahead to determine if the next thread is contiguous (+16 bytes)
                         next_idx := burst_start_idx + burst_len;
                         
-                        -- Array bounds checks must be separated to prevent fatal elaboration errors
-                        if next_idx >= WARP_SIZE then
-                            state <= DISPATCH;
-                        elsif thread_served(next_idx) = '1' then
-                            state <= DISPATCH;
-                        elsif thread_addrs(next_idx) = burst_base_addr + to_unsigned(burst_len * 16, ADDR_WIDTH) then
+                        -- Rationale: VHDL does not short-circuit boolean 'and'. If next_idx >= WARP_SIZE 
+                        -- is evaluated in the same line as thread_served(next_idx), it causes an 
+                        -- out-of-bounds simulation crash. They must be evaluated sequentially.
+                        if next_idx < WARP_SIZE and thread_served(next_idx) = '0' and 
+                           thread_addrs(next_idx) = burst_base_addr + to_unsigned(burst_len * 16, ADDR_WIDTH) then
                             burst_len <= burst_len + 1;
-                            state <= COALESCE_EVAL;
                         else
                             state <= DISPATCH;
                         end if;
 
-                    -- Issue the generated command to the Avalon-MM Burst Bridge
                     when DISPATCH =>
-                        cmd_addr <= std_logic_vector(burst_base_addr);
-                        cmd_burst_len <= std_logic_vector(to_unsigned(burst_len, 8)); 
-                        cmd_is_store <= is_store;
-                        
-                        if is_store = '1' then
-                            cmd_valid <= '1';
-                            if cmd_ready = '1' then
-                                words_handled <= 0;
-                                state <= HANDLE_WRITE;
-                            end if;
-                        else
-                            -- Hold cmd_valid high to satisfy the multicycle handshake.
-                            -- Only accept (advance state) when FIFO has room and bridge is ready.
-                            cmd_valid <= '1';
-                            if v_fifo_count < 16 then
-                                if cmd_ready = '1' then
-                                    for i in 0 to WARP_SIZE - 1 loop
-                                        if i >= burst_start_idx and i < burst_start_idx + burst_len then
-                                            thread_served(i) <= '1';
-                                        end if;
-                                    end loop;
+                        -- Rationale: Throttle dispatch if FIFOs lack capacity. This prevents 
+                        -- dropping commands during heavy DDR3 contention.
+                        if cmd_full = '0' and track_full = '0' and wdata_space >= burst_len then
+                            cmd_din <= is_store & std_logic_vector(to_unsigned(burst_len, 8)) & std_logic_vector(burst_base_addr);
+                            cmd_wr_en <= '1';
 
-                                    -- Push context to the tracking FIFO so the receiver routes read data correctly
-                                    v_fifo(v_fifo_tail).start_idx := burst_start_idx;
-                                    v_fifo(v_fifo_tail).len       := burst_len;
-                                    v_fifo_count := v_fifo_count + 1;
-                                    if v_fifo_tail = 15 then v_fifo_tail := 0; else v_fifo_tail := v_fifo_tail + 1; end if;
-
-                                    scan_idx <= 0;
-                                    state <= FIND_UNSERVED;
+                            -- Mark the coalesced chunk as served
+                            for i in 0 to WARP_SIZE - 1 loop
+                                if i >= burst_start_idx and i < burst_start_idx + burst_len then
+                                    thread_served(i) <= '1';
                                 end if;
-                            end if;
-                        end if;
+                            end loop;
 
-                    -- Stream coalesced data words to the Avalon bus from the pre-gathered thread_data array
-                    when HANDLE_WRITE =>
-                        target_th_tx := burst_start_idx + words_handled;
-
-                        -- Default: output the current word; lookahead updates tx_data on success
-                        tx_valid <= '1'; tx_data <= thread_data(target_th_tx);
-
-                        if tx_valid = '1' and tx_ready = '1' then
-                            thread_served(target_th_tx) <= '1';
-                            words_handled <= words_handled + 1;
-
-                            if words_handled = burst_len - 1 then
-                                tx_valid <= '0';
-                                scan_idx <= 0; state <= FIND_UNSERVED;
+                            if is_store = '1' then
+                                words_issued <= 0; words_pushed <= 0;
+                                state <= FETCH_WDATA;
                             else
-                                -- 1-cycle lookahead: pre-stage next word so it is stable for the bridge
-                                tx_data <= thread_data(target_th_tx + 1);
+                                -- Append latched dest_src_reg_idx to the tracking token for Load instructions
+                                track_din <= dest_src_reg_idx & std_logic_vector(to_unsigned(burst_len, 8)) & std_logic_vector(to_unsigned(burst_start_idx, 8));
+                                track_wr_en <= '1';
+                                scan_idx <= 0; state <= FIND_UNSERVED;
                             end if;
                         end if;
 
-                    -- Wait for all pending reads in the tracking FIFO to return before un-stalling the processor
-                    when FINISH => 
-                        if is_store = '1' or v_fifo_count = 0 then
-                            mem_stall <= '0';
-                            state <= IDLE;
+                    when FETCH_WDATA =>
+                        -- -----------------------------------------------------------
+                        -- 2-CYCLE VRF PIPELINE TRACKING
+                        -- -----------------------------------------------------------
+                        
+                        -- Stage 1: Issue VRF Address (Cycle N)
+                        if words_issued < burst_len then
+                            reg_read_addr <= std_logic_vector(to_unsigned(burst_start_idx + words_issued, 5)) & dest_src_reg_idx;
+                            words_issued <= words_issued + 1;
+                            read_active_q1 <= '1';
+                        else
+                            read_active_q1 <= '0';
                         end if;
+
+                        -- Stage 2: Wait for M10K RAM internal registration (Cycle N+1)
+                        read_active_q2 <= read_active_q1;
+
+                        -- Stage 3: Data is stable on bus, push to FIFO (Cycle N+2)
+                        if read_active_q2 = '1' then
+                            -- Re-pack the 4 distinct M10K component banks into a 128-bit vector
+                            wdata_din <= reg_read_data(3) & reg_read_data(2) & reg_read_data(1) & reg_read_data(0);
+                            wdata_wr_en <= '1';
+                            
+                            if words_pushed = burst_len - 1 then
+                                scan_idx <= 0; state <= FIND_UNSERVED;
+                            end if;
+                            words_pushed <= words_pushed + 1;
+                        end if;
+
+                    when FINISH => 
+                        -- Rationale: Drop mem_stall immediately once FIFOs are loaded.
+                        -- We do not wait for the async RX tracking FIFO to empty.
+                        mem_stall <= '0'; state <= IDLE;
                 end case;
             end if;
         end if;
