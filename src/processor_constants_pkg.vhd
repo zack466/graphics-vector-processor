@@ -17,6 +17,16 @@ package processor_constants_pkg is
     constant INST_TYPE_SYS  : std_logic_vector(3 downto 0) := "0110"; -- System & Environmens
 
     -- ========================================================================
+    -- SWIZZLE MODES
+    -- ========================================================================
+    constant SWIZ_PASS      : std_logic_vector(2 downto 0) := "000"; -- Passthrough (.xyzw)
+    constant SWIZ_X         : std_logic_vector(2 downto 0) := "100"; -- Splat X (.xxxx)
+    constant SWIZ_Y         : std_logic_vector(2 downto 0) := "101"; -- Splat Y (.yyyy)
+    constant SWIZ_Z         : std_logic_vector(2 downto 0) := "110"; -- Splat Z (.zzzz)
+    constant SWIZ_W         : std_logic_vector(2 downto 0) := "111"; -- Splat W/A (.wwww/.aaaa)
+
+
+    -- ========================================================================
     -- FPU MATH OPCODES [31:26] (When Type == 0000)
     -- ========================================================================
     constant OP_NOP     : std_logic_vector(5 downto 0) := "000000"; 

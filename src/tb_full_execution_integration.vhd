@@ -221,9 +221,9 @@ begin
         decoder_exec_ctrl.rs1_addr_local <= "00"; decoder_exec_ctrl.rs2_addr_local <= "00";
         decoder_exec_ctrl.rs3_addr_local <= "00"; decoder_exec_ctrl.rd_addr_local <= "00"; 
         decoder_exec_ctrl.write_mask <= "0000";
-        decoder_exec_ctrl.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        decoder_exec_ctrl.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        decoder_exec_ctrl.swiz_sel_c <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        decoder_exec_ctrl.swiz_sel_a <= SWIZ_PASS;
+        decoder_exec_ctrl.swiz_sel_b <= SWIZ_PASS;
+        decoder_exec_ctrl.swiz_sel_c <= SWIZ_PASS;
         decoder_exec_ctrl.wb_mux_sel <= WB_MUX_FPU; 
         decoder_exec_ctrl.cmp_invert <= '0'; decoder_exec_ctrl.cmp_swap <= '0';
         decoder_exec_ctrl.is_logic_op <= '0'; decoder_exec_ctrl.vrf_we <= '0'; decoder_exec_ctrl.prf_we <= '0';
@@ -323,7 +323,7 @@ begin
         -- ====================================================================
         -- PHASE 6 & 7: Swizzle + Partial Mask FPU Test (Overwrites v2.xz)
         -- ====================================================================
-        report ">> PHASE 6: Issuing OP_FMUL (v2.xz = v0.yxxa * v0.zzyy)";
+        report ">> PHASE 6: Issuing OP_FMUL (v2.xz = v0.yyyy * v0.zzzz)";
         decoder_inst_type <= INST_TYPE_FPU;
         decoder_exec_ctrl.opcode <= OP_FMUL;
         decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
@@ -331,8 +331,9 @@ begin
         decoder_exec_ctrl.rd_addr_local  <= "10"; -- Overwrite v2
         decoder_exec_ctrl.write_mask     <= "0101"; -- Write X and Z only
         
-        decoder_exec_ctrl.swiz_sel_a <= (0 => "01", 1 => "00", 2 => "00", 3 => "11");
-        decoder_exec_ctrl.swiz_sel_b <= (0 => "10", 1 => "10", 2 => "01", 3 => "01");
+        -- Note: Custom shuffles no longer supported. Fallback to pass-through/splats.
+        decoder_exec_ctrl.swiz_sel_a <= SWIZ_Y;
+        decoder_exec_ctrl.swiz_sel_b <= SWIZ_Z;
         
         decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_FPU;
         decoder_exec_ctrl.vrf_we         <= '1';
@@ -347,7 +348,7 @@ begin
             
             assert to_real(to_float(mcu_rd_data(0))) = real((i * 4 + 1) * (i * 4 + 2)) report "P7 X mismatch (Written)!" severity error;
             assert to_real(to_float(mcu_rd_data(1))) = real(i * 4 + 1) + 10.0 report "P7 Y mismatch (Preserved)!" severity error;
-            assert to_real(to_float(mcu_rd_data(2))) = real((i * 4 + 0) * (i * 4 + 1)) report "P7 Z mismatch (Written)!" severity error;
+            assert to_real(to_float(mcu_rd_data(2))) = real((i * 4 + 1) * (i * 4 + 2)) report "P7 Z mismatch (Written)!" severity error;
             assert to_real(to_float(mcu_rd_data(3))) = real(i * 4 + 3) + 10.0 report "P7 A mismatch (Preserved)!" severity error;
             wait until rising_edge(clk);
         end loop;
@@ -355,7 +356,7 @@ begin
         -- ====================================================================
         -- PHASE 8 & 9: Swizzle + Partial Mask Reduction Test (Overwrites v3.y)
         -- ====================================================================
-        report ">> PHASE 8: Issuing RED_MODE_SUM (v3.y = SUM(v0.yyzz))";
+        report ">> PHASE 8: Issuing RED_MODE_SUM (v3.y = SUM(v0.yyyy))";
         decoder_inst_type <= INST_TYPE_RED;
         decoder_red_mode  <= RED_MODE_SUM;
         decoder_red_mask  <= "1111"; 
@@ -366,7 +367,7 @@ begin
         decoder_exec_ctrl.rd_addr_local  <= "11"; -- Overwrite v3
         decoder_exec_ctrl.write_mask     <= "0010"; -- Write Y only
         
-        decoder_exec_ctrl.swiz_sel_a <= (0 => "01", 1 => "01", 2 => "10", 3 => "10");
+        decoder_exec_ctrl.swiz_sel_a <= SWIZ_Y;
         decoder_exec_ctrl.wb_mux_sel <= WB_MUX_RED;
         decoder_exec_ctrl.vrf_we     <= '1';
         
@@ -379,7 +380,7 @@ begin
             wait until rising_edge(clk); wait until falling_edge(clk);
             
             assert to_real(to_float(mcu_rd_data(0))) = real(160 * i + 60) report "P9 X mismatch (Preserved)!" severity error;
-            assert to_real(to_float(mcu_rd_data(1))) = real(16 * i + 6) report "P9 Y mismatch (Written)!" severity error;
+            assert to_real(to_float(mcu_rd_data(1))) = real(16 * i + 4) report "P9 Y mismatch (Written)!" severity error;
             assert to_real(to_float(mcu_rd_data(2))) = real(160 * i + 60) report "P9 Z mismatch (Preserved)!" severity error;
             assert to_real(to_float(mcu_rd_data(3))) = real(160 * i + 60) report "P9 A mismatch (Preserved)!" severity error;
             wait until rising_edge(clk);
@@ -397,8 +398,8 @@ begin
         decoder_exec_ctrl.write_mask     <= "1111";
         
         -- Reset swizzles to default identity pass-through
-        decoder_exec_ctrl.swiz_sel_a <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
-        decoder_exec_ctrl.swiz_sel_b <= (0 => "00", 1 => "01", 2 => "10", 3 => "11");
+        decoder_exec_ctrl.swiz_sel_a <= SWIZ_PASS;
+        decoder_exec_ctrl.swiz_sel_b <= SWIZ_PASS;
         
         decoder_exec_ctrl.vrf_we         <= '0';
         decoder_exec_ctrl.prf_we         <= '1'; 
@@ -536,8 +537,8 @@ begin
         decoder_exec_ctrl.write_mask     <= "1111";
         
         -- Swizzle A routes .x to ALU. Swizzle B routes .y to ALU.
-        decoder_exec_ctrl.swiz_sel_a <= (0 => "00", 1 => "00", 2 => "00", 3 => "00");
-        decoder_exec_ctrl.swiz_sel_b <= (0 => "01", 1 => "01", 2 => "01", 3 => "01");
+        decoder_exec_ctrl.swiz_sel_a <= SWIZ_X;
+        decoder_exec_ctrl.swiz_sel_b <= SWIZ_Y;
         
         decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_ALU;
         decoder_exec_ctrl.vrf_we         <= '0';
@@ -563,8 +564,8 @@ begin
         report ">> PHASE 20: Issuing OP_ICMP_SLT (p3 = v3.y < v3.x)";
         
         -- Swap the swizzles so ALU evaluates 48879 < (i*4)
-        decoder_exec_ctrl.swiz_sel_a <= (0 => "01", 1 => "01", 2 => "01", 3 => "01");
-        decoder_exec_ctrl.swiz_sel_b <= (0 => "00", 1 => "00", 2 => "00", 3 => "00");
+        decoder_exec_ctrl.swiz_sel_a <= SWIZ_Y;
+        decoder_exec_ctrl.swiz_sel_b <= SWIZ_X;
         
         decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
         

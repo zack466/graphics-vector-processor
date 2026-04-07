@@ -15,12 +15,12 @@ architecture sim of tb_swizzle_network is
 
     signal vec_a_in   : vector_t := (others => (others => '0'));
     signal prf_a_in   : std_logic_vector(3 downto 0) := "0000";
-    signal swiz_sel_a : swizzle_sel_t := (others => "00");
+    signal swiz_sel_a : swizzle_sel_t := SWIZ_PASS;
     signal vec_a_out  : vector_t;
 
     signal vec_b_in   : vector_t := (others => (others => '0'));
     signal prf_b_in   : std_logic_vector(3 downto 0) := "0000";
-    signal swiz_sel_b : swizzle_sel_t := (others => "00");
+    signal swiz_sel_b : swizzle_sel_t := SWIZ_PASS;
     signal vec_b_out  : vector_t;
 
 begin
@@ -63,12 +63,12 @@ begin
         wait for 10 ns;
 
         -- ====================================================================
-        -- Test 1: Vector A Pass-through, Vector B Reverse (MATH MODE)
+        -- Test 1: Vector A Pass-through, Vector B Pass-through (MATH MODE)
         -- Vector A Expected: X, Y, Z, A
-        -- Vector B Expected: A, Z, Y, X
+        -- Vector B Expected: A, B, C, D
         -- ====================================================================
-        swiz_sel_a(0) <= "00"; swiz_sel_a(1) <= "01"; swiz_sel_a(2) <= "10"; swiz_sel_a(3) <= "11";
-        swiz_sel_b(0) <= "11"; swiz_sel_b(1) <= "10"; swiz_sel_b(2) <= "01"; swiz_sel_b(3) <= "00";
+        swiz_sel_a <= SWIZ_PASS;
+        swiz_sel_b <= SWIZ_PASS;
         wait for 10 ns;
         
         assert vec_a_out(0) = x"11111111" report "T1 A(0) Failed" severity error;
@@ -76,18 +76,18 @@ begin
         assert vec_a_out(2) = x"33333333" report "T1 A(2) Failed" severity error;
         assert vec_a_out(3) = x"44444444" report "T1 A(3) Failed" severity error;
         
-        assert vec_b_out(0) = x"DDDDDDDD" report "T1 B(0) Failed" severity error;
-        assert vec_b_out(1) = x"CCCCCCCC" report "T1 B(1) Failed" severity error;
-        assert vec_b_out(2) = x"BBBBBBBB" report "T1 B(2) Failed" severity error;
-        assert vec_b_out(3) = x"AAAAAAAA" report "T1 B(3) Failed" severity error;
+        assert vec_b_out(0) = x"AAAAAAAA" report "T1 B(0) Failed" severity error;
+        assert vec_b_out(1) = x"BBBBBBBB" report "T1 B(1) Failed" severity error;
+        assert vec_b_out(2) = x"CCCCCCCC" report "T1 B(2) Failed" severity error;
+        assert vec_b_out(3) = x"DDDDDDDD" report "T1 B(3) Failed" severity error;
 
         -- ====================================================================
         -- Test 2: Vector A Broadcast X, Vector B Broadcast Y (MATH MODE)
         -- Vector A Expected: X, X, X, X
         -- Vector B Expected: Y, Y, Y, Y
         -- ====================================================================
-        swiz_sel_a(0) <= "00"; swiz_sel_a(1) <= "00"; swiz_sel_a(2) <= "00"; swiz_sel_a(3) <= "00";
-        swiz_sel_b(0) <= "01"; swiz_sel_b(1) <= "01"; swiz_sel_b(2) <= "01"; swiz_sel_b(3) <= "01";
+        swiz_sel_a <= SWIZ_X;
+        swiz_sel_b <= SWIZ_Y;
         wait for 10 ns;
         
         assert vec_a_out(0) = x"11111111" report "T2 A(0) Failed" severity error;
@@ -101,22 +101,22 @@ begin
         assert vec_b_out(3) = x"BBBBBBBB" report "T2 B(3) Failed" severity error;
 
         -- ====================================================================
-        -- Test 3: Custom Shuffles (MATH MODE)
-        -- Vector A Expected: Y, Y, A, X
-        -- Vector B Expected: Z, X, X, A
+        -- Test 3: Vector A Broadcast Z, Vector B Broadcast W (MATH MODE)
+        -- Vector A Expected: Z, Z, Z, Z
+        -- Vector B Expected: W, W, W, W
         -- ====================================================================
-        swiz_sel_a(0) <= "01"; swiz_sel_a(1) <= "01"; swiz_sel_a(2) <= "11"; swiz_sel_a(3) <= "00";
-        swiz_sel_b(0) <= "10"; swiz_sel_b(1) <= "00"; swiz_sel_b(2) <= "00"; swiz_sel_b(3) <= "11";
+        swiz_sel_a <= SWIZ_Z;
+        swiz_sel_b <= SWIZ_W;
         wait for 10 ns;
         
-        assert vec_a_out(0) = x"22222222" report "T3 A(0) Failed" severity error;
-        assert vec_a_out(1) = x"22222222" report "T3 A(1) Failed" severity error;
-        assert vec_a_out(2) = x"44444444" report "T3 A(2) Failed" severity error;
-        assert vec_a_out(3) = x"11111111" report "T3 A(3) Failed" severity error;
+        assert vec_a_out(0) = x"33333333" report "T3 A(0) Failed" severity error;
+        assert vec_a_out(1) = x"33333333" report "T3 A(1) Failed" severity error;
+        assert vec_a_out(2) = x"33333333" report "T3 A(2) Failed" severity error;
+        assert vec_a_out(3) = x"33333333" report "T3 A(3) Failed" severity error;
         
-        assert vec_b_out(0) = x"CCCCCCCC" report "T3 B(0) Failed" severity error;
-        assert vec_b_out(1) = x"AAAAAAAA" report "T3 B(1) Failed" severity error;
-        assert vec_b_out(2) = x"AAAAAAAA" report "T3 B(2) Failed" severity error;
+        assert vec_b_out(0) = x"DDDDDDDD" report "T3 B(0) Failed" severity error;
+        assert vec_b_out(1) = x"DDDDDDDD" report "T3 B(1) Failed" severity error;
+        assert vec_b_out(2) = x"DDDDDDDD" report "T3 B(2) Failed" severity error;
         assert vec_b_out(3) = x"DDDDDDDD" report "T3 B(3) Failed" severity error;
 
         -- ====================================================================
@@ -125,8 +125,8 @@ begin
         -- PRF B: "1100" -> X=0, Y=0, Z=1, A=1
         -- ====================================================================
         is_logic_op <= '1'; -- Switches Mux to PRF mode
-        swiz_sel_a(0) <= "00"; swiz_sel_a(1) <= "01"; swiz_sel_a(2) <= "10"; swiz_sel_a(3) <= "11";
-        swiz_sel_b(0) <= "00"; swiz_sel_b(1) <= "01"; swiz_sel_b(2) <= "10"; swiz_sel_b(3) <= "11";
+        swiz_sel_a <= SWIZ_PASS;
+        swiz_sel_b <= SWIZ_PASS;
         wait for 10 ns;
 
         -- Verify vector A is overwritten by zero-padded PRF A
@@ -146,8 +146,8 @@ begin
         -- Broadcast PRF A.x (1) to all. 
         -- Broadcast PRF B.y (0) to all.
         -- ====================================================================
-        swiz_sel_a(0) <= "00"; swiz_sel_a(1) <= "00"; swiz_sel_a(2) <= "00"; swiz_sel_a(3) <= "00";
-        swiz_sel_b(0) <= "01"; swiz_sel_b(1) <= "01"; swiz_sel_b(2) <= "01"; swiz_sel_b(3) <= "01";
+        swiz_sel_a <= SWIZ_X;
+        swiz_sel_b <= SWIZ_Y;
         wait for 10 ns;
 
         -- Verify PRF Swizzling applied correctly

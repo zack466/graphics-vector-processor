@@ -21,3 +21,6 @@ When writing designs/testbenches in VHDL, always abide by these guideleines:
 - Always obey strict synchronous design principles. Testbench code should synchronize itself using `wait until rising_edge(clk)` and should never have arbitrary waits like `wait until 1 ns`.
 - Always add brief, informative comments for each declared input/output/signal. Also add comments for all processes or statements that do something non-obvious.
 - Otherwise, try to follow the style of the existing code for naming and general style
+
+## Development Process
+After making changes or fixing a bug, log your progress and append it to a file called `journal.md` in the project's root directory.

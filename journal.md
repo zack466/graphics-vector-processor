@@ -71,3 +71,37 @@
   Verification:
   - `make test-tb_processor` confirms that `THREAD_ID` is correctly calculated as `warp_offset + lane_id` and stored to memory at thread-indexed addresses.
 
+
+  ---
+  Swizzle Unit Optimization
+
+  To reduce FPGA routing complexity, the swizzle network has been rewritten to support a simplified set of modes instead of arbitrary component shuffling. The new modes support standard vector operations and common scalar broadcasting tasks.
+
+  vector_types.vhd
+  - Redefined `swizzle_sel_t` from an array of four 2-bit vectors to a single 3-bit logic vector (`std_logic_vector(2 downto 0)`).
+
+  processor_constants_pkg.vhd
+  - Added new `SWIZ_X` constants:
+    - `SWIZ_PASS` = "000" (.xyzw / passthrough)
+    - `SWIZ_X`    = "100" (.xxxx / splat X)
+    - `SWIZ_Y`    = "101" (.yyyy / splat Y)
+    - `SWIZ_Z`    = "110" (.zzzz / splat Z)
+    - `SWIZ_W`    = "111" (.wwww / splat W)
+
+  instruction_decoder.vhd
+  - Updated swizzle parsing logic to extract 3-bit sections of the instruction word instead of 8 bits.
+  - Set `SWIZ_PASS` as the default value across all pipeline records.
+
+  swizzle_network.vhd
+  - Replaced the arbitrary 4-component loop-based multiplexer with simple `case` statements using the predefined 3-bit swizzle types. The unit now outputs either the original vector or broadcasts a single component to all four elements.
+
+  Verification:
+  - Updated `tb_swizzle_network` and integration testbenches (`tb_full_execution_integration`, `tb_issuer_writeback_integration`, `tb_instruction_issue`) to use the new `SWIZ_*` constants and to avoid invalid shuffle assertions.
+  - Confirmed `make test-all` passes with the updated swizzle framework.
+
+  ---
+  Integration Test Fixes
+
+  Fixed `tb_full_execution_integration` to correctly verify the new swizzle modes:
+  - Phase 6's verification updated since `.xz = v0.yxxa * v0.zzyy` was removed. It now tests `.xz = v0.yyyy * v0.zzzz`. The expected Z component check was adjusted to match `(i * 4 + 1) * (i * 4 + 2)`.
+  - Phase 8's reduction assertion updated. Instead of testing `SUM(v0.yyzz)`, it now tests `SUM(v0.yyyy)`. The expected result checks were adjusted to match `4 * v0.y = 16*i + 4` instead of `16*i + 6`.

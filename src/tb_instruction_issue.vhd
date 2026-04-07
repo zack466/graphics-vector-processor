@@ -74,9 +74,9 @@ begin
         exec_ctrl_in.rs2_addr_local <= "00";
         exec_ctrl_in.rs3_addr_local <= "00";
         exec_ctrl_in.rd_addr_local  <= "00";
-        exec_ctrl_in.swiz_sel_a     <= ("00", "00", "00", "00");
-        exec_ctrl_in.swiz_sel_b     <= ("00", "00", "00", "00");
-        exec_ctrl_in.swiz_sel_c     <= ("00", "00", "00", "00");
+        exec_ctrl_in.swiz_sel_a     <= SWIZ_PASS;
+        exec_ctrl_in.swiz_sel_b     <= SWIZ_PASS;
+        exec_ctrl_in.swiz_sel_c     <= SWIZ_PASS;
         exec_ctrl_in.write_mask     <= "0000";
         exec_ctrl_in.cmp_invert     <= '0';
         exec_ctrl_in.cmp_swap       <= '0';

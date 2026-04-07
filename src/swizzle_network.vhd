@@ -45,11 +45,33 @@ begin
             end if;
         end loop;
 
-        -- 2. Swizzle Routing (Operates blindly on whatever the Mux provided)
-        for i in 0 to 3 loop
-            vec_a_out(i) <= mux_a(to_integer(unsigned(swiz_sel_a(i))));
-            vec_b_out(i) <= mux_b(to_integer(unsigned(swiz_sel_b(i))));
-        end loop;
+        -- 2. Swizzle Routing A
+        case swiz_sel_a is
+            when SWIZ_X =>
+                vec_a_out <= (mux_a(0), mux_a(0), mux_a(0), mux_a(0));
+            when SWIZ_Y =>
+                vec_a_out <= (mux_a(1), mux_a(1), mux_a(1), mux_a(1));
+            when SWIZ_Z =>
+                vec_a_out <= (mux_a(2), mux_a(2), mux_a(2), mux_a(2));
+            when SWIZ_W =>
+                vec_a_out <= (mux_a(3), mux_a(3), mux_a(3), mux_a(3));
+            when others => -- SWIZ_PASS
+                vec_a_out <= mux_a;
+        end case;
+
+        -- 3. Swizzle Routing B
+        case swiz_sel_b is
+            when SWIZ_X =>
+                vec_b_out <= (mux_b(0), mux_b(0), mux_b(0), mux_b(0));
+            when SWIZ_Y =>
+                vec_b_out <= (mux_b(1), mux_b(1), mux_b(1), mux_b(1));
+            when SWIZ_Z =>
+                vec_b_out <= (mux_b(2), mux_b(2), mux_b(2), mux_b(2));
+            when SWIZ_W =>
+                vec_b_out <= (mux_b(3), mux_b(3), mux_b(3), mux_b(3));
+            when others => -- SWIZ_PASS
+                vec_b_out <= mux_b;
+        end case;
     end process;
 
 end architecture rtl;

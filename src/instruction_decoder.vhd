@@ -40,9 +40,9 @@ begin
         v_fpu.rs2_addr_local := "00";
         v_fpu.rs3_addr_local := "00";
         v_fpu.rd_addr_local  := "00";
-        v_fpu.swiz_sel_a     := ("00", "00", "00", "00");
-        v_fpu.swiz_sel_b     := ("11", "10", "01", "00");
-        v_fpu.swiz_sel_c     := ("11", "10", "01", "00");
+        v_fpu.swiz_sel_a     := SWIZ_PASS;
+        v_fpu.swiz_sel_b     := SWIZ_PASS;
+        v_fpu.swiz_sel_c     := SWIZ_PASS;
         v_fpu.write_mask     := "0000";
         v_fpu.cmp_invert     := '0';
         v_fpu.cmp_swap       := '0';
@@ -54,8 +54,8 @@ begin
         v_red.rs1_addr_local := "00";
         v_red.rs2_addr_local := "00";
         v_red.rd_addr_local  := "00";
-        v_red.swiz_sel_a     := ("00", "00", "00", "00");
-        v_red.swiz_sel_b     := ("00", "00", "00", "00");
+        v_red.swiz_sel_a     := SWIZ_PASS;
+        v_red.swiz_sel_b     := SWIZ_PASS;
         v_red.red_mask       := "0000";
         v_red.red_mode       := "00";
         v_red.wb_mux_sel     := WB_MUX_RED;
@@ -70,8 +70,8 @@ begin
         v_alu.rs1_addr_local := "00";
         v_alu.rs2_addr_local := "00";
         v_alu.rd_addr_local  := "00";
-        v_alu.swiz_sel_a     := ("00", "00", "00", "00");
-        v_alu.swiz_sel_b     := ("11", "10", "01", "00");
+        v_alu.swiz_sel_a     := SWIZ_PASS;
+        v_alu.swiz_sel_b     := SWIZ_PASS;
         v_alu.write_mask     := "0000";
         v_alu.wb_mux_sel     := WB_MUX_ALU;
         v_alu.vrf_we         := '0';
@@ -105,10 +105,7 @@ begin
             v_fpu.cmp_invert     := instruction(13);
             v_fpu.cmp_swap       := instruction(12);
             
-            v_fpu.swiz_sel_a(3)  := instruction(11 downto 10);
-            v_fpu.swiz_sel_a(2)  := instruction(9 downto 8);
-            v_fpu.swiz_sel_a(1)  := instruction(7 downto 6);
-            v_fpu.swiz_sel_a(0)  := instruction(5 downto 4);
+            v_fpu.swiz_sel_a     := instruction(6 downto 4);
 
             case internal_opcode is
                 when OP_FADD | OP_FSUB | OP_FMUL | OP_FMADD | 
@@ -153,15 +150,9 @@ begin
             v_red.rs1_addr_local := instruction(23 downto 22);
             v_red.rs2_addr_local := instruction(21 downto 20);
             
-            v_red.swiz_sel_a(3)  := instruction(19 downto 18);
-            v_red.swiz_sel_a(2)  := instruction(17 downto 16);
-            v_red.swiz_sel_a(1)  := instruction(15 downto 14);
-            v_red.swiz_sel_a(0)  := instruction(13 downto 12);
+            v_red.swiz_sel_a     := instruction(14 downto 12);
             
-            v_red.swiz_sel_b(3)  := instruction(11 downto 10);
-            v_red.swiz_sel_b(2)  := instruction(9 downto 8);
-            v_red.swiz_sel_b(1)  := instruction(7 downto 6);
-            v_red.swiz_sel_b(0)  := instruction(5 downto 4);
+            v_red.swiz_sel_b     := instruction(6 downto 4);
 
             v_red.wb_mux_sel     := WB_MUX_RED;
             v_red.vrf_we         := '1';
@@ -196,15 +187,9 @@ begin
             v_alu.rs1_addr_local := instruction(19 downto 18);
             v_alu.rs2_addr_local := instruction(17 downto 16);
             
-            v_alu.swiz_sel_a(3)  := instruction(11 downto 10);
-            v_alu.swiz_sel_a(2)  := instruction(9 downto 8);
-            v_alu.swiz_sel_a(1)  := instruction(7 downto 6);
-            v_alu.swiz_sel_a(0)  := instruction(5 downto 4);
+            v_alu.swiz_sel_a     := instruction(14 downto 12);
 
-            v_alu.swiz_sel_b(3)  := instruction(11 downto 10);
-            v_alu.swiz_sel_b(2)  := instruction(9 downto 8);
-            v_alu.swiz_sel_b(1)  := instruction(7 downto 6);
-            v_alu.swiz_sel_b(0)  := instruction(5 downto 4);
+            v_alu.swiz_sel_b     := instruction(6 downto 4);
 
             v_alu.wb_mux_sel     := WB_MUX_ALU;
 
