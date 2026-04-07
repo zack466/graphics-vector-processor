@@ -61,11 +61,12 @@ architecture structural of processor is
     -- ========================================================================
     -- CSR & CONTROL SIGNALS
     -- ========================================================================
-    signal csr_run      : std_logic := '0';
-    signal csr_start_pc : std_logic_vector(15 downto 0) := (others => '0');
-    signal do_force_pc  : std_logic := '0';
-    signal irq_pending  : std_logic := '0'; -- Interrupt raised
-    signal break_hit    : std_logic := '0'; -- Breakpoint flag
+    signal csr_run         : std_logic := '0';
+    signal csr_start_pc    : std_logic_vector(15 downto 0) := (others => '0');
+    signal csr_warp_offset : std_logic_vector(31 downto 0) := (others => '0');
+    signal do_force_pc     : std_logic := '0';
+    signal irq_pending     : std_logic := '0'; -- Interrupt raised
+    signal break_hit       : std_logic := '0'; -- Breakpoint flag
 
     -- ========================================================================
     -- INTERCONNECT SIGNALS
@@ -157,10 +158,11 @@ begin
     begin
         if rising_edge(clk) then
             if reset = '1' then
-                csr_run <= '0';
-                do_force_pc <= '0';
-                irq_pending <= '0';
-                break_hit <= '0';
+                csr_run         <= '0';
+                do_force_pc     <= '0';
+                irq_pending     <= '0';
+                break_hit       <= '0';
+                csr_warp_offset <= (others => '0');
             else
                 -- [A] HOST AVALON WRITES
                 if csr_write = '1' then
@@ -175,9 +177,12 @@ begin
                         when CSR_ADDR_IRQ_ACK => 
                             if csr_writedata(0) = '1' then irq_pending <= '0'; end if;
                         
-                        when CSR_ADDR_BREAK => 
+                        when CSR_ADDR_BREAK =>
                             if csr_writedata(0) = '1' then break_hit <= '0'; end if;
-                            
+
+                        when CSR_ADDR_WARP_OFFSET =>
+                            csr_warp_offset <= csr_writedata;
+
                         -- Read-only addresses are ignored on write
                         when others => null;
                     end case;
@@ -208,13 +213,14 @@ begin
     -- ========================================================================
     -- CSR AVALON READ MULTIPLEXER
     -- ========================================================================
-    csr_readdata <= 
+    csr_readdata <=
         x"0000000" & "000" & csr_run      when csr_address = CSR_ADDR_RUN else
         x"0000"    & csr_start_pc         when csr_address = CSR_ADDR_START_PC else
         x"0000000" & "000" & irq_pending  when csr_address = CSR_ADDR_IRQ_ACK else
         x"0000000" & "000" & break_hit    when csr_address = CSR_ADDR_BREAK else
         x"0000"    & ifu_imem_addr        when csr_address = CSR_ADDR_CURR_PC else
         x"00000000"                       when csr_address = CSR_ADDR_EXEC_MASK else -- Pad upper bits if WARP_SIZE is 32
+        csr_warp_offset                   when csr_address = CSR_ADDR_WARP_OFFSET else
         (others => '0');
 
     host_irq_out <= irq_pending;
@@ -442,6 +448,7 @@ begin
             rd_addr_global_in => iss_rd_global, vrf_rs1_data => vrf_rs1_data,
             vrf_rs2_data      => vrf_rs2_data, vrf_rs3_data => vrf_rs3_data,
             prf_rs1_data      => prf_rs1_data, prf_rs2_data => prf_rs2_data,
+            warp_offset_in    => csr_warp_offset, thread_id_in => iss_thread_id,
             wb_rd_addr_out    => exec_wb_rd_addr, wb_vrf_data_out => exec_wb_vrf_data,
             wb_prf_data_out   => exec_wb_prf_data, wb_vrf_we_out => exec_wb_vrf_we,
             wb_prf_we_out     => exec_wb_prf_we, wb_mask_out => exec_wb_mask,

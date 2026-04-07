@@ -186,19 +186,21 @@ begin
     u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>swiz_a_out(2), op_b=>swiz_b_out(2), op_c=>vrf_rs3_data(2), result=>fpu_res_z, valid_out=>open,        comp_flag=>comp_flag_z, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
     u_lane_w: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_opcode, valid_in=>s1_valid, op_a=>swiz_a_out(3), op_b=>swiz_b_out(3), op_c=>vrf_rs3_data(3), result=>fpu_res_w, valid_out=>open,        comp_flag=>comp_flag_w, cmp_invert=>s1_cmp_inv, cmp_swap=>s1_cmp_swap);
 
-    u_alu: entity work.alu_lane 
+    u_alu: entity work.alu_lane
         port map (
-            clk       => clk,
-            reset     => reset,
-            opcode    => s1_opcode,
-            valid_in  => s1_valid,
-            is_load   => s1_is_load,  -- NEW
-            imm_data  => s1_imm_data, -- NEW
-            op_a      => swiz_a_out(0),
-            op_b      => swiz_b_out(0),
-            result    => alu_res,
-            comp_flag => open, -- Ignored in this top-level test for now
-            valid_out => alu_valid
+            clk         => clk,
+            reset       => reset,
+            opcode      => s1_opcode,
+            valid_in    => s1_valid,
+            is_load     => s1_is_load,
+            imm_data    => s1_imm_data,
+            op_a        => swiz_a_out(0),
+            op_b        => swiz_b_out(0),
+            thread_id   => (others => '0'),
+            warp_offset => (others => '0'),
+            result      => alu_res,
+            comp_flag   => open,
+            valid_out   => alu_valid
         );
 
     vrf_wb_data <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_w) when wb_mux_sel = WB_MUX_FPU else

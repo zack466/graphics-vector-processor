@@ -19,6 +19,10 @@ entity alu_lane is
         -- Data Inputs (Scalars)
         op_a         : in  word_t;
         op_b         : in  word_t;
+
+        -- Thread ID computation inputs
+        thread_id    : in  std_logic_vector(4 downto 0); -- Current thread index (0-31)
+        warp_offset  : in  std_logic_vector(31 downto 0); -- Warp base offset from CSR
         
         -- Synchronized Outputs (Arrives exactly FPU_MAX_LATENCY cycles later)
         result       : out word_t;
@@ -44,7 +48,7 @@ begin
     -- ========================================================================
     -- ZERO-LATENCY INTEGER COMBINATIONAL LOGIC
     -- ========================================================================
-    process(opcode, op_a, op_b, imm_data)
+    process(opcode, op_a, op_b, imm_data, thread_id, warp_offset)
         variable a_uns : unsigned(31 downto 0);
         variable b_uns : unsigned(31 downto 0);
         variable a_sgn : signed(31 downto 0);
@@ -90,7 +94,13 @@ begin
                 when OP_ICMP_EQ  => if a_uns = b_uns then raw_comp <= '1'; end if;
                 when OP_ICMP_SLT => if a_sgn < b_sgn then raw_comp <= '1'; end if;
                 when OP_ICMP_ULT => if a_uns < b_uns then raw_comp <= '1'; end if;
-                    
+
+                -- Compute absolute thread ID: warp_offset + lane index (0-31)
+                when OP_THREAD_ID =>
+                    raw_res <= std_logic_vector(
+                        unsigned(warp_offset) + resize(unsigned(thread_id), 32)
+                    );
+
                 when others => null;
             end case;
         end if;

@@ -19,9 +19,11 @@ architecture sim of tb_alu_lane is
     signal valid_in  : std_logic := '0';
     signal is_load   : std_logic := '0'; -- NEW
     signal imm_data  : std_logic_vector(15 downto 0) := (others => '0');
-    signal op_a      : word_t := (others => '0');
-    signal op_b      : word_t := (others => '0');
-    
+    signal op_a        : word_t := (others => '0');
+    signal op_b        : word_t := (others => '0');
+    signal thread_id   : std_logic_vector(4 downto 0) := (others => '0');
+    signal warp_offset : std_logic_vector(31 downto 0) := (others => '0');
+
     signal result    : word_t;
     signal comp_flag : std_logic;
     signal valid_out : std_logic;
@@ -30,17 +32,19 @@ begin
 
     uut: entity work.alu_lane
         port map (
-            clk       => clk,
-            reset     => reset,
-            opcode    => opcode,
-            valid_in  => valid_in,
-            is_load   => is_load, -- NEW
-            imm_data  => imm_data,
-            op_a      => op_a,
-            op_b      => op_b,
-            result    => result,
-            comp_flag => comp_flag,
-            valid_out => valid_out
+            clk         => clk,
+            reset       => reset,
+            opcode      => opcode,
+            valid_in    => valid_in,
+            is_load     => is_load,
+            imm_data    => imm_data,
+            op_a        => op_a,
+            op_b        => op_b,
+            thread_id   => thread_id,
+            warp_offset => warp_offset,
+            result      => result,
+            comp_flag   => comp_flag,
+            valid_out   => valid_out
         );
 
     clk_process : process

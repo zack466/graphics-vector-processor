@@ -7,3 +7,4 @@
 *.ghw
 work/
 .DS_STORE
+.claude

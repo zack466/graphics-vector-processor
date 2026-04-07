@@ -102,10 +102,11 @@ package processor_constants_pkg is
     constant OP_IMUL    : std_logic_vector(5 downto 0) := "000111";
     constant OP_IINC    : std_logic_vector(5 downto 0) := "001000";
     constant OP_IDEC    : std_logic_vector(5 downto 0) := "001001";
-    constant OP_ISAR    : std_logic_vector(5 downto 0) := "001010";
-    constant OP_ICMP_EQ : std_logic_vector(5 downto 0) := "001011";
-    constant OP_ICMP_SLT: std_logic_vector(5 downto 0) := "001100";
-    constant OP_ICMP_ULT: std_logic_vector(5 downto 0) := "001101";
+    constant OP_ISAR      : std_logic_vector(5 downto 0) := "001010";
+    constant OP_ICMP_EQ   : std_logic_vector(5 downto 0) := "001011";
+    constant OP_ICMP_SLT  : std_logic_vector(5 downto 0) := "001100";
+    constant OP_ICMP_ULT  : std_logic_vector(5 downto 0) := "001101";
+    constant OP_THREAD_ID : std_logic_vector(5 downto 0) := "001110"; -- rd = warp_offset + thread_id
 
     -- ========================================================================
     -- IMMEDIATE OPCODES [31:26] (When Type == 0100)
@@ -122,12 +123,13 @@ package processor_constants_pkg is
     -- ========================================================================
     -- CSR (CONTROL STATUS REGISTER) ADDRESS MAP (3-Bit)
     -- ========================================================================
-    constant CSR_ADDR_RUN       : std_logic_vector(2 downto 0) := "000"; -- [R/W]   Run/Halt Control
-    constant CSR_ADDR_START_PC  : std_logic_vector(2 downto 0) := "001"; -- [W]     Force Start PC
-    constant CSR_ADDR_IRQ_ACK   : std_logic_vector(2 downto 0) := "010"; -- [R/W1C] Hardware Interrupt Ack
-    constant CSR_ADDR_BREAK     : std_logic_vector(2 downto 0) := "011"; -- [R/W1C] Breakpoint Hit Flag
-    constant CSR_ADDR_CURR_PC   : std_logic_vector(2 downto 0) := "100"; -- [R]     Current Program Counter
-    constant CSR_ADDR_EXEC_MASK : std_logic_vector(2 downto 0) := "101"; -- [R]     Active Thread Mask
+    constant CSR_ADDR_RUN         : std_logic_vector(2 downto 0) := "000"; -- [R/W]   Run/Halt Control
+    constant CSR_ADDR_START_PC    : std_logic_vector(2 downto 0) := "001"; -- [W]     Force Start PC
+    constant CSR_ADDR_IRQ_ACK     : std_logic_vector(2 downto 0) := "010"; -- [R/W1C] Hardware Interrupt Ack
+    constant CSR_ADDR_BREAK       : std_logic_vector(2 downto 0) := "011"; -- [R/W1C] Breakpoint Hit Flag
+    constant CSR_ADDR_CURR_PC     : std_logic_vector(2 downto 0) := "100"; -- [R]     Current Program Counter
+    constant CSR_ADDR_EXEC_MASK   : std_logic_vector(2 downto 0) := "101"; -- [R]     Active Thread Mask
+    constant CSR_ADDR_WARP_OFFSET : std_logic_vector(2 downto 0) := "110"; -- [R/W]   Warp Base Thread Offset
 
     -- ========================================================================
     -- CONTROL RECORDS (Expanded explicitly to remove downstream decoding)

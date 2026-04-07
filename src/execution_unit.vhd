@@ -51,6 +51,9 @@ entity execution_unit is
         prf_rs1_data      : in  std_logic_vector(3 downto 0);
         prf_rs2_data      : in  std_logic_vector(3 downto 0);
 
+        warp_offset_in    : in  std_logic_vector(31 downto 0);
+        thread_id_in      : in  std_logic_vector(4 downto 0);
+
         wb_rd_addr_out    : out std_logic_vector(6 downto 0);
         wb_vrf_data_out   : out vector_t;
         wb_prf_data_out   : out std_logic_vector(3 downto 0);
@@ -73,6 +76,7 @@ architecture rtl of execution_unit is
     
     signal s1_prf_rs1     : std_logic_vector(3 downto 0) := "0000";
     signal s1_prf_rs2     : std_logic_vector(3 downto 0) := "0000";
+    signal s1_thread_id   : std_logic_vector(4 downto 0) := (others => '0');
 
     -- NEW: Shift register to track the flush token down the pipe
     signal is_flush_stage1 : std_logic;
@@ -111,6 +115,7 @@ begin
                 s1_red_mask  <= red_mask_in;
                 s1_prf_rs1   <= prf_rs1_data;
                 s1_prf_rs2   <= prf_rs2_data;
+                s1_thread_id <= thread_id_in;
                 
                 -- Shift the flush token down the pipeline
                 flush_shift_reg <= flush_shift_reg(FPU_MAX_LATENCY-2 downto 0) & is_flush_stage1;
@@ -152,12 +157,13 @@ begin
             reduce_mask => s1_red_mask, red_mode => s1_red_mode, result => red_res_scalar, valid_out => open
         );
 
-    u_alu: entity work.alu_lane 
+    u_alu: entity work.alu_lane
         port map (
             clk => clk, reset => reset, opcode => s1_ctrl.opcode, valid_in => alu_en,
             is_load => s1_ctrl.is_load, imm_data => s1_ctrl.imm_data,
-            op_a => swiz_a_out(0), op_b => swiz_b_out(0), result => alu_res, 
-            comp_flag => alu_comp_flag, valid_out => open
+            op_a => swiz_a_out(0), op_b => swiz_b_out(0),
+            thread_id => s1_thread_id, warp_offset => warp_offset_in,
+            result => alu_res, comp_flag => alu_comp_flag, valid_out => open
         );
 
     wb_vrf_data_out <= (fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_w) when wb_mux_sel_out = WB_MUX_FPU else 

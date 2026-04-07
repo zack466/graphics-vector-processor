@@ -45,7 +45,7 @@ WORKDIR = work/
 
 # Note: VHDL-2008 flag (-std=08) is critical for float_pkg support
 BUILDFLAGS = --std=08 --workdir=$(WORKDIR)
-RUNFLAGS = --ieee-asserts=disable --wave=$(WAVEFORM)
+RUNFLAGS = --ieee-asserts=disable --wave=$(WAVEFORM) --stop-time=100ms
 
 # Add work directory prefix to testbench executables
 TESTBENCH_EXECS = $(addprefix $(WORKDIR), $(TESTBENCHES))

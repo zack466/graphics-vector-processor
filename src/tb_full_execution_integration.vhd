@@ -179,6 +179,8 @@ begin
             vrf_rs3_data      => vrf_rs3_data,
             prf_rs1_data      => prf_rs1_data,
             prf_rs2_data      => prf_rs2_data,
+            warp_offset_in    => (others => '0'),
+            thread_id_in      => (others => '0'),
             wb_rd_addr_out    => wb_rd_addr,
             wb_vrf_data_out   => wb_vrf_data,
             wb_prf_data_out   => wb_prf_data,
