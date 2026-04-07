@@ -58,7 +58,7 @@ begin
     monitor_proc: process(clk)
         variable action : string(1 to 20);
     begin
-        if falling_edge(clk) and reset = '0' then
+        if rising_edge(clk) and reset = '0' then
             -- Determine the action being evaluated for the NEXT rising edge
             if pc_ctrl.branch_type = BR_JMP then
                 action := "JMP Taken           ";

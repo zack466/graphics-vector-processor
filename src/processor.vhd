@@ -266,6 +266,10 @@ begin
                 if csr_run = '0' then
                     next_state <= HALTED;
                     
+                elsif do_force_pc = '1' then
+                    -- Interrupt normal flow to force a Jump
+                    next_state <= ADVANCE_PC;
+
                 elsif v_inst_type = INST_TYPE_MEM then
                     mem_op_valid <= '1';            
                     next_state <= MEM_WAIT_START;

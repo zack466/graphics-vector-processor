@@ -75,6 +75,8 @@ begin
         variable none_taken     : boolean;
         variable is_divergent   : boolean;
         variable target_u       : unsigned(PC_WIDTH-1 downto 0);
+        
+        variable next_mask      : std_logic_vector(WARP_SIZE-1 downto 0);
     begin
         if rising_edge(clk) then
             if reset = '1' then
@@ -85,19 +87,38 @@ begin
                 fetch_mask_reg  <= (others => '1');
                 
             elsif stall = '0' then
-                -- report "Current PC: " & to_string(to_integer(pc));
-                -- report "Current instruction: " & to_hstring(instruction_out);
-                
-                -- Shift mask into delay register to align with imem_data arriving next cycle
-                fetch_mask_reg <= active_mask;
-
                 -- Combinational Condition Evaluations
                 taken_mask     := active_mask and predicate_mask;
                 not_taken_mask := active_mask and (not predicate_mask);
-                all_taken      := (not_taken_mask = x"00000000");
-                none_taken     := (taken_mask = x"00000000");
-                is_divergent   := (not all_taken) and (not none_taken);
+                all_taken      := (active_mask /= x"00000000") and (not_taken_mask = x"00000000");
+                none_taken     := (active_mask /= x"00000000") and (taken_mask = x"00000000");
+                is_divergent   := (not_taken_mask /= x"00000000") and (taken_mask /= x"00000000");
                 
+                if active_mask = x"00000000" then
+                    all_taken := false; none_taken := true; is_divergent := false;
+                end if;
+                
+                -- Determine NEXT MASK instantly to align with NEXT instruction fetched
+                next_mask := active_mask; -- Default
+
+                if pc_ctrl.branch_type = BR_SYNC then
+                    if sp > 0 then
+                        if stack(sp-1).deferred_mask /= x"00000000" then
+                            next_mask := stack(sp-1).deferred_mask;
+                        else
+                            next_mask := stack(sp-1).outer_mask;
+                        end if;
+                    end if;
+                elsif pc_ctrl.branch_type = BR_BRA_DIV then
+                    if is_divergent then
+                        next_mask := taken_mask;
+                    end if;
+                end if;
+
+                -- fetch_mask_reg gets the mask for the instruction CURRENTLY being fetched.
+                -- That's next_mask!
+                fetch_mask_reg <= next_mask;
+
                 -- Pad target_addr safely depending on PC_WIDTH
                 target_u       := resize(unsigned(pc_ctrl.target_addr), PC_WIDTH);
 
@@ -145,8 +166,18 @@ begin
                         pc <= target_u;
                         active_mask <= taken_mask;
                     elsif all_taken then
+                        stack(sp).reconv_pc     <= saved_reconv_pc;
+                        stack(sp).deferred_pc   <= (others => '0'); 
+                        stack(sp).deferred_mask <= (others => '0');
+                        stack(sp).outer_mask    <= active_mask;
+                        sp <= sp + 1;
                         pc <= target_u;
                     else
+                        stack(sp).reconv_pc     <= saved_reconv_pc;
+                        stack(sp).deferred_pc   <= (others => '0'); 
+                        stack(sp).deferred_mask <= (others => '0');
+                        stack(sp).outer_mask    <= active_mask;
+                        sp <= sp + 1;
                         pc <= pc + 1;
                     end if;
 
