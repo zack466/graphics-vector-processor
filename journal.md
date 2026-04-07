@@ -1,5 +1,4 @@
 # TODO
-- fix vector reg tests (module was edited to ensure usage of M10K nodes for synthesis)
 - test that thread id instruction actually works
 
 # Agent changes

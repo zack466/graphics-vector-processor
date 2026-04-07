@@ -90,18 +90,18 @@ begin
         
         report ">> TEST 1B: FPU Write (Port A) with Partial Mask";
         rd_data_A <= (x"11111111", x"22222222", x"33333333", x"44444444");
-        -- "0101" maps to -> bit 3(a)=0, bit 2(z)=1, bit 1(y)=0, bit 0(x)=1
+        -- "0101" maps to -> bit 3(w)=0, bit 2(z)=1, bit 1(y)=0, bit 0(x)=1
         write_mask_A <= "0101"; 
         wait until rising_edge(clk); -- Clock 2: Partial Write is sampled
         we_A <= '0';
         
+        -- FIX: Wait for Port A write pipeline to drain (Arb Bus -> M10K RAM)
+        wait until rising_edge(clk); 
+        
         report ">> TEST 1C: Read and Verify Reg 1";
         rs1_addr <= "0000001";
-        wait until rising_edge(clk); -- Clock 3: Read Address is clocked into M10K
-        
-        -- The M10K block is now retrieving the data. We wait for the next rising edge, 
-        -- which is exactly when the downstream FPU pipeline would clock the data in.
-        wait until rising_edge(clk); -- Clock 4: Data is fully stable
+        wait until rising_edge(clk); -- Read Address is clocked into M10K
+        wait until rising_edge(clk); -- Data is fully stable
 
         assert rs1_data(0) = x"11111111" report "Reg 1 X-mask overwrite failed"    severity error;
         assert rs1_data(1) = x"99999999" report "Reg 1 Y-mask preservation failed" severity error;
@@ -121,15 +121,19 @@ begin
 
         report ">> TEST 2B: MCU Write (Port B) with Partial Mask";
         wr_data_B <= (x"AAAAAAAA", x"BBBBBBBB", x"CCCCCCCC", x"DDDDDDDD");
-        -- "1010" maps to -> bit 3(a)=1, bit 2(z)=0, bit 1(y)=1, bit 0(x)=0
+        -- "1010" maps to -> bit 3(w)=1, bit 2(z)=0, bit 1(y)=1, bit 0(x)=0
         write_mask_B <= "1010"; 
-        wait until rising_edge(clk); -- Clock 2: Partial Write is sampled
+        wait until rising_edge(clk); -- Clock 2: Partial Write is sampled by FIFO
         we_B <= '0';
+        
+        -- FIX: Wait for Port B write pipeline to drain (FIFO -> Arb Bus -> M10K RAM)
+        wait until rising_edge(clk); 
+        wait until rising_edge(clk); 
         
         report ">> TEST 2C: Read and Verify Reg 2";
         rs2_addr <= "0000010";
-        wait until rising_edge(clk); -- Clock 3: Read Address is clocked into M10K
-        wait until rising_edge(clk); -- Clock 4: Data is fully stable
+        wait until rising_edge(clk); -- Read Address is clocked into M10K
+        wait until rising_edge(clk); -- Data is fully stable
 
         assert rs2_data(0) = x"88888888" report "Reg 2 X-mask preservation failed" severity error;
         assert rs2_data(1) = x"BBBBBBBB" report "Reg 2 Y-mask overwrite failed"    severity error;
@@ -153,6 +157,12 @@ begin
         
         wait until rising_edge(clk); -- Writes are sampled simultaneously
         we_A <= '0'; we_B <= '0';
+
+        -- FIX: Wait for simultaneous writes to drain.
+        -- Cycle 1: Port A writes to RAM, Port B pops to Arb Bus
+        wait until rising_edge(clk);
+        -- Cycle 2: Port B writes to RAM
+        wait until rising_edge(clk);
 
         report ">> TEST 3B: Simultaneous 4-Port Read Verification";
         rs1_addr  <= "0000001";
