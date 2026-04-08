@@ -29,7 +29,7 @@ TESTBENCH_SOURCES = tb_fp_sim.vhd \
 					tb_full_execution_integration.vhd \
 					tb_avm_sim_memory.vhd \
 					tb_avm.vhd tb_mcu_scatter_gather.vhd \
-					tb_processor.vhd
+					tb_processor.vhd tb_processor_automated.vhd
 
 # Testbench executable names
 TESTBENCHES = tb_fp_sim tb_vector_reg_file tb_swizzle_network tb_fpu_lane tb_alu_lane \
@@ -37,7 +37,7 @@ TESTBENCHES = tb_fp_sim tb_vector_reg_file tb_swizzle_network tb_fpu_lane tb_alu
 			  tb_vector_reduction_unit tb_full_execution_integration \
 			  tb_instruction_memory tb_instruction_fetch_unit \
 			  tb_avm tb_avm_sim_memory tb_mcu_scatter_gather \
-			  tb_processor
+			  tb_processor tb_processor_automated
 
 WAVEFORM = waveform.ghw
 

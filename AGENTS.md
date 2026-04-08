@@ -20,9 +20,9 @@ When writing designs/testbenches in VHDL, always abide by these guideleines:
 - Use VHDL-2008 constructs to make testbench code easier to read/write. Using VHDL-1993 constructs in designs is preferred for compatibility.
 - Always obey strict synchronous design principles. Testbench code should synchronize itself using `wait until rising_edge(clk)` and should never have arbitrary waits like `wait until 1 ns`.
 - Always add brief, informative comments for each declared input/output/signal. Also add comments for all processes or statements that do something non-obvious.
-- Otherwise, try to follow the style of the existing code for naming and general style
+- All implementation designs should be well-documented, and VHDL entities should include a block of comments explaining how the entity is used, inputs/outputs, and exact timing/clock constraints.
+- Try to follow the style of the existing code for naming and general style
 
 ## Development Process
 After making changes or fixing a bug, log your progress and append it to a file called `journal.md` in the project's root directory.
 Furthermore, changes to the design of the project should be kept up-to-date in `README.md`, which contains the design document.
-Additionally, all implementation designs should be well-documented, and VHDL entities should include a block of comments explaining how the entity is used, inputs/outputs, and exact timing/clock constraints.

@@ -51,7 +51,8 @@ entity mcu_scatter_gather is
     generic (
         WARP_SIZE  : integer := 32;
         ADDR_WIDTH : integer := 32;
-        DATA_WIDTH : integer := 128
+        DATA_WIDTH : integer := 128;
+        REG_WIDTH  : integer := 2
     );
     port (
         clk               : in  std_logic;
@@ -60,16 +61,16 @@ entity mcu_scatter_gather is
         -- Processor Control
         mem_op_valid      : in  std_logic;
         is_store          : in  std_logic;
-        base_addr         : in  std_logic_vector(ADDR_WIDTH-1 downto 0); 
-        offset_reg_idx    : in  std_logic_vector(1 downto 0);
-        dest_src_reg_idx  : in  std_logic_vector(1 downto 0);
+        base_addr         : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+        offset_reg_idx    : in  std_logic_vector(REG_WIDTH-1 downto 0);
+        dest_src_reg_idx  : in  std_logic_vector(REG_WIDTH-1 downto 0);
         exec_mask         : in  std_logic_vector(WARP_SIZE-1 downto 0);
         mem_stall         : out std_logic;
 
         -- VRF Port B Access
-        reg_read_addr     : out std_logic_vector(6 downto 0); 
+        reg_read_addr     : out std_logic_vector(5 + REG_WIDTH - 1 downto 0); 
         reg_read_data     : in  vector_t; 
-        reg_write_addr    : out std_logic_vector(6 downto 0);
+        reg_write_addr    : out std_logic_vector(5 + REG_WIDTH - 1 downto 0);
         reg_write_data    : out vector_t;
         reg_write_en      : out std_logic;
 
@@ -115,11 +116,11 @@ architecture rtl of mcu_scatter_gather is
     signal cmd_din, cmd_dout       : std_logic_vector(ADDR_WIDTH + 8 downto 0); 
     signal cmd_wr_en, cmd_empty, cmd_full : std_logic;
     
-    -- WIDENED to 18 bits: [dest_src(2) | len(8) | start_idx(8)]
+    -- WIDENED to 24 bits: [dest_src(5) | len(8) | start_idx(8)]
     -- Rationale: The state machine moves on immediately after issuing a load. 
     -- We must latch the destination register index here so the async RX process 
     -- knows where to route the data when it finally returns cycles/memory-stalls later.
-    signal track_din, track_dout   : std_logic_vector(17 downto 0); 
+    signal track_din, track_dout   : std_logic_vector(23 downto 0); 
     signal track_wr_en, track_empty, track_full : std_logic;
     signal track_rd_en : std_logic;
     
@@ -144,7 +145,7 @@ begin
                   rd_en => cmd_ready and not cmd_empty, dout => cmd_dout, empty => cmd_empty, full => cmd_full, count => open );
 
     u_track_fifo : entity work.sync_fifo
-        generic map( DATA_WIDTH => 18, ADDR_WIDTH => 5 ) 
+        generic map( DATA_WIDTH => 24, ADDR_WIDTH => 5 ) 
         port map( clk => clk, reset => reset, wr_en => track_wr_en, din => track_din, 
                   rd_en => track_rd_en, dout => track_dout, empty => track_empty, full => track_full, count => open );
 
@@ -173,7 +174,7 @@ begin
     -- Rationale: Isolates incoming DDR3 data handling from instruction dispatch.
     -- This allows the processor to fetch the next instructions while waiting.
     process(clk)
-        variable v_dest_src    : std_logic_vector(1 downto 0);
+        variable v_dest_src    : std_logic_vector(REG_WIDTH-1 downto 0);
         variable v_track_len   : integer;
         variable v_track_start : integer;
     begin
@@ -188,7 +189,7 @@ begin
 
                 if rx_valid = '1' and track_empty = '0' then
                     -- Extract the latched context from the tracking FIFO
-                    v_dest_src    := track_dout(17 downto 16);
+                    v_dest_src    := track_dout(16 + REG_WIDTH - 1 downto 16);
                     v_track_len   := to_integer(unsigned(track_dout(15 downto 8)));
                     v_track_start := to_integer(unsigned(track_dout(7 downto 0)));
 
@@ -248,7 +249,7 @@ begin
                                 ack_idx <= ack_idx + 1;
                             end if;
                         end if;
-                        
+
                         if ack_idx = WARP_SIZE then
                             scan_idx <= 0; state <= FIND_UNSERVED;
                         end if;
@@ -298,7 +299,7 @@ begin
                                 state <= FETCH_WDATA;
                             else
                                 -- Append latched dest_src_reg_idx to the tracking token for Load instructions
-                                track_din <= dest_src_reg_idx & std_logic_vector(to_unsigned(burst_len, 8)) & std_logic_vector(to_unsigned(burst_start_idx, 8));
+                                track_din <= std_logic_vector(to_unsigned(0, 8 - REG_WIDTH)) & dest_src_reg_idx & std_logic_vector(to_unsigned(burst_len, 8)) & std_logic_vector(to_unsigned(burst_start_idx, 8));
                                 track_wr_en <= '1';
                                 scan_idx <= 0; state <= FIND_UNSERVED;
                             end if;
@@ -308,7 +309,7 @@ begin
                         -- -----------------------------------------------------------
                         -- 2-CYCLE VRF PIPELINE TRACKING
                         -- -----------------------------------------------------------
-                        
+
                         -- Stage 1: Issue VRF Address (Cycle N)
                         if words_issued < burst_len then
                             reg_read_addr <= std_logic_vector(to_unsigned(burst_start_idx + words_issued, 5)) & dest_src_reg_idx;
@@ -326,7 +327,7 @@ begin
                             -- Re-pack the 4 distinct M10K component banks into a 128-bit vector
                             wdata_din <= reg_read_data(3) & reg_read_data(2) & reg_read_data(1) & reg_read_data(0);
                             wdata_wr_en <= '1';
-                            
+
                             if words_pushed = burst_len - 1 then
                                 scan_idx <= 0; state <= FIND_UNSERVED;
                             end if;

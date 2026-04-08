@@ -36,10 +36,10 @@ begin
         -- 1. INITIALIZE VARIABLES WITH SAFE DEFAULTS (Prevents latches)
         -- ====================================================================
         v_fpu.opcode         := OP_NOP;
-        v_fpu.rs1_addr_local := "00";
-        v_fpu.rs2_addr_local := "00";
-        v_fpu.rs3_addr_local := "00";
-        v_fpu.rd_addr_local  := "00";
+        v_fpu.rs1_addr_local := "0000";
+        v_fpu.rs2_addr_local := "0000";
+        v_fpu.rs3_addr_local := "0000";
+        v_fpu.rd_addr_local  := "0000";
         v_fpu.swiz_sel_a     := SWIZ_PASS;
         v_fpu.swiz_sel_b     := SWIZ_PASS;
         v_fpu.swiz_sel_c     := SWIZ_PASS;
@@ -51,9 +51,9 @@ begin
         v_fpu.vrf_we         := '0';
         v_fpu.prf_we         := '0';
 
-        v_red.rs1_addr_local := "00";
-        v_red.rs2_addr_local := "00";
-        v_red.rd_addr_local  := "00";
+        v_red.rs1_addr_local := "0000";
+        v_red.rs2_addr_local := "0000";
+        v_red.rd_addr_local  := "0000";
         v_red.swiz_sel_a     := SWIZ_PASS;
         v_red.swiz_sel_b     := SWIZ_PASS;
         v_red.red_mask       := "0000";
@@ -67,9 +67,9 @@ begin
         v_pc.predicate_mod   := PRED_MOD_ANY;
 
         v_alu.opcode         := OP_NOP;
-        v_alu.rs1_addr_local := "00";
-        v_alu.rs2_addr_local := "00";
-        v_alu.rd_addr_local  := "00";
+        v_alu.rs1_addr_local := "0000";
+        v_alu.rs2_addr_local := "0000";
+        v_alu.rd_addr_local  := "0000";
         v_alu.swiz_sel_a     := SWIZ_PASS;
         v_alu.swiz_sel_b     := SWIZ_PASS;
         v_alu.write_mask     := "0000";
@@ -82,8 +82,8 @@ begin
         v_mem.is_valid         := '0';
         v_mem.is_store         := '0';
         v_mem.base_addr        := (others => '0');
-        v_mem.offset_reg_idx   := "00";
-        v_mem.dest_src_reg_idx := "00";
+        v_mem.offset_reg_idx   := "0000";
+        v_mem.dest_src_reg_idx := "0000";
 
         -- ====================================================================
         -- 2. DECODE BASED ON INSTRUCTION TYPE
@@ -91,21 +91,20 @@ begin
         if inst_type = INST_TYPE_FPU then
             -- ----------------------------------------------------------------
             -- FPU MATH INSTRUCTION MAP
-            -- [31:26] Opcode | [25:22] Mask | [21:20] Dest | [19:18] Src1
-            -- [17:16] Src2   | [15:14] Src3 | [13] Cmp_Inv | [12] Cmp_Swap
-            -- [11:4] Swiz A  | [3:0] Type
+            -- [31:26] Opcode | [25:22] Mask | [21:18] Dest | [17:14] Src1
+            -- [13:10] Src2   | [9:7] Swiz A | [6] Cmp_Inv | [5] Cmp_Swap | [4] Rsvd | [3:0] Type
             -- ----------------------------------------------------------------
             v_fpu.opcode         := internal_opcode;
             v_fpu.write_mask     := instruction(25 downto 22);
-            v_fpu.rd_addr_local  := instruction(21 downto 20);
-            v_fpu.rs1_addr_local := instruction(19 downto 18);
-            v_fpu.rs2_addr_local := instruction(17 downto 16);
-            v_fpu.rs3_addr_local := instruction(15 downto 14);
+            v_fpu.rd_addr_local  := instruction(21 downto 18);
+            v_fpu.rs1_addr_local := instruction(17 downto 14);
+            v_fpu.rs2_addr_local := instruction(13 downto 10);
+            v_fpu.rs3_addr_local := (others => '0'); -- Only 2-src math for now
             
-            v_fpu.cmp_invert     := instruction(13);
-            v_fpu.cmp_swap       := instruction(12);
+            v_fpu.cmp_invert     := instruction(6);
+            v_fpu.cmp_swap       := instruction(5);
             
-            v_fpu.swiz_sel_a     := instruction(6 downto 4);
+            v_fpu.swiz_sel_a     := instruction(9 downto 7);
 
             case internal_opcode is
                 when OP_FADD | OP_FSUB | OP_FMUL | OP_FMADD | 
@@ -141,18 +140,17 @@ begin
         elsif inst_type = INST_TYPE_RED then
             -- ----------------------------------------------------------------
             -- REDUCTION INSTRUCTION MAP
-            -- [31:30] Mode | [29:26] Mask | [25:24] Dest   | [23:22] Src1
-            -- [21:20] Src2 | [19:12] Swz A| [11:4]  Swz B  | [3:0] Type
+            -- [31:30] Mode | [29:26] Mask | [25:22] Dest   | [21:18] Src1
+            -- [17:14] Src2 | [13:11] Swz A| [10:8] Swz B   | [3:0] Type
             -- ----------------------------------------------------------------
             v_red.red_mode       := instruction(31 downto 30);
             v_red.red_mask       := instruction(29 downto 26);
-            v_red.rd_addr_local  := instruction(25 downto 24);
-            v_red.rs1_addr_local := instruction(23 downto 22);
-            v_red.rs2_addr_local := instruction(21 downto 20);
+            v_red.rd_addr_local  := instruction(25 downto 22);
+            v_red.rs1_addr_local := instruction(21 downto 18);
+            v_red.rs2_addr_local := instruction(17 downto 14);
             
-            v_red.swiz_sel_a     := instruction(14 downto 12);
-            
-            v_red.swiz_sel_b     := instruction(6 downto 4);
+            v_red.swiz_sel_a     := instruction(13 downto 11);
+            v_red.swiz_sel_b     := instruction(10 downto 8);
 
             v_red.wb_mux_sel     := WB_MUX_RED;
             v_red.vrf_we         := '1';
@@ -180,16 +178,17 @@ begin
         elsif inst_type = INST_TYPE_ALU then
             -- ----------------------------------------------------------------
             -- INTEGER ALU INSTRUCTION MAP
+            -- [31:26] Opcode | [25:22] Mask | [21:18] Dest | [17:14] Src1
+            -- [13:10] Src2   | [9:7] Swiz A | [6:4] Reserved | [3:0] Type
             -- ----------------------------------------------------------------
             v_alu.opcode         := internal_opcode;
             v_alu.write_mask     := instruction(25 downto 22);
-            v_alu.rd_addr_local  := instruction(21 downto 20);
-            v_alu.rs1_addr_local := instruction(19 downto 18);
-            v_alu.rs2_addr_local := instruction(17 downto 16);
+            v_alu.rd_addr_local  := instruction(21 downto 18);
+            v_alu.rs1_addr_local := instruction(17 downto 14);
+            v_alu.rs2_addr_local := instruction(13 downto 10);
             
-            v_alu.swiz_sel_a     := instruction(14 downto 12);
-
-            v_alu.swiz_sel_b     := instruction(6 downto 4);
+            v_alu.swiz_sel_a     := instruction(9 downto 7);
+            v_alu.swiz_sel_b     := SWIZ_PASS;
 
             v_alu.wb_mux_sel     := WB_MUX_ALU;
 
@@ -204,17 +203,13 @@ begin
         elsif inst_type = INST_TYPE_IMM then
             -- ----------------------------------------------------------------
             -- IMMEDIATE INSTRUCTION MAP (Routes to ALU Lane)
-            -- [31:26] Opcode | [25:10] Imm16 | [9:6] Mask | [5:4] Dest | [3:0] Type
+            -- [31:26] Opcode | [25:10] Imm16 | [9] Full Mask | [8:4] Dest | [3:0] Type
             -- ----------------------------------------------------------------
             v_alu.opcode         := internal_opcode;
             v_alu.imm_data       := instruction(25 downto 10);
-            v_alu.write_mask     := instruction(9 downto 6);
-            v_alu.rd_addr_local  := instruction(5 downto 4);
-            
-            -- FIX: Route the destination register to Read Port 1 so the ALU 
-            -- can read the current value and preserve the unmodified half!
-            v_alu.rs1_addr_local := instruction(5 downto 4); 
-            
+            v_alu.write_mask     := instruction(9) & instruction(9) & instruction(9) & instruction(9);
+            v_alu.rd_addr_local  := instruction(7 downto 4);
+            v_alu.rs1_addr_local := instruction(7 downto 4);
             v_alu.wb_mux_sel     := WB_MUX_ALU;
             v_alu.vrf_we         := '1';
             v_alu.prf_we         := '0';
@@ -223,13 +218,13 @@ begin
         elsif inst_type = INST_TYPE_MEM then
             -- ----------------------------------------------------------------
             -- MEMORY INSTRUCTION MAP (Routes to Scatter/Gather Unit)
-            -- [31:26] Opcode | [25:10] Base Addr Imm (16b) | [9:8] Offset Reg
-            -- [7:6] Dest/Src Reg | [5:4] Reserved | [3:0] Type
+            -- [31:26] Opcode | [25:12] Base Addr Imm (14b) | [11:8] Offset Reg
+            -- [7:4] Dest/Src Reg | [3:0] Type
             -- ----------------------------------------------------------------
             v_mem.is_valid         := '1';
-            v_mem.base_addr        := instruction(25 downto 10);
-            v_mem.offset_reg_idx   := instruction(9 downto 8);
-            v_mem.dest_src_reg_idx := instruction(7 downto 6);
+            v_mem.base_addr        := "00" & instruction(25 downto 12);
+            v_mem.offset_reg_idx   := instruction(11 downto 8);
+            v_mem.dest_src_reg_idx := instruction(7 downto 4);
 
             if internal_opcode = OP_STORE then
                 v_mem.is_store := '1';

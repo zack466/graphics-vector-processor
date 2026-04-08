@@ -146,6 +146,7 @@ begin
                     if write_burst_left = 0 then
                         write_addr <= unsigned(avs_address);
                         write_burst_left <= to_integer(unsigned(avs_burstcount)) - 1;
+                        report "[AVM MEM WRITE] Addr: 0x" & to_hstring(avs_address);
                         target_idx := to_integer(unsigned(avs_address)) / (DATA_WIDTH/8) mod MEM_WORDS;
                         write_addr <= unsigned(avs_address) + (DATA_WIDTH/8);
                     else

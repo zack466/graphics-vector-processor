@@ -8,7 +8,8 @@ entity memory_unit is
     generic (
         WARP_SIZE  : integer := 32;
         ADDR_WIDTH : integer := 32;
-        DATA_WIDTH : integer := 128
+        DATA_WIDTH : integer := 128;
+        REG_WIDTH  : integer := 2
     );
     port (
         clk               : in  std_logic;
@@ -19,18 +20,18 @@ entity memory_unit is
         -- ==========================================
         mem_op_valid      : in  std_logic;
         is_store          : in  std_logic;
-        base_addr         : in  std_logic_vector(ADDR_WIDTH-1 downto 0); 
-        offset_reg_idx    : in  std_logic_vector(1 downto 0);
-        dest_src_reg_idx  : in  std_logic_vector(1 downto 0);
+        base_addr         : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+        offset_reg_idx    : in  std_logic_vector(REG_WIDTH-1 downto 0);
+        dest_src_reg_idx  : in  std_logic_vector(REG_WIDTH-1 downto 0);
         exec_mask         : in  std_logic_vector(WARP_SIZE-1 downto 0);
         mem_stall         : out std_logic;
 
         -- ==========================================
         -- Interface 2: Vector Register File (Port B)
         -- ==========================================
-        reg_read_addr     : out std_logic_vector(6 downto 0); 
+        reg_read_addr     : out std_logic_vector(5 + REG_WIDTH - 1 downto 0); 
         reg_read_data     : in  vector_t; 
-        reg_write_addr    : out std_logic_vector(6 downto 0);
+        reg_write_addr    : out std_logic_vector(5 + REG_WIDTH - 1 downto 0);
         reg_write_data    : out vector_t;
         reg_write_en      : out std_logic;
 
@@ -77,7 +78,8 @@ begin
         generic map (
             WARP_SIZE  => WARP_SIZE,
             ADDR_WIDTH => ADDR_WIDTH,
-            DATA_WIDTH => DATA_WIDTH
+            DATA_WIDTH => DATA_WIDTH,
+            REG_WIDTH  => REG_WIDTH
         )
         port map (
             clk               => clk,

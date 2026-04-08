@@ -84,13 +84,13 @@ architecture rtl of vector_reg_file is
     type ram_type is array (0 to (2**ADDR_WIDTH)-1) of word_t;
     
     -- Replica 1 (Feeds rs1_data)
-    signal ram_1_x, ram_1_y, ram_1_z, ram_1_w : ram_type;
+    signal ram_1_x, ram_1_y, ram_1_z, ram_1_w : ram_type := (others => (others => '0'));
     -- Replica 2 (Feeds rs2_data)
-    signal ram_2_x, ram_2_y, ram_2_z, ram_2_w : ram_type;
+    signal ram_2_x, ram_2_y, ram_2_z, ram_2_w : ram_type := (others => (others => '0'));
     -- Replica 3 (Feeds rs3_data)
-    signal ram_3_x, ram_3_y, ram_3_z, ram_3_w : ram_type;
+    signal ram_3_x, ram_3_y, ram_3_z, ram_3_w : ram_type := (others => (others => '0'));
     -- Replica 4 (Feeds rd_data_B)
-    signal ram_4_x, ram_4_y, ram_4_z, ram_4_w : ram_type;
+    signal ram_4_x, ram_4_y, ram_4_z, ram_4_w : ram_type := (others => (others => '0'));
     
     -- Explicitly instruct the synthesis tool (Quartus) to map these to M10K hardware
     attribute ramstyle : string;
@@ -199,8 +199,9 @@ begin
         if rising_edge(clk) then
             
             -- --- WRITE OPERATIONS ---
-            -- Data is fanned out and written to ALL replicas simultaneously 
+            -- Data is fanned out and written to ALL replicas simultaneously
             -- to ensure memory consistency. It is further gated by the write mask.
+
 
             -- X Component Blocks (Bit 0 of Mask)
             if unified_we = '1' and unified_mask(0) = '1' then

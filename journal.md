@@ -6,10 +6,6 @@
 * add immediate FPU instructions, don't support things like swizzling or mask, but allow encoding low-precision immediate constants, for things like scalar multiplication, negation, etc
   * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
 * test memory controller with real DDR3 memory
-* test all of the instructions in simulation, run programs and dump pixel outputs
-
-# TODO (priority)
-* make a robust test framework for processor instructions
 
 # Agent changes
 
@@ -117,3 +113,101 @@
   swizzle_network.vhd
   - Added a header block explaining the purpose of the swizzle network, the recent optimization limiting it to passthrough and splatting, its I/O interfaces, and its 0-cycle combinational timing constraint.
   - Added section comments to the main processing block detailing exactly how the inputs are evaluated and routed.
+
+  ---
+  Automated Test Framework & Pipeline Alignment Fix
+
+  Created a robust automated test framework to execute real assembly programs on the processor:
+  - `tools/assembler.py`: Parses human-readable assembly syntax into hexadecimal machine code.
+  - `src/tb_processor_automated.vhd`: A dedicated testbench that loads `program.hex` into instruction memory, executes the code until `OP_RETURN` is hit, and dumps the memory contents (framebuffer) to `memory_dump.hex`.
+  - `tools/runner.py`: A Python test runner that manages the entire lifecycle, assembling the code, invoking GHDL via a Makefile, parsing the resulting `memory_dump.hex`, and using Pillow to render the output as a `.png` image for visual validation.
+
+  During development of this framework, an intricate pipeline alignment bug was discovered and fixed:
+  - The `execution_unit.vhd` was routing VRF read data (`vrf_rs1_data`) directly into the combinational logic of `alu_lane` and `fpu_lane` during Stage 1 (`s1`). However, because the M10K block in `vector_reg_file.vhd` requires a full clock cycle to output data after the address is registered, the data arriving in `s1` actually belonged to the *previous* thread. 
+  - To solve this, the math execution lanes were shifted to evaluate in Stage 2 (`s2_ctrl`, `s2_valid`), perfectly aligning their combinational inputs with the 1-cycle latency VRF read outputs.
+  - The `writeback_controller.vhd` pipeline shift was adjusted (`FPU_MAX_LATENCY-1`) to remain perfectly synchronized with the newly aligned `alu_lane` outputs arriving in cycle N+29.
+  - Added proper `(others => '0')` initialization to the `vector_reg_file.vhd` `ram_type` variables to prevent uninitialized memory (`U`) from causing simulation artifacts (appearing as `X` conflicts on the data bus).
+
+  ---
+  Assembler TYPE Constant Bug Fix & Incremental Test Validation
+
+  Root cause identified and fixed: all ALU instructions (THREAD_ID, ISHL, IADD, etc.) were silently doing nothing in simulation due to a mismatch between `tools/assembler.py` and `src/processor_constants_pkg.vhd`.
+
+  The bug: `assembler.py` had TYPE_ALU = 1, TYPE_CTRL = 2, TYPE_RED = 3, but the VHDL defines INST_TYPE_CTRL = 1, INST_TYPE_RED = 2, INST_TYPE_ALU = 3. The order of types 1-3 was wrong. IMM/MEM/SYS (4/5/6) were coincidentally correct, so LDI, STORE, and FLUSH all worked. TYPE_FPU = 0 was also correct.
+
+  Because ALU instructions were encoded with type 1 (= INST_TYPE_CTRL, branches), the processor advanced the PC without executing them. This caused v0 (THREAD_ID) and v2 (ISHL result) to remain zero for all threads. The MCU then read zero from v2 for every thread's offset, resulting in all 32 STORE commands dispatching separate burst-length-1 writes, all to address 0x00000000. Only the first pixel was ever written.
+
+  The debugging process involved:
+  - Adding `report` statements to `vector_reg_file.vhd` (VRF write log) confirming that only v1 and v3 were ever written — v0 and v2 had no write entries.
+  - Adding `report` statements to `mcu_scatter_gather.vhd` (GATHER_ADDR and FETCH_WDATA) confirming the MCU read vrf_X=0 for all threads, and that each thread was getting its own burst of length 1 rather than one coalesced burst of 32.
+  - Adding a detailed write log to `avm_sim_memory.vhd` confirming all writes went to address 0x00000000.
+
+  tools/assembler.py
+  - Fixed TYPE constants to match VHDL: TYPE_FPU=0, TYPE_CTRL=1, TYPE_RED=2, TYPE_ALU=3, TYPE_IMM=4, TYPE_MEM=5, TYPE_SYS=6.
+
+  All debug `report` statements added during investigation were removed after the fix was confirmed.
+
+  Verification (incremental tests, all passing after fix):
+  - test01_thread_id.s: pixel N = raw integer N for all 1024 pixels across all 32 warps. ✓
+  - test02_i2f.s: pixel N = IEEE-754 float(N) (0.0, 1.0, 2.0, ...). ✓
+  - test03_ldi.s: all 1024 pixels = 0x3F800000 (1.0f) constant. ✓
+
+  ---
+  Barrel Scheduler, Write Mask, Control Flow, and Image Tests
+
+  Six new tests exercising the remaining major features of the processor:
+
+  tools/assembler.py
+  - Fixed SYNC instruction parsing: CTRL instructions with no arguments (SYNC) now
+    default to target_addr=0 instead of crashing with IndexError.
+
+  test04_alu_chain.s — Barrel Scheduler ALU Chain
+  - Dependent ALU chain WITHOUT FLUSH between instructions:
+    THREAD_ID(v0) → IADD(v3=2*tid) → ISHL(v2=16*tid) → IADD(v4=4*tid)
+  - Demonstrates that the barrel scheduler provides natural 32-cycle separation
+    between same-thread instructions, which exceeds the ~29-cycle ALU writeback
+    latency. No intermediate FLUSHes needed.
+  - FLUSH is still required before STORE to ensure VRF is fully written before
+    the MCU reads it.
+  - Result: pixel N = {4*N, 4*N, 4*N, 4*N} as raw integers. ✓
+
+  test05_fpu_chain.s — Barrel Scheduler FPU Chain
+  - Dependent FPU chain WITHOUT FLUSH:
+    THREAD_ID(v0) → I2F(v1=float(tid)) → FMUL(v3=tid^2)
+  - FPU_MAX_LATENCY=28 stages; 32-cycle separation still exceeds 29 cycles.
+  - Result: pixel N = IEEE-754 float(N^2). ✓
+    (0.0, 1.0, 4.0, 9.0, 16.0, 25.0, ...)
+
+  test06_write_mask.s — Per-Component ALU Write Mask
+  - IADD v4.xy, v0, v0: write mask "0011" (bits X and Y only).
+  - v4.z and v4.w are never written, staying at VRF init value of 0.
+  - Result: pixel N = {W=0, Z=0, Y=2N, X=2N}. ✓
+
+  test07_control_flow.s — SIMT Divergence (Even/Odd)
+  - ICMP_EQ + FLUSH + SSY + BRA_DIV + SYNC divergence sequence.
+  - Key insight: ALU/FPU/IMM instructions run for ALL 32 threads regardless of
+    exec_mask; only STORE respects exec_mask. The final stored value is correct
+    because each path's STORE only writes memory for its active threads.
+  - Even threads (tid&1==0) store 0x3F800000 (1.0f = white).
+  - Odd threads store 0x00000000 (0.0f = black).
+  - Result: alternating white/black pixels across all 32 warps. ✓
+
+  test08_checkerboard.s — 32×32 Checkerboard Image
+  - Computes x = global_tid & 0x1F, y = global_tid >> 5.
+  - Color = white if (x+y) is even, black otherwise.
+  - Uses ICMP_EQ + SSY + BRA_DIV + SYNC for divergence.
+  - Result: correct 32×32 checkerboard (test08_checkerboard.png). ✓
+
+  test09_gradient.s — 32×32 RGB Gradient Image
+  - R (X component) = float(x) / 32 = x/32  (increases left to right)
+  - G (Y component) = float(y) / 32 = y/32  (increases top to bottom)
+  - B (Z component) = 0.0f (never written, stays at VRF init)
+  - A (W component) = 1.0f (fully opaque)
+  - Uses per-component FPU write masks to assemble the 4-channel output vector:
+    FMUL v14.x, v11, v13 / FMUL v14.y, v12, v13 / FMUL v14.w, v13, v13
+  - Result: smooth red-green gradient (test09_gradient.png). ✓
+
+  Memory layout reference (confirmed):
+  - Dump format: "W Z Y X" per line (MSB to LSB of 128-bit bus word)
+  - runner.py maps: parts[3]=X=R, parts[2]=Y=G, parts[1]=Z=B, parts[0]=W=A
+

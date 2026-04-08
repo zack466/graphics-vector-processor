@@ -1,14 +1,21 @@
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
+use std.textio.all;
 
 use work.vector_types_pkg.all;
 use work.processor_constants_pkg.all;
 
-entity tb_processor is
-end entity tb_processor;
+entity tb_processor_automated is
+    generic (
+        PROGRAM_FILE     : string  := "program.hex";
+        MEMORY_DUMP_FILE : string  := "memory_dump.hex";
+        DUMP_START_ADDR  : integer := 0; -- Framebuffer start
+        DUMP_END_ADDR    : integer := 16384 -- 1024 pixels * 16 bytes/pixel
+    );
+end entity tb_processor_automated;
 
-architecture sim of tb_processor is
+architecture sim of tb_processor_automated is
 
     constant PC_WIDTH        : integer := 16;
     constant IMEM_ADDR_WIDTH : integer := 8;
@@ -151,9 +158,9 @@ begin
         begin
             res(31 downto 26) := op;
             res(25 downto 22) := std_logic_vector(to_unsigned(mask, 4));
-            res(21 downto 18) := std_logic_vector(to_unsigned(rd,  4));
-            res(17 downto 14) := std_logic_vector(to_unsigned(rs1, 4));
-            res(13 downto 10) := std_logic_vector(to_unsigned(rs2, 4));
+            res(21 downto 20) := std_logic_vector(to_unsigned(rd, 2));
+            res(19 downto 18) := std_logic_vector(to_unsigned(rs1, 2));
+            res(17 downto 16) := std_logic_vector(to_unsigned(rs2, 2));
             res(3 downto 0)   := "0011"; -- TYPE_ALU
             return res;
         end function;
@@ -163,30 +170,32 @@ begin
         begin
             res(31 downto 26) := "001110"; -- OP_THREAD_ID
             res(25 downto 22) := std_logic_vector(to_unsigned(mask, 4));
-            res(21 downto 18) := std_logic_vector(to_unsigned(dest_reg, 4));
-            res(3 downto 0)   := "0011"; -- INST_TYPE_ALU
+            res(21 downto 20) := std_logic_vector(to_unsigned(dest_reg, 2));
+            res(19 downto 4)  := (others => '0'); 
+            res(3 downto 0)   := "0011";   -- INST_TYPE_ALU
             return res;
         end function;
-
+        
         function asm_ldi(is_hi : boolean; dest_reg : integer; imm : std_logic_vector(15 downto 0)) return word_t is
             variable res : word_t := (others => '0');
         begin
             if is_hi then res(31 downto 26) := "000001"; else res(31 downto 26) := "000000"; end if;
             res(25 downto 10) := imm;
-            res(9)            := '1'; -- full_mask
-            res(7 downto 4)   := std_logic_vector(to_unsigned(dest_reg, 4));
-            res(3 downto 0)   := "0100"; -- TYPE_IMM
+            res(9 downto 6)   := "1111"; 
+            res(5 downto 4)   := std_logic_vector(to_unsigned(dest_reg, 2));
+            res(3 downto 0)   := "0100"; 
             return res;
         end function;
 
         function asm_store(base : std_logic_vector(15 downto 0); off_reg : integer; src_reg : integer) return word_t is
             variable res : word_t := (others => '0');
         begin
-            res(31 downto 26) := "100001"; -- OP_STORE
-            res(25 downto 12) := base(13 downto 0); -- 14-bit base addr
-            res(11 downto 8)  := std_logic_vector(to_unsigned(off_reg, 4));
-            res(7 downto 4)   := std_logic_vector(to_unsigned(src_reg, 4));
-            res(3 downto 0)   := "0101"; -- TYPE_MEM
+            res(31 downto 26) := "100001"; 
+            res(25 downto 10) := base;
+            res(9 downto 8)   := std_logic_vector(to_unsigned(off_reg, 2));
+            res(7 downto 6)   := std_logic_vector(to_unsigned(src_reg, 2));
+            res(5 downto 4)   := "00";
+            res(3 downto 0)   := "0101"; 
             return res;
         end function;
 
@@ -207,6 +216,8 @@ begin
             while mem_avm_waitrequest = '1' loop wait until rising_edge(clk); end loop;
             tb_avm_read <= '0';
             while mem_avm_readdatavalid = '0' loop wait until rising_edge(clk); end loop;
+            -- Wait one more cycle for the data to actually appear on the bus
+            wait until rising_edge(clk);
         end procedure;
 
         procedure wait_for_halt(poll_interval : time) is
@@ -257,6 +268,15 @@ begin
         end procedure;
         
         variable rom_ptr : integer := 0;
+        
+        file prog_file : text;
+        variable prog_line : line;
+        variable prog_word : word_t;
+        variable good : boolean;
+
+        file dump_file : text;
+        variable dump_line : line;
+        variable dump_addr : integer := DUMP_START_ADDR;
 
     begin
         wait for 50 ns; wait until rising_edge(clk); reset <= '0';
@@ -266,75 +286,65 @@ begin
         -- ====================================================================
         -- 1. LOAD ASSEMBLY PROGRAM
         -- ====================================================================
-        report "Loading instruction memory...";
+        report "Loading instruction memory from " & PROGRAM_FILE & "...";
         
-        -- Program (Optimized - No Flushes needed with 28-cycle latency):
-        -- v1 = 0xBEEF (LDI_LO)
-        -- v1 = 0xDEADBEEF (LDI_HI)
-        -- v1.w = thread_id (Overwrites ONLY W component with unique index)
-        -- v0 = thread_id (Full broadcast)
-        -- v2 = 4 (LDI_LO)
-        -- v0 = v0 << v2 (Byte address calculation: index * 16)
-        -- store base=0x0000, offset=v0, src=v1
-        -- break
-        -- return
-        
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_ldi(false, 1, x"BEEF"); prog_we <= '1'; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_ldi(true, 1, x"DEAD"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_thread_id(1, 8); wait until rising_edge(clk); rom_ptr := rom_ptr + 1; -- Mask 8 = W only
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_thread_id(0, 15); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_ldi(false, 2, x"0004"); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_alu(OP_ISHL, 0, 0, 2, 15); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_store(x"0000", 0, 1); wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_break; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
-        prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
-        prog_wr_data <= asm_return; wait until rising_edge(clk); rom_ptr := rom_ptr + 1;
+        file_open(prog_file, PROGRAM_FILE, read_mode);
+        rom_ptr := 0;
+        while not endfile(prog_file) loop
+            readline(prog_file, prog_line);
+            hread(prog_line, prog_word, good);
+            if good then
+                prog_wr_addr <= std_logic_vector(to_unsigned(rom_ptr, IMEM_ADDR_WIDTH));
+                prog_wr_data <= prog_word; 
+                prog_we <= '1'; 
+                wait until rising_edge(clk); 
+                rom_ptr := rom_ptr + 1;
+            end if;
+        end loop;
+        file_close(prog_file);
 
         prog_we <= '0'; wait for 50 ns; wait until rising_edge(clk);
 
         -- ====================================================================
-        -- 2. START PROCESSOR
+        -- 2. START PROCESSOR FOR EACH WARP OFFSET
         -- ====================================================================
-        report "Setting Warp Offset, Start PC and running processor...";
-        write_csr(CSR_ADDR_WARP_OFFSET, x"00000040"); -- Warp Offset = 64
-        write_csr(CSR_ADDR_START_PC,    x"00000000"); -- Start PC
-        write_csr(CSR_ADDR_RUN,         x"00000001"); -- Run
-
-        report "Waiting for processor to finish executing...";
-        -- Using a short 100ns poll interval so the simulated ISR catches the IRQ quickly!
-        wait_for_halt(100 ns); 
+        report "Setting Warp Offset, Start PC and running processor multiple times...";
         
-        wait for 100 ns; wait until rising_edge(clk);
+        for w in 0 to 31 loop
+            report "Running warp " & integer'image(w) & " (offset " & integer'image(w * 32) & ")...";
+            write_csr(CSR_ADDR_WARP_OFFSET, std_logic_vector(to_unsigned(w * 32, 32)));
+            write_csr(CSR_ADDR_START_PC,    x"00000000"); -- Start PC
+            write_csr(CSR_ADDR_RUN,         x"00000001"); -- Run
+    
+            -- Using a short 100ns poll interval so the simulated ISR catches the IRQ quickly!
+            wait_for_halt(100 ns); 
+            
+            wait for 100 ns; wait until rising_edge(clk);
+        end loop;
 
         -- ====================================================================
         -- 3. VERIFY MEMORY CONTENTS
         -- ====================================================================
-        report "Taking over Avalon Bus and checking DDR3 Memory...";
+        report "Taking over Avalon Bus and dumping DDR3 Memory to " & MEMORY_DUMP_FILE & "...";
         tb_takeover <= '1'; wait until rising_edge(clk);
         
-        for i in 0 to 31 loop
-            -- Each thread i stored to address (64 + i) * 16
-            read_memory(std_logic_vector(to_unsigned((64 + i) * 16, 32)));
-
-            report "Thread " & integer'image(i) & " at Addr " & to_hstring(std_logic_vector(to_unsigned((64 + i) * 16, 32))) & 
-                   ": " & to_hstring(mem_avm_readdata(127 downto 96)) & " " &
-                          to_hstring(mem_avm_readdata(95 downto 64)) & " " &
-                          to_hstring(mem_avm_readdata(63 downto 32)) & " " &
-                          to_hstring(mem_avm_readdata(31 downto 0));
+        file_open(dump_file, MEMORY_DUMP_FILE, write_mode);
+        dump_addr := DUMP_START_ADDR;
+        while dump_addr < DUMP_END_ADDR loop
+            read_memory(std_logic_vector(to_unsigned(dump_addr, 32)));
             
-            assert mem_avm_readdata(31 downto 0)   = x"DEADBEEF" report "Mismatch Element 0 at Thread " & integer'image(i) severity error;
-            assert mem_avm_readdata(63 downto 32)  = x"DEADBEEF" report "Mismatch Element 1 at Thread " & integer'image(i) severity error;
-            assert mem_avm_readdata(95 downto 64)  = x"DEADBEEF" report "Mismatch Element 2 at Thread " & integer'image(i) severity error;
-            assert mem_avm_readdata(127 downto 96) = std_logic_vector(to_unsigned(64 + i, 32)) report "Mismatch Element 3 (Index) at Thread " & integer'image(i) severity error;
+            hwrite(dump_line, mem_avm_readdata(127 downto 96));
+            write(dump_line, string'(" "));
+            hwrite(dump_line, mem_avm_readdata(95 downto 64));
+            write(dump_line, string'(" "));
+            hwrite(dump_line, mem_avm_readdata(63 downto 32));
+            write(dump_line, string'(" "));
+            hwrite(dump_line, mem_avm_readdata(31 downto 0));
+            writeline(dump_file, dump_line);
+            
+            dump_addr := dump_addr + 16;
         end loop;
+        file_close(dump_file);
 
         report "--- FULL PROCESSOR EXECUTION VERIFIED ---";
         std.env.stop;

@@ -6,19 +6,22 @@ use work.vector_types_pkg.all;
 use work.processor_constants_pkg.all;
 
 entity predicate_reg_file is
+    generic (
+        ADDR_WIDTH : integer := 7 -- Default: 5-bit thread + 2-bit pred reg
+    );
     port (
         clk          : in  std_logic;
         reset        : in  std_logic;
-        
+
         -- ==========================================
         -- FPU MATH PORTS (Scalar 4-bit access)
         -- ==========================================
-        rs1_addr     : in  std_logic_vector(6 downto 0); -- [6:2] Thread, [1:0] P-Reg
-        rs2_addr     : in  std_logic_vector(6 downto 0);
+        rs1_addr     : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+        rs2_addr     : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
         rs1_data     : out std_logic_vector(3 downto 0);
         rs2_data     : out std_logic_vector(3 downto 0);
 
-        wr_addr      : in  std_logic_vector(6 downto 0);
+        wr_addr      : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
         wr_data      : in  std_logic_vector(3 downto 0);
         we           : in  std_logic;
         wr_mask      : in  std_logic_vector(3 downto 0); -- Allows partial X,Y,Z,A updates
@@ -34,8 +37,8 @@ end entity;
 
 architecture rtl of predicate_reg_file is
 
-    -- 32 threads * 4 registers = 128 locations of 4-bit vectors
-    type prf_t is array(0 to 127) of std_logic_vector(3 downto 0);
+    -- 2**ADDR_WIDTH entries (e.g. ADDR_WIDTH=9: 512 entries = 32 threads * 16 regs)
+    type prf_t is array(0 to 2**ADDR_WIDTH - 1) of std_logic_vector(3 downto 0);
     signal prf : prf_t := (others => "0000");
 
 begin
@@ -74,7 +77,7 @@ begin
         variable idx     : integer;
     begin
         for i in 0 to 31 loop
-            idx := (i * 4) + to_integer(unsigned(ifu_pred_sel));
+            idx := (i * (2**(ADDR_WIDTH-5))) + to_integer(unsigned(ifu_pred_sel));
             p_val := prf(idx);
             
             -- Apply the modifier to collapse the 4-bit vector to a 1-bit truth

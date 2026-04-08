@@ -40,10 +40,10 @@ architecture sim of tb_full_execution_integration is
     -- STAGE 0.5: ISSUER OUTPUTS (Inputs to Execution Unit & Register Files)
     -- ========================================================================
     signal iss_current_thread: std_logic_vector(4 downto 0);
-    signal iss_rs1_addr      : std_logic_vector(6 downto 0);
-    signal iss_rs2_addr      : std_logic_vector(6 downto 0);
-    signal iss_rs3_addr      : std_logic_vector(6 downto 0);
-    signal iss_rd_addr       : std_logic_vector(6 downto 0);
+    signal iss_rs1_addr      : std_logic_vector(8 downto 0);
+    signal iss_rs2_addr      : std_logic_vector(8 downto 0);
+    signal iss_rs3_addr      : std_logic_vector(8 downto 0);
+    signal iss_rd_addr       : std_logic_vector(8 downto 0);
     
     signal iss_opcode        : std_logic_vector(5 downto 0);
     signal iss_mask          : std_logic_vector(3 downto 0);
@@ -72,7 +72,7 @@ architecture sim of tb_full_execution_integration is
     -- ========================================================================
     -- WRITEBACK BUSES (Arrive at Stage N)
     -- ========================================================================
-    signal wb_rd_addr  : std_logic_vector(6 downto 0);
+    signal wb_rd_addr  : std_logic_vector(8 downto 0);
     signal wb_vrf_data : vector_t;
     signal wb_prf_data : std_logic_vector(3 downto 0);
     signal wb_vrf_we   : std_logic;
@@ -82,7 +82,7 @@ architecture sim of tb_full_execution_integration is
     -- ========================================================================
     -- MCU / IFU VERIFICATION PORTS
     -- ========================================================================
-    signal mcu_rd_addr, mcu_wr_addr : std_logic_vector(6 downto 0) := (others => '0');
+    signal mcu_rd_addr, mcu_wr_addr : std_logic_vector(8 downto 0) := (others => '0');
     signal mcu_rd_data, mcu_wr_data : vector_t := (others => (others => '0'));
     signal mcu_we                   : std_logic := '0';
     signal mcu_mask                 : std_logic_vector(3 downto 0) := "0000";
@@ -120,6 +120,7 @@ begin
     -- ========================================================================
     
     u_issuer: entity work.instruction_issue
+        generic map ( THREAD_WIDTH => 5, REG_WIDTH => 4 )
         port map (
             clk => clk, reset => reset, 
             exec_ctrl_in => decoder_exec_ctrl, 
@@ -159,10 +160,10 @@ begin
     iss_exec_ctrl.swiz_sel_a  <= iss_swiz_a;
     iss_exec_ctrl.swiz_sel_b  <= iss_swiz_b;
     iss_exec_ctrl.swiz_sel_c  <= iss_swiz_c;
-    iss_exec_ctrl.rs1_addr_local <= "00"; -- Local addresses ignored by exec unit
-    iss_exec_ctrl.rs2_addr_local <= "00";
-    iss_exec_ctrl.rs3_addr_local <= "00";
-    iss_exec_ctrl.rd_addr_local  <= "00";
+    iss_exec_ctrl.rs1_addr_local <= "0000"; -- Local addresses ignored by exec unit
+    iss_exec_ctrl.rs2_addr_local <= "0000";
+    iss_exec_ctrl.rs3_addr_local <= "0000";
+    iss_exec_ctrl.rd_addr_local  <= "0000";
 
     uut_exec: entity work.execution_unit
         port map (
@@ -190,6 +191,7 @@ begin
         );
 
     u_vrf: entity work.vector_reg_file
+        generic map ( ADDR_WIDTH => 9 )
         port map (
             clk          => clk, reset => reset,
             rs1_addr     => iss_rs1_addr, rs2_addr => iss_rs2_addr, rs3_addr => iss_rs3_addr,
@@ -202,6 +204,7 @@ begin
         );
 
     u_prf: entity work.predicate_reg_file
+        generic map ( ADDR_WIDTH => 9 )
         port map (
             clk          => clk, reset => reset,
             rs1_addr     => iss_rs1_addr, rs2_addr => iss_rs2_addr,
@@ -218,8 +221,8 @@ begin
     begin
         -- Base Initialization
         decoder_exec_ctrl.opcode <= OP_NOP; 
-        decoder_exec_ctrl.rs1_addr_local <= "00"; decoder_exec_ctrl.rs2_addr_local <= "00";
-        decoder_exec_ctrl.rs3_addr_local <= "00"; decoder_exec_ctrl.rd_addr_local <= "00"; 
+        decoder_exec_ctrl.rs1_addr_local <= "0000"; decoder_exec_ctrl.rs2_addr_local <= "0000";
+        decoder_exec_ctrl.rs3_addr_local <= "0000"; decoder_exec_ctrl.rd_addr_local <= "0000"; 
         decoder_exec_ctrl.write_mask <= "0000";
         decoder_exec_ctrl.swiz_sel_a <= SWIZ_PASS;
         decoder_exec_ctrl.swiz_sel_b <= SWIZ_PASS;
@@ -238,7 +241,7 @@ begin
         -- ====================================================================
         report ">> PHASE 1: Initializing Vector Registers (v0=Floats, v1=10.0, v3=Integers)";
         for i in 0 to 31 loop
-            mcu_wr_addr    <= std_logic_vector(to_unsigned(i, 5)) & "00"; -- v0
+            mcu_wr_addr    <= std_logic_vector(to_unsigned(i, 5)) & "0000"; -- v0
             mcu_wr_data(0) <= to_slv(to_float(real(i * 4 + 0))); 
             mcu_wr_data(1) <= to_slv(to_float(real(i * 4 + 1))); 
             mcu_wr_data(2) <= to_slv(to_float(real(i * 4 + 2))); 
@@ -247,11 +250,11 @@ begin
             mcu_we         <= '1';
             wait until rising_edge(clk);
             
-            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "01"; -- v1
+            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0001"; -- v1
             mcu_wr_data <= (others => x"41200000"); -- 10.0f
             wait until rising_edge(clk);
             
-            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "11"; -- v3
+            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011"; -- v3
             mcu_wr_data <= (others => std_logic_vector(to_unsigned(i * 2, 32))); 
             wait until rising_edge(clk);
         end loop;
@@ -263,9 +266,9 @@ begin
         report ">> PHASE 2: Issuing OP_FADD (v2 = v0 + v1)";
         decoder_inst_type <= INST_TYPE_FPU;
         decoder_exec_ctrl.opcode <= OP_FADD;
-        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
-        decoder_exec_ctrl.rs2_addr_local <= "01"; -- v1
-        decoder_exec_ctrl.rd_addr_local  <= "10"; -- v2
+        decoder_exec_ctrl.rs1_addr_local <= "0000"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "0001"; -- v1
+        decoder_exec_ctrl.rd_addr_local  <= "0010"; -- v2
         decoder_exec_ctrl.write_mask     <= "1111";
         decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_FPU;
         decoder_exec_ctrl.vrf_we         <= '1';
@@ -279,7 +282,7 @@ begin
 
         report ">> PHASE 3: Verifying FPU Writeback";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "10";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0010";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
             assert to_real(to_float(mcu_rd_data(0))) = real(i * 4 + 0) + 10.0 report "P3 FPU X mismatch!" severity error;
@@ -298,9 +301,9 @@ begin
         decoder_red_mask  <= "1111";
         
         decoder_exec_ctrl.opcode         <= OP_NOP;
-        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
-        decoder_exec_ctrl.rs2_addr_local <= "01"; -- v1
-        decoder_exec_ctrl.rd_addr_local  <= "11"; -- v3
+        decoder_exec_ctrl.rs1_addr_local <= "0000"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "0001"; -- v1
+        decoder_exec_ctrl.rd_addr_local  <= "0011"; -- v3
         decoder_exec_ctrl.write_mask     <= "1111"; 
         decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_RED;
         decoder_exec_ctrl.vrf_we         <= '1';
@@ -310,7 +313,7 @@ begin
 
         report ">> PHASE 5: Verifying Reduction Writeback";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
             assert to_real(to_float(mcu_rd_data(0))) = real(160 * i + 60) report "P5 RED X mismatch!" severity error;
@@ -326,9 +329,9 @@ begin
         report ">> PHASE 6: Issuing OP_FMUL (v2.xz = v0.yyyy * v0.zzzz)";
         decoder_inst_type <= INST_TYPE_FPU;
         decoder_exec_ctrl.opcode <= OP_FMUL;
-        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
-        decoder_exec_ctrl.rs2_addr_local <= "00"; -- v0 again
-        decoder_exec_ctrl.rd_addr_local  <= "10"; -- Overwrite v2
+        decoder_exec_ctrl.rs1_addr_local <= "0000"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "0000"; -- v0 again
+        decoder_exec_ctrl.rd_addr_local  <= "0010"; -- Overwrite v2
         decoder_exec_ctrl.write_mask     <= "0101"; -- Write X and Z only
         
         -- Note: Custom shuffles no longer supported. Fallback to pass-through/splats.
@@ -343,7 +346,7 @@ begin
 
         report ">> PHASE 7: Verifying Swizzle & Partial FPU Writeback";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "10";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0010";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
             assert to_real(to_float(mcu_rd_data(0))) = real((i * 4 + 1) * (i * 4 + 2)) report "P7 X mismatch (Written)!" severity error;
@@ -362,9 +365,9 @@ begin
         decoder_red_mask  <= "1111"; 
         
         decoder_exec_ctrl.opcode <= OP_NOP; 
-        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
-        decoder_exec_ctrl.rs2_addr_local <= "00"; -- Ignored by SUM, set to v0
-        decoder_exec_ctrl.rd_addr_local  <= "11"; -- Overwrite v3
+        decoder_exec_ctrl.rs1_addr_local <= "0000"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "0000"; -- Ignored by SUM, set to v0
+        decoder_exec_ctrl.rd_addr_local  <= "0011"; -- Overwrite v3
         decoder_exec_ctrl.write_mask     <= "0010"; -- Write Y only
         
         decoder_exec_ctrl.swiz_sel_a <= SWIZ_Y;
@@ -376,7 +379,7 @@ begin
 
         report ">> PHASE 9: Verifying Partial Reduction Writeback";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
             assert to_real(to_float(mcu_rd_data(0))) = real(160 * i + 60) report "P9 X mismatch (Preserved)!" severity error;
@@ -392,9 +395,9 @@ begin
         report ">> PHASE 10: Issuing OP_FCMP_LT (p0 = v0 < v1)";
         decoder_inst_type <= INST_TYPE_FPU;
         decoder_exec_ctrl.opcode <= OP_FCMP_LT;
-        decoder_exec_ctrl.rs1_addr_local <= "00"; -- v0
-        decoder_exec_ctrl.rs2_addr_local <= "01"; -- v1 (10.0)
-        decoder_exec_ctrl.rd_addr_local  <= "00"; -- p0
+        decoder_exec_ctrl.rs1_addr_local <= "0000"; -- v0
+        decoder_exec_ctrl.rs2_addr_local <= "0001"; -- v1 (10.0)
+        decoder_exec_ctrl.rd_addr_local  <= "0000"; -- p0
         decoder_exec_ctrl.write_mask     <= "1111";
         
         -- Reset swizzles to default identity pass-through
@@ -412,7 +415,7 @@ begin
         -- ====================================================================
         report ">> PHASE 11: Issuing OP_FCMP_EQ (p1 = v0 == v1)";
         decoder_exec_ctrl.opcode <= OP_FCMP_EQ;
-        decoder_exec_ctrl.rd_addr_local  <= "01"; -- p1
+        decoder_exec_ctrl.rd_addr_local  <= "0001"; -- p1
         
         decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
         for i in 1 to 100 loop wait until rising_edge(clk); end loop;
@@ -422,9 +425,9 @@ begin
         -- ====================================================================
         report ">> PHASE 12: Issuing OP_POR (p2 = p0 | p1)";
         decoder_exec_ctrl.opcode <= OP_POR;
-        decoder_exec_ctrl.rs1_addr_local <= "00"; -- p0
-        decoder_exec_ctrl.rs2_addr_local <= "01"; -- p1
-        decoder_exec_ctrl.rd_addr_local  <= "10"; -- p2
+        decoder_exec_ctrl.rs1_addr_local <= "0000"; -- p0
+        decoder_exec_ctrl.rs2_addr_local <= "0001"; -- p1
+        decoder_exec_ctrl.rd_addr_local  <= "0010"; -- p2
         decoder_exec_ctrl.is_logic_op    <= '1';
         
         decoder_valid_in <= '1'; wait until rising_edge(clk); decoder_valid_in <= '0';
@@ -458,7 +461,7 @@ begin
         -- ====================================================================
         report ">> PHASE 13.5: Re-initializing v3 with integers";
         for i in 0 to 31 loop
-            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "11"; -- v3
+            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011"; -- v3
             mcu_wr_data <= (others => std_logic_vector(to_unsigned(i * 2, 32)));
             mcu_mask    <= "1111";
             mcu_we      <= '1';
@@ -473,9 +476,9 @@ begin
         report ">> PHASE 14: Issuing OP_IADD (v3.x = v3.x + v3.x)";
         decoder_inst_type <= INST_TYPE_ALU;
         decoder_exec_ctrl.opcode <= OP_IADD;
-        decoder_exec_ctrl.rs1_addr_local <= "11"; -- v3
-        decoder_exec_ctrl.rs2_addr_local <= "11"; -- v3
-        decoder_exec_ctrl.rd_addr_local  <= "11"; -- Overwrite v3
+        decoder_exec_ctrl.rs1_addr_local <= "0011"; -- v3
+        decoder_exec_ctrl.rs2_addr_local <= "0011"; -- v3
+        decoder_exec_ctrl.rd_addr_local  <= "0011"; -- Overwrite v3
         decoder_exec_ctrl.write_mask     <= "0001"; -- Scalar write to X only
         
         decoder_exec_ctrl.wb_mux_sel     <= WB_MUX_ALU;
@@ -487,7 +490,7 @@ begin
 
         report ">> PHASE 15: Verifying ALU Writeback";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
             assert to_integer(unsigned(mcu_rd_data(0))) = i * 4 report "P15 ALU X mismatch!" severity error;
@@ -501,7 +504,7 @@ begin
         report ">> PHASE 16: Issuing OP_LDI_LO (v3.y = 0xBEEF)";
         decoder_inst_type <= INST_TYPE_IMM; 
         decoder_exec_ctrl.opcode      <= OP_LDI_LO;
-        decoder_exec_ctrl.rd_addr_local <= "11"; -- Overwrite v3
+        decoder_exec_ctrl.rd_addr_local <= "0011"; -- Overwrite v3
         decoder_exec_ctrl.write_mask  <= "0010"; -- Scalar write to Y only
         decoder_exec_ctrl.is_load     <= '1';
         decoder_exec_ctrl.imm_data    <= x"BEEF";
@@ -516,7 +519,7 @@ begin
 
         report ">> PHASE 17: Verifying Immediate Writeback";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
             wait until rising_edge(clk); wait until falling_edge(clk);
             
             assert mcu_rd_data(1) = x"0000BEEF" report "P17 Immediate Y mismatch!" severity error;
@@ -531,9 +534,9 @@ begin
         report ">> PHASE 18: Issuing OP_ICMP_SLT (p3 = v3.x < v3.y)";
         decoder_inst_type <= INST_TYPE_ALU;
         decoder_exec_ctrl.opcode <= OP_ICMP_SLT;
-        decoder_exec_ctrl.rs1_addr_local <= "11"; -- v3
-        decoder_exec_ctrl.rs2_addr_local <= "11"; -- v3
-        decoder_exec_ctrl.rd_addr_local  <= "11"; -- Write to p3
+        decoder_exec_ctrl.rs1_addr_local <= "0011"; -- v3
+        decoder_exec_ctrl.rs2_addr_local <= "0011"; -- v3
+        decoder_exec_ctrl.rd_addr_local  <= "0011"; -- Write to p3
         decoder_exec_ctrl.write_mask     <= "1111";
         
         -- Swizzle A routes .x to ALU. Swizzle B routes .y to ALU.

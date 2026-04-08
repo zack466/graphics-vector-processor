@@ -16,7 +16,7 @@ entity writeback_controller is
         -- ==========================================
         -- STAGE 0/1 INPUTS (From Instruction Issuer)
         -- ==========================================
-        iss_rd_addr : in  std_logic_vector(6 downto 0);
+        iss_rd_addr : in  std_logic_vector(8 downto 0);
         iss_mask    : in  std_logic_vector(3 downto 0);
         iss_wb_mux  : in  std_logic_vector(1 downto 0);
         iss_vrf_we  : in  std_logic;
@@ -25,7 +25,7 @@ entity writeback_controller is
         -- ==========================================
         -- STAGE N OUTPUTS (To Register Files)
         -- ==========================================
-        wb_rd_addr  : out std_logic_vector(6 downto 0);
+        wb_rd_addr  : out std_logic_vector(8 downto 0);
         wb_mask     : out std_logic_vector(3 downto 0);
         wb_mux_sel  : out std_logic_vector(1 downto 0);
         wb_vrf_we   : out std_logic;
@@ -38,7 +38,7 @@ architecture rtl of writeback_controller is
     -- ========================================================================
     -- PIPELINE TYPES (Derived directly from processor_constants_pkg)
     -- ========================================================================
-    type addr_pipe_t is array (0 to FPU_MAX_LATENCY) of std_logic_vector(6 downto 0);
+    type addr_pipe_t is array (0 to FPU_MAX_LATENCY) of std_logic_vector(8 downto 0);
     type mask_pipe_t is array (0 to FPU_MAX_LATENCY) of std_logic_vector(3 downto 0);
     type mux_pipe_t  is array (0 to FPU_MAX_LATENCY) of std_logic_vector(1 downto 0);
     type we_pipe_t   is array (0 to FPU_MAX_LATENCY) of std_logic;

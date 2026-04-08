@@ -93,10 +93,10 @@ architecture structural of processor is
     signal iss_issue_valid : std_logic;
     signal iss_opcode      : std_logic_vector(5 downto 0);
     signal iss_thread_id   : std_logic_vector(4 downto 0);
-    signal iss_rs1_global  : std_logic_vector(6 downto 0);
-    signal iss_rs2_global  : std_logic_vector(6 downto 0);
-    signal iss_rs3_global  : std_logic_vector(6 downto 0);
-    signal iss_rd_global   : std_logic_vector(6 downto 0);
+    signal iss_rs1_global  : std_logic_vector(8 downto 0);
+    signal iss_rs2_global  : std_logic_vector(8 downto 0);
+    signal iss_rs3_global  : std_logic_vector(8 downto 0);
+    signal iss_rd_global   : std_logic_vector(8 downto 0);
     
     signal iss_swiz_a      : swizzle_sel_t;
     signal iss_swiz_b      : swizzle_sel_t;
@@ -115,7 +115,7 @@ architecture structural of processor is
     signal prf_rs1_data, prf_rs2_data               : std_logic_vector(3 downto 0);
     signal prf_mask_out                             : std_logic_vector(WARP_SIZE-1 downto 0);
 
-    signal exec_wb_rd_addr : std_logic_vector(6 downto 0);
+    signal exec_wb_rd_addr : std_logic_vector(8 downto 0);
     signal exec_wb_vrf_data: vector_t;
     signal exec_wb_prf_data: std_logic_vector(3 downto 0);
     signal exec_wb_vrf_we  : std_logic;
@@ -124,9 +124,9 @@ architecture structural of processor is
 
     signal mem_op_valid    : std_logic;
     signal mem_stall       : std_logic;
-    signal mem_vrf_rd_addr : std_logic_vector(6 downto 0);
+    signal mem_vrf_rd_addr : std_logic_vector(8 downto 0);
     signal mem_vrf_rd_data : vector_t;
-    signal mem_vrf_wr_addr : std_logic_vector(6 downto 0);
+    signal mem_vrf_wr_addr : std_logic_vector(8 downto 0);
     signal mem_vrf_wr_data : vector_t;
     signal mem_vrf_we      : std_logic;
 
@@ -414,6 +414,7 @@ begin
         );
 
     u_issue : entity work.instruction_issue
+        generic map ( THREAD_WIDTH => 5, REG_WIDTH => 4 )
         port map (
             clk             => clk, reset => reset, exec_ctrl_in => exec_mux_ctrl,
             valid_in        => iss_valid_in, current_thread => iss_thread_id,
@@ -441,8 +442,8 @@ begin
     iss_exec_record.wb_mux_sel  <= iss_wb_mux;
     iss_exec_record.vrf_we      <= iss_vrf_we;
     iss_exec_record.prf_we      <= iss_prf_we;
-    iss_exec_record.rs1_addr_local <= "00"; iss_exec_record.rs2_addr_local <= "00";
-    iss_exec_record.rs3_addr_local <= "00"; iss_exec_record.rd_addr_local  <= "00";
+    iss_exec_record.rs1_addr_local <= "0000"; iss_exec_record.rs2_addr_local <= "0000";
+    iss_exec_record.rs3_addr_local <= "0000"; iss_exec_record.rd_addr_local  <= "0000";
 
     u_exec : entity work.execution_unit
         port map (
@@ -460,7 +461,7 @@ begin
         );
 
     u_mem : entity work.memory_unit
-        generic map ( WARP_SIZE => WARP_SIZE, ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH )
+        generic map ( WARP_SIZE => WARP_SIZE, ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH, REG_WIDTH => 4 )
         port map (
             clk               => clk, reset => reset, mem_op_valid => mem_op_valid,
             is_store          => dec_mem.is_store, base_addr => dec_mem.base_addr & x"0000", 
@@ -476,6 +477,7 @@ begin
         );
 
     u_vrf : entity work.vector_reg_file
+        generic map ( ADDR_WIDTH => 9 )
         port map (
             clk => clk, reset => reset, rs1_addr => iss_rs1_global, rs2_addr => iss_rs2_global,
             rs3_addr => iss_rs3_global, rs1_data => vrf_rs1_data, rs2_data => vrf_rs2_data,
@@ -486,6 +488,7 @@ begin
         );
 
     u_prf : entity work.predicate_reg_file
+        generic map ( ADDR_WIDTH => 9 )
         port map (
             clk => clk, reset => reset, rs1_addr => iss_rs1_global, rs2_addr => iss_rs2_global,
             rs1_data => prf_rs1_data, rs2_data => prf_rs2_data, wr_addr => exec_wb_rd_addr,

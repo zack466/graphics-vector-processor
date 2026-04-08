@@ -146,10 +146,10 @@ package processor_constants_pkg is
     -- ========================================================================
     type fpu_ctrl_t is record
         opcode          : std_logic_vector(5 downto 0);
-        rs1_addr_local  : std_logic_vector(1 downto 0);
-        rs2_addr_local  : std_logic_vector(1 downto 0);
-        rs3_addr_local  : std_logic_vector(1 downto 0);
-        rd_addr_local   : std_logic_vector(1 downto 0);
+        rs1_addr_local  : std_logic_vector(3 downto 0);
+        rs2_addr_local  : std_logic_vector(3 downto 0);
+        rs3_addr_local  : std_logic_vector(3 downto 0);
+        rd_addr_local   : std_logic_vector(3 downto 0);
         swiz_sel_a      : swizzle_sel_t;
         swiz_sel_b      : swizzle_sel_t;
         swiz_sel_c      : swizzle_sel_t;
@@ -163,9 +163,9 @@ package processor_constants_pkg is
     end record;
 
     type red_ctrl_t is record
-        rs1_addr_local  : std_logic_vector(1 downto 0);
-        rs2_addr_local  : std_logic_vector(1 downto 0);
-        rd_addr_local   : std_logic_vector(1 downto 0);
+        rs1_addr_local  : std_logic_vector(3 downto 0);
+        rs2_addr_local  : std_logic_vector(3 downto 0);
+        rd_addr_local   : std_logic_vector(3 downto 0);
         swiz_sel_a      : swizzle_sel_t;
         swiz_sel_b      : swizzle_sel_t;
         red_mask        : std_logic_vector(3 downto 0); 
@@ -183,9 +183,9 @@ package processor_constants_pkg is
 
     type alu_ctrl_t is record
         opcode          : std_logic_vector(5 downto 0);
-        rs1_addr_local  : std_logic_vector(1 downto 0);
-        rs2_addr_local  : std_logic_vector(1 downto 0);
-        rd_addr_local   : std_logic_vector(1 downto 0);
+        rs1_addr_local  : std_logic_vector(3 downto 0);
+        rs2_addr_local  : std_logic_vector(3 downto 0);
+        rd_addr_local   : std_logic_vector(3 downto 0);
         swiz_sel_a      : swizzle_sel_t;
         swiz_sel_b      : swizzle_sel_t;
         write_mask      : std_logic_vector(3 downto 0);
@@ -201,8 +201,8 @@ package processor_constants_pkg is
         is_valid         : std_logic;
         is_store         : std_logic;
         base_addr        : std_logic_vector(15 downto 0); -- 16-bit immediate base address
-        offset_reg_idx   : std_logic_vector(1 downto 0);
-        dest_src_reg_idx : std_logic_vector(1 downto 0);
+        offset_reg_idx   : std_logic_vector(3 downto 0);
+        dest_src_reg_idx : std_logic_vector(3 downto 0);
     end record;
 
     -- ========================================================================
@@ -212,10 +212,10 @@ package processor_constants_pkg is
     -- ========================================================================
     type exec_ctrl_t is record
         opcode          : std_logic_vector(5 downto 0);
-        rs1_addr_local  : std_logic_vector(1 downto 0);
-        rs2_addr_local  : std_logic_vector(1 downto 0);
-        rs3_addr_local  : std_logic_vector(1 downto 0); 
-        rd_addr_local   : std_logic_vector(1 downto 0);
+        rs1_addr_local  : std_logic_vector(3 downto 0);
+        rs2_addr_local  : std_logic_vector(3 downto 0);
+        rs3_addr_local  : std_logic_vector(3 downto 0);
+        rd_addr_local   : std_logic_vector(3 downto 0);
         swiz_sel_a      : swizzle_sel_t;
         swiz_sel_b      : swizzle_sel_t;
         swiz_sel_c      : swizzle_sel_t;                

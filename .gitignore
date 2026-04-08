@@ -8,3 +8,7 @@
 work/
 .DS_STORE
 .claude
+*.log
+__pycache__
+*.png
+*.hex

@@ -26,10 +26,10 @@ architecture sim of tb_issuer_writeback_integration is
     
     signal current_thread  : std_logic_vector(4 downto 0);
     signal iss_opcode      : std_logic_vector(5 downto 0);
-    signal iss_rs1_addr    : std_logic_vector(6 downto 0);
-    signal iss_rs2_addr    : std_logic_vector(6 downto 0);
-    signal iss_rs3_addr    : std_logic_vector(6 downto 0);
-    signal iss_rd_addr     : std_logic_vector(6 downto 0);
+    signal iss_rs1_addr    : std_logic_vector(8 downto 0);
+    signal iss_rs2_addr    : std_logic_vector(8 downto 0);
+    signal iss_rs3_addr    : std_logic_vector(8 downto 0);
+    signal iss_rd_addr     : std_logic_vector(8 downto 0);
     signal iss_mask        : std_logic_vector(3 downto 0);
     signal iss_valid       : std_logic;
     signal iss_wb_mux      : std_logic_vector(1 downto 0);
@@ -83,7 +83,7 @@ architecture sim of tb_issuer_writeback_integration is
     signal vrf_wb_data : vector_t;
     signal prf_wb_data : std_logic_vector(3 downto 0);
 
-    signal wb_rd_addr  : std_logic_vector(6 downto 0);
+    signal wb_rd_addr  : std_logic_vector(8 downto 0);
     signal wb_mask     : std_logic_vector(3 downto 0);
     signal wb_mux_sel  : std_logic_vector(1 downto 0);
     signal wb_vrf_we   : std_logic;
@@ -92,7 +92,7 @@ architecture sim of tb_issuer_writeback_integration is
     -- ========================================================================
     -- MCU / IFU VERIFICATION PORTS
     -- ========================================================================
-    signal mcu_rd_addr, mcu_wr_addr : std_logic_vector(6 downto 0) := (others => '0');
+    signal mcu_rd_addr, mcu_wr_addr : std_logic_vector(8 downto 0) := (others => '0');
     signal mcu_rd_data, mcu_wr_data : vector_t := (others => (others => '0'));
     signal mcu_we                   : std_logic := '0';
     signal mcu_mask                 : std_logic_vector(3 downto 0) := "0000";
@@ -113,6 +113,7 @@ begin
     -- INSTANTIATIONS
     -- ========================================================================
     u_issuer: entity work.instruction_issue
+        generic map ( THREAD_WIDTH => 5, REG_WIDTH => 4 )
         port map (
             clk => clk, reset => reset, 
             exec_ctrl_in => exec_ctrl_in, 
@@ -143,6 +144,7 @@ begin
         );
 
     u_vrf: entity work.vector_reg_file
+        generic map ( ADDR_WIDTH => 9 )
         port map (
             clk => clk, reset => reset,
             rs1_addr => iss_rs1_addr, rs2_addr => iss_rs2_addr, rs3_addr => iss_rs3_addr,
@@ -155,6 +157,7 @@ begin
         );
 
     u_prf: entity work.predicate_reg_file
+        generic map ( ADDR_WIDTH => 9 )
         port map (
             clk => clk, reset => reset,
             rs1_addr => iss_rs1_addr, rs2_addr => iss_rs2_addr,
@@ -240,8 +243,8 @@ begin
     stim_proc: process
     begin
         -- Base Initialization using exec_ctrl_t
-        exec_ctrl_in.opcode <= OP_NOP; exec_ctrl_in.rs1_addr_local <= "00"; exec_ctrl_in.rs2_addr_local <= "00";
-        exec_ctrl_in.rs3_addr_local <= "00"; exec_ctrl_in.rd_addr_local <= "00"; exec_ctrl_in.write_mask <= "0000";
+        exec_ctrl_in.opcode <= OP_NOP; exec_ctrl_in.rs1_addr_local <= "0000"; exec_ctrl_in.rs2_addr_local <= "0000";
+        exec_ctrl_in.rs3_addr_local <= "0000"; exec_ctrl_in.rd_addr_local <= "0000"; exec_ctrl_in.write_mask <= "0000";
         
         exec_ctrl_in.swiz_sel_a <= SWIZ_PASS;
         exec_ctrl_in.swiz_sel_b <= SWIZ_PASS;
@@ -262,7 +265,7 @@ begin
         -- ====================================================================
         report ">> PHASE 1: Initializing Vector Registers (v0=Floats, v1=10.0, v3=Integers)";
         for i in 0 to 31 loop
-            mcu_wr_addr    <= std_logic_vector(to_unsigned(i, 5)) & "00";
+            mcu_wr_addr    <= std_logic_vector(to_unsigned(i, 5)) & "0000";
             mcu_wr_data(0) <= to_slv(to_float(real(i * 4 + 0))); 
             mcu_wr_data(1) <= to_slv(to_float(real(i * 4 + 1))); 
             mcu_wr_data(2) <= to_slv(to_float(real(i * 4 + 2))); 
@@ -271,11 +274,11 @@ begin
             mcu_we         <= '1';
             wait until rising_edge(clk);
             
-            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "01";
+            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0001";
             mcu_wr_data <= (others => x"41200000"); -- Float representation of 10.0
             wait until rising_edge(clk);
 
-            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
             mcu_wr_data <= (others => std_logic_vector(to_unsigned(i * 2, 32))); 
             wait until rising_edge(clk);
         end loop;
@@ -286,9 +289,9 @@ begin
         -- ====================================================================
         report ">> PHASE 2: Issuing OP_FADD (v2 = v0 + v1)";
         exec_ctrl_in.opcode <= OP_FADD;
-        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
-        exec_ctrl_in.rs2_addr_local <= "01"; -- v1
-        exec_ctrl_in.rd_addr_local  <= "10"; -- Store in v2
+        exec_ctrl_in.rs1_addr_local <= "0000"; -- v0
+        exec_ctrl_in.rs2_addr_local <= "0001"; -- v1
+        exec_ctrl_in.rd_addr_local  <= "0010"; -- Store in v2
         exec_ctrl_in.write_mask     <= "1111";
         
         exec_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
@@ -308,9 +311,9 @@ begin
         -- ====================================================================
         report ">> PHASE 3: Issuing OP_FCMP_LT (p0 = v0 < v1)";
         exec_ctrl_in.opcode <= OP_FCMP_LT;
-        exec_ctrl_in.rs1_addr_local <= "00"; -- v0
-        exec_ctrl_in.rs2_addr_local <= "01"; -- v1
-        exec_ctrl_in.rd_addr_local  <= "00"; -- Store in predicate p0
+        exec_ctrl_in.rs1_addr_local <= "0000"; -- v0
+        exec_ctrl_in.rs2_addr_local <= "0001"; -- v1
+        exec_ctrl_in.rd_addr_local  <= "0000"; -- Store in predicate p0
         exec_ctrl_in.write_mask     <= "1111";
         
         exec_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
@@ -330,7 +333,7 @@ begin
         -- ====================================================================
         report ">> PHASE 4: Verifying VRF Writeback Results (FPU)";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "10";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0010";
             wait until rising_edge(clk); 
             wait until falling_edge(clk); 
             
@@ -368,9 +371,9 @@ begin
         -- ====================================================================
         report ">> PHASE 6: Issuing OP_IADD (v3.x = v3.x + v3.x)";
         exec_ctrl_in.opcode <= OP_IADD;
-        exec_ctrl_in.rs1_addr_local <= "11"; -- v3
-        exec_ctrl_in.rs2_addr_local <= "11"; -- v3
-        exec_ctrl_in.rd_addr_local  <= "11"; -- Overwrite v3
+        exec_ctrl_in.rs1_addr_local <= "0011"; -- v3
+        exec_ctrl_in.rs2_addr_local <= "0011"; -- v3
+        exec_ctrl_in.rd_addr_local  <= "0011"; -- Overwrite v3
         exec_ctrl_in.write_mask     <= "0001"; -- Scalar write to X only
         
         exec_ctrl_in.wb_mux_sel     <= WB_MUX_ALU;
@@ -390,7 +393,7 @@ begin
         -- ====================================================================
         report ">> PHASE 7: Verifying VRF Writeback Results (ALU)";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
             wait until rising_edge(clk); 
             wait until falling_edge(clk); 
             
@@ -404,7 +407,7 @@ begin
         -- ====================================================================
         report ">> PHASE 8: Issuing OP_LDI_LO (v3.y = 0xBEEF)";
         exec_ctrl_in.opcode      <= OP_LDI_LO;
-        exec_ctrl_in.rd_addr_local <= "11"; -- Overwrite v3
+        exec_ctrl_in.rd_addr_local <= "0011"; -- Overwrite v3
         exec_ctrl_in.write_mask  <= "0010"; -- Scalar write to Y only
         exec_ctrl_in.is_load     <= '1';
         exec_ctrl_in.imm_data    <= x"BEEF";
@@ -426,7 +429,7 @@ begin
         -- ====================================================================
         report ">> PHASE 9: Verifying VRF Writeback Results (Immediates)";
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "11";
+            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
             wait until rising_edge(clk); 
             wait until falling_edge(clk); 
             

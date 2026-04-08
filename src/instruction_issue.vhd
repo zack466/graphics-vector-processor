@@ -8,7 +8,7 @@ use work.processor_constants_pkg.all;
 entity instruction_issue is
     generic (
         THREAD_WIDTH : integer := 5;  -- 32 threads
-        REG_WIDTH    : integer := 2   -- 4 vector registers
+        REG_WIDTH    : integer := 4   -- 16 vector registers per thread
     );
     port (
         clk             : in  std_logic;
@@ -46,9 +46,9 @@ architecture rtl of instruction_issue is
 
     signal latched_ctrl : exec_ctrl_t := (
         opcode         => OP_NOP,
-        rs1_addr_local => "00", rs2_addr_local => "00", rs3_addr_local => "00", rd_addr_local => "00",
+        rs1_addr_local => "0000", rs2_addr_local => "0000", rs3_addr_local => "0000", rd_addr_local => "0000",
         swiz_sel_a     => SWIZ_PASS, swiz_sel_b => SWIZ_PASS, swiz_sel_c => SWIZ_PASS,
-        write_mask     => "0000", wb_mux_sel => "00", 
+        write_mask     => "0000", wb_mux_sel => "00",
         cmp_invert     => '0', cmp_swap => '0',
         is_logic_op    => '0', vrf_we => '0', prf_we => '0',
         is_load        => '0', imm_data => (others => '0')
@@ -66,8 +66,8 @@ begin
                 count <= to_unsigned(32, 6); 
                 
                 latched_ctrl.opcode         <= OP_NOP;
-                latched_ctrl.rs1_addr_local <= "00"; latched_ctrl.rs2_addr_local <= "00";
-                latched_ctrl.rs3_addr_local <= "00"; latched_ctrl.rd_addr_local  <= "00";
+                latched_ctrl.rs1_addr_local <= "0000"; latched_ctrl.rs2_addr_local <= "0000";
+                latched_ctrl.rs3_addr_local <= "0000"; latched_ctrl.rd_addr_local  <= "0000";
                 latched_ctrl.swiz_sel_a     <= SWIZ_PASS;
                 latched_ctrl.swiz_sel_b     <= SWIZ_PASS;
                 latched_ctrl.swiz_sel_c     <= SWIZ_PASS;

@@ -43,7 +43,7 @@ entity execution_unit is
         inst_type_in      : in  std_logic_vector(3 downto 0);
         red_mode_in       : in  std_logic_vector(1 downto 0);
         red_mask_in       : in  std_logic_vector(3 downto 0);
-        rd_addr_global_in : in  std_logic_vector(6 downto 0);
+        rd_addr_global_in : in  std_logic_vector(8 downto 0);
 
         vrf_rs1_data      : in  vector_t;
         vrf_rs2_data      : in  vector_t;
@@ -54,7 +54,7 @@ entity execution_unit is
         warp_offset_in    : in  std_logic_vector(31 downto 0);
         thread_id_in      : in  std_logic_vector(4 downto 0);
 
-        wb_rd_addr_out    : out std_logic_vector(6 downto 0);
+        wb_rd_addr_out    : out std_logic_vector(8 downto 0);
         wb_vrf_data_out   : out vector_t;
         wb_prf_data_out   : out std_logic_vector(3 downto 0);
         wb_vrf_we_out     : out std_logic;
@@ -116,7 +116,7 @@ begin
                 s1_prf_rs1   <= prf_rs1_data;
                 s1_prf_rs2   <= prf_rs2_data;
                 s1_thread_id <= thread_id_in;
-                
+
                 -- Shift the flush token down the pipeline
                 flush_shift_reg <= flush_shift_reg(FPU_MAX_LATENCY-2 downto 0) & is_flush_stage1;
             end if;

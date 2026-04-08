@@ -19,10 +19,10 @@ architecture sim of tb_instruction_issue is
     
     signal current_thread  : std_logic_vector(4 downto 0);
     signal opcode_out      : std_logic_vector(5 downto 0);
-    signal rs1_addr_global : std_logic_vector(6 downto 0);
-    signal rs2_addr_global : std_logic_vector(6 downto 0);
-    signal rs3_addr_global : std_logic_vector(6 downto 0);
-    signal rd_addr_global  : std_logic_vector(6 downto 0);
+    signal rs1_addr_global : std_logic_vector(8 downto 0);
+    signal rs2_addr_global : std_logic_vector(8 downto 0);
+    signal rs3_addr_global : std_logic_vector(8 downto 0);
+    signal rd_addr_global  : std_logic_vector(8 downto 0);
     signal swiz_sel_a      : swizzle_sel_t;
     signal swiz_sel_b      : swizzle_sel_t;
     signal swiz_sel_c      : swizzle_sel_t;
@@ -45,7 +45,7 @@ architecture sim of tb_instruction_issue is
 begin
 
     uut: entity work.instruction_issue
-        generic map ( THREAD_WIDTH => 5, REG_WIDTH => 2 )
+        generic map ( THREAD_WIDTH => 5, REG_WIDTH => 4 )
         port map (
             clk => clk, reset => reset, 
             exec_ctrl_in => exec_ctrl_in,
@@ -70,10 +70,10 @@ begin
     begin
         -- Default Initialization using unified record
         exec_ctrl_in.opcode         <= OP_NOP;
-        exec_ctrl_in.rs1_addr_local <= "00";
-        exec_ctrl_in.rs2_addr_local <= "00";
-        exec_ctrl_in.rs3_addr_local <= "00";
-        exec_ctrl_in.rd_addr_local  <= "00";
+        exec_ctrl_in.rs1_addr_local <= "0000";
+        exec_ctrl_in.rs2_addr_local <= "0000";
+        exec_ctrl_in.rs3_addr_local <= "0000";
+        exec_ctrl_in.rd_addr_local  <= "0000";
         exec_ctrl_in.swiz_sel_a     <= SWIZ_PASS;
         exec_ctrl_in.swiz_sel_b     <= SWIZ_PASS;
         exec_ctrl_in.swiz_sel_c     <= SWIZ_PASS;
@@ -97,7 +97,7 @@ begin
         report ">> TEST 1: Issuing Full 32 Threads";
         
         exec_ctrl_in.opcode         <= OP_FCMP_LT;
-        exec_ctrl_in.rs1_addr_local <= "01";
+        exec_ctrl_in.rs1_addr_local <= "0001";
         exec_ctrl_in.cmp_invert     <= '1'; 
         exec_ctrl_in.cmp_swap       <= '1'; 
         exec_ctrl_in.is_logic_op    <= '0';
@@ -111,7 +111,7 @@ begin
             
             assert issue_valid = '1' report "issue_valid dropped early!" severity error;
             assert to_integer(unsigned(current_thread)) = i report "Thread mismatch!" severity error;
-            assert rs1_addr_global = std_logic_vector(to_unsigned(i, 5)) & "01" report "Global Addr mismatch" severity error;
+            assert rs1_addr_global = std_logic_vector(to_unsigned(i, 5)) & "0001" report "Global Addr mismatch" severity error;
             assert opcode_out = OP_FCMP_LT report "Opcode latch mismatch" severity error;
             assert cmp_invert = '1' report "Invert flag latch mismatch" severity error;
             assert cmp_swap = '1' report "Swap flag latch mismatch" severity error;
@@ -129,7 +129,7 @@ begin
                 
                 -- Scramble the input to rigorously prove that the latch is working
                 exec_ctrl_in.opcode <= OP_NOP;
-                exec_ctrl_in.rs1_addr_local <= "00";
+                exec_ctrl_in.rs1_addr_local <= "0000";
                 exec_ctrl_in.cmp_invert <= '0';
                 exec_ctrl_in.cmp_swap <= '0';
                 exec_ctrl_in.prf_we <= '0';
