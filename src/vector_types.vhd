@@ -1,5 +1,37 @@
 --------------------------------------------------------------------------------
--- Package Definition
+-- Package: vector_types_pkg
+--
+-- PURPOSE:
+--   Defines the canonical scalar and vector primitive types shared across every
+--   entity in the SIMT vector processor.  Centralising them here avoids
+--   duplicated type declarations and ensures that every entity speaks the same
+--   bit-width language — a mismatch would otherwise be a silent functional bug
+--   caught only at simulation time.
+--
+-- USAGE:
+--   Add the following two lines to any entity that needs these types:
+--       library work;
+--       use work.vector_types_pkg.all;
+--
+-- TYPES DEFINED:
+--   word_t        -- 32-bit scalar value.  Used for individual ALU operands,
+--                    register file words, and instruction words.
+--
+--   vector_t      -- Array of four word_ts, indexed 0..3 corresponding to the
+--                    XYZW components of a GPU-style vector register.  Index 0
+--                    is X (lowest address / least-significant lane).
+--
+--   swizzle_sel_t -- 3-bit selector code that picks one source component for a
+--                    single destination lane during a swizzle operation.
+--                    3 bits gives 8 encodings; the top 4 are reserved, leaving
+--                    codes 0-3 for X/Y/Z/W selection.  Kept as a raw
+--                    std_logic_vector so it can be sliced directly from the
+--                    instruction word without a numeric conversion.
+--
+-- DESIGN NOTES:
+--   vector_t is declared as a VHDL array type (not a subtype) because VHDL
+--   does not allow array subtypes with unconstrained element types.  Using a
+--   named type also makes port and signal declarations self-documenting.
 --------------------------------------------------------------------------------
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
