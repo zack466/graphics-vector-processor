@@ -154,6 +154,11 @@ entity execution_unit is
         wb_prf_we_out     : out std_logic;
         wb_mask_out       : out std_logic_vector(3 downto 0);
         
+        -- Memory block transfer snooping
+        mem_store_valid   : out std_logic;
+        mem_store_data    : out vector_t;
+        mem_store_thread_id : out std_logic_vector(4 downto 0);
+        
         -- NEW: Pipeline Status Flags
         flush_active_out  : out std_logic
     );
@@ -421,5 +426,15 @@ begin
     --     an FCMP to produce P0={X=1,Y=0,Z=1,W=0} when components differ in value.
     wb_prf_data_out <= (alu_comp_flag & alu_comp_flag & alu_comp_flag & alu_comp_flag) when wb_mux_sel_out = WB_MUX_ALU else
                        (comp_flag_w & comp_flag_z & comp_flag_y & comp_flag_x);
+
+    -- ========================================================================
+    -- MEMORY BLOCK TRANSFER SNOOPING
+    -- ========================================================================
+    -- Provide valid memory data to memory unit during execution of OP_STORE.
+    -- OP_STORE doesn't write back to VRF via the writeback_controller, so it
+    -- is routed directly from the S1 stage to the memory unit.
+    mem_store_valid <= '1' when (s1_valid = '1' and s1_ctrl.opcode = OP_STORE) else '0';
+    mem_store_data <= vrf_rs1_data;
+    mem_store_thread_id <= s1_thread_id;
 
 end architecture rtl;

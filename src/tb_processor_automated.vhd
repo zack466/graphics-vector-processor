@@ -11,7 +11,7 @@ entity tb_processor_automated is
         PROGRAM_FILE     : string  := "program.hex";
         MEMORY_DUMP_FILE : string  := "memory_dump.hex";
         DUMP_START_ADDR  : integer := 0; -- Framebuffer start
-        DUMP_END_ADDR    : integer := 16384 -- 1024 pixels * 16 bytes/pixel
+        DUMP_END_ADDR    : integer := 4096 -- 1024 pixels * 4 bytes/pixel
     );
 end entity tb_processor_automated;
 
@@ -87,7 +87,8 @@ begin
     u_processor : entity work.processor
         generic map (
             PC_WIDTH => PC_WIDTH, IMEM_ADDR_WIDTH => IMEM_ADDR_WIDTH,
-            WARP_SIZE => WARP_SIZE, ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH
+            WARP_SIZE => WARP_SIZE, ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH,
+            REG_WIDTH => LOCAL_REG_WIDTH
         )
         port map (
             clk => clk, reset => reset,

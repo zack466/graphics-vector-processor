@@ -27,19 +27,20 @@ def generate_image(dump_file, output_png):
         for line in f:
             parts = line.strip().split()
             if len(parts) == 4:
-                # RGBA order in memory: X=R, Y=G, Z=B, W=A
-                r = int(hex_to_float(parts[3]) * 255)
-                g = int(hex_to_float(parts[2]) * 255)
-                b = int(hex_to_float(parts[1]) * 255)
-                a = int(hex_to_float(parts[0]) * 255)
-                
-                # Clamp to 0-255
-                r = max(0, min(255, r))
-                g = max(0, min(255, g))
-                b = max(0, min(255, b))
-                a = max(0, min(255, a))
-                
-                pixels.append((r, g, b, a))
+                # The line contains four 32-bit pixels (from 128-bit word)
+                # Dump order: parts[0] is pixel 3, parts[1] is pixel 2, parts[2] is pixel 1, parts[3] is pixel 0
+                for part in reversed(parts):
+                    try:
+                        val = int(part, 16)
+                    except ValueError:
+                        val = 0
+                    # Pixel format is W, Z, Y, X (Alpha, Blue, Green, Red)
+                    # W = val >> 24, Z = (val >> 16) & 0xFF, Y = (val >> 8) & 0xFF, X = val & 0xFF
+                    r = val & 0xFF
+                    g = (val >> 8) & 0xFF
+                    b = (val >> 16) & 0xFF
+                    a = (val >> 24) & 0xFF
+                    pixels.append((r, g, b, a))
 
     if not pixels:
         print("No pixels found in dump.")

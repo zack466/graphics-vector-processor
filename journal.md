@@ -13,8 +13,6 @@
     for pure shaders, reading is not necessary, only need to know thread ID and global registers like width/height, mouse position, etc.
 * create top top level that can trigger processor to draw a frame, and keeps it in sync with the VIP framebuffer.
   should probably hardcode addresses of two backbuffers for double buffering.
-* special pixel-packing pipeline and memory write operation, since framebuffer will be expected each pixel to be a 32-bit packed RGBA value with integers from 0 to 255
-* replace coalescing memory unit, assume accesses are always "src + thread offset", will probably massively simplify logic and maybe speed up memory throughput too
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard)
 
 # Agent changes
@@ -322,3 +320,26 @@
 - Changed the polling loop in `tb_vector_reduction_unit.vhd` from `1 to FPU_MAX_LATENCY` to `1 to FPU_MAX_LATENCY - 1` to accurately reflect the timing when `valid_out` is asserted.
 - Verified that the `vector_reduction_unit` testbench now passes successfully without any assertion errors.
 
+
+## Date: 2026-04-11
+
+### Simplified Memory Controller (Block Transfer & Pixel Packing)
+- Deprecated `mcu_scatter_gather.vhd` in favor of a new `mcu_block_transfer.vhd` design.
+- The new memory controller strictly enforces 128-bit sequential Avalon burst reads/writes instead of arbitrary non-sequential accesses.
+- Added a 32x32-bit (1024 bit) `warp_output_buffer` inside the memory controller.
+- Modified `OP_STORE` instruction decode logic in `instruction_decoder.vhd` and `processor.vhd` to dispatch memory instructions through the `execution_unit` barrel scheduler.
+- As the barrel scheduler issues threads 0 through 31, the `execution_unit` snoops VRF Port A read data and provides `mem_store_valid`, `mem_store_data`, and `mem_store_thread_id` to the memory controller.
+- The memory controller automatically packs the pixel components (the lower 8 bits of X, Y, Z, W) into 32-bit integers and populates its internal warp buffer.
+- When the 32-cycle scheduling completes, the FSM transitions to `MEM_WAIT` and signals the memory controller to emit 8 sequential 128-bit write beats to Avalon.
+- Re-wrote and validated all behavior via the new `tb_mcu_block_transfer.vhd` testbench.
+
+### Automated Tests and Memory Block Store Updates
+- Discovered and fixed a massive simulation slowdown caused by incorrectly exposing floating point units to combinational toggles during memory instructions. Reverted the FPU optimization that was causing it.
+- Fixed a bug where block stores from different warps were continually overwriting address `0x0000`. Updated `processor.vhd` to automatically add `csr_warp_offset * 4` to the base address provided by the `STORE` instruction, correctly spacing out each warp's 128-byte chunk in the framebuffer.
+- Fixed SIMT divergence failures in `STORE` logic by routing `exec_mask` from the `memory_unit` into the `mcu_block_transfer` controller, allowing masked threads to output `"0000"` to the Avalon `tx_byte_en` line so masked pixels are untouched in memory.
+- Fixed an issue where the image output was 64x16 instead of 32x32 by correctly setting `DUMP_END_ADDR` to 4096 (1024 pixels * 4 bytes per pixel) instead of 16384.
+- Cleaned up the `mcu_block_transfer.vhd` code by removing all states and logic related to `LOAD` instructions, as they are no longer supported by the block transfer architecture.
+- Modified automated tests in `tools/*.s` to conform to the new block store architecture (removed `offset_reg` usage in `STORE`, changed memory output format to expect packed RGBA pixels).
+- Updated tests to rescale floating-point color values from 0.0-1.0 to integer values from 0-255 using the `F2I` (Float-to-Integer) instruction before storing to the block memory buffer.
+- Updated `tools/runner.py` and `tools/check_pixels.py` to parse 32-bit packed integers instead of floats.
+- Updated `programming_manual.md` and `README.md` to reflect the new `STORE`/`LOAD` format and block transfer memory controller.

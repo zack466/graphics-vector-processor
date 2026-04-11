@@ -296,25 +296,26 @@ LDI_HI v10.xyzw, 0x3F80   # upper 16 bits = 0x3F80 → v10 = 0x3F800000 = 1.0f
 
 ### 4.5 Memory Instructions
 
-Memory is a flat 128-bit-wide space. Each address holds 16 bytes (four 32-bit components), matching one vector register.
+Memory is a flat 128-bit-wide space. Each address holds 16 bytes (four 32-bit components). The new block transfer memory controller issues memory accesses at the granularity of an entire warp (32 threads).
 
-#### `STORE  src, imm14(base)`
-Write vector register `src` to memory at address `base + imm14`.
+#### `STORE  src, imm14`
+Write 32 packed pixels (one per thread in the warp) to memory sequentially starting at the byte address `imm14 << 16`.
 
 ```asm
-STORE v4, 0x0000(v2)   # mem[v2 + 0] = v4
+STORE v4, 0x0001       # mem[0x00010000...] = packed(v4)
 ```
 
-- `base` is a vector register; its X component provides the byte address.
-- `imm14` is a 14-bit unsigned byte offset.
-- **Only threads whose exec_mask bit is set will write.** The exec_mask is managed automatically by the SIMT divergence hardware.
-- **FLUSH is required before STORE** to ensure all threads' vector register values are committed before the MCU reads the VRF. See [Section 5](#5-pipeline-timing-and-flush-rules).
+- `imm14` is a 14-bit unsigned immediate forming the upper half of the 32-bit base address.
+- The `STORE` instruction causes the barrel scheduler to read `src` for all 32 threads.
+- The memory controller snoops this data, extracts the lower 8 bits of the W, Z, Y, and X components of each thread's vector, and packs them into a 32-bit integer (RGBA format: Alpha=W, Blue=Z, Green=Y, Red=X).
+- It then issues 8 back-to-back 128-bit Avalon burst writes to memory.
+- **FLUSH is required before STORE** to ensure all threads' vector register values are committed before the memory controller reads the VRF.
 
-#### `LOAD  dest, imm14(base)`
-Read 16 bytes from memory at address `base + imm14` into vector register `dest`.
+#### `LOAD  dest, imm14`
+Read 8 sequential 128-bit words (32 pixels) from memory starting at address `imm14 << 16` into vector register `dest` across all 32 threads.
 
 ```asm
-LOAD v5, 0x0000(v2)    # v5 = mem[v2 + 0]
+LOAD v5, 0x0001        # v5 = mem[0x00010000...]
 ```
 
 ---
@@ -427,7 +428,7 @@ FMUL v4.xyzw, v3, v3   # v3 is ready
 ```asm
 # ... arithmetic ...
 FLUSH                  # drain before store
-STORE v_result, 0x0000(v_addr)
+STORE v_result, 0x0000 # write warp to address 0x00000000
 FLUSH                  # drain after store (before RETURN)
 RETURN
 ```
@@ -450,13 +451,15 @@ All 32 threads of a warp always execute the same instruction stream. When thread
 
 # ---- not-taken (else) path ----
     # instructions for "false" threads
-    STORE   v_else, 0x0000(v_addr)   # exec_mask: false threads only
+    # Note: With the block transfer STORE, Avalon byte enables are masked
+    # based on the exec_mask, so masked pixels are left untouched in memory.
+    STORE   v_else, 0x0000           # exec_mask: false threads only
     SYNC                              # end of else-path
 
 # ---- taken (if) path ----
 if_label:
     # instructions for "true" threads
-    STORE   v_if, 0x0000(v_addr)     # exec_mask: true threads only
+    STORE   v_if, 0x0000             # exec_mask: true threads only
     SYNC                              # end of if-path → reconverge
 
 # ---- reconvergence ----
@@ -542,7 +545,7 @@ ISHL v_addr.xyzw, v0, v_sh   # byte address = tid * 16
 # ... your computation here ...
 
 FLUSH
-STORE v_out, 0x0000(v_addr)
+STORE v_out, 0x0000
 FLUSH
 RETURN
 ```
@@ -621,10 +624,8 @@ W Z Y X     ← each line is one pixel (128-bit bus: W=[127:96], Z=[95:64], Y=[6
 ```asm
 # Each thread stores its own ID as an integer in all components.
 THREAD_ID v0.xyzw          # v0 = global_tid
-LDI_LO v1.xyzw, 0x0004
-ISHL v2.xyzw, v0, v1       # byte addr = tid * 16
 FLUSH
-STORE v0, 0x0000(v2)
+STORE v0, 0x0000           # Output 32 pixels
 FLUSH
 RETURN
 ```
@@ -654,9 +655,10 @@ FMUL v14.x, v11, v13       # v14.X = R
 FMUL v14.y, v12, v13       # v14.Y = G
                             # v14.Z stays 0 (never written)
 FMUL v14.w, v13, v13       # v14.W = 1.0f (alpha)
+F2I v15.xyzw, v14          # convert float to int (0-255)
 
 FLUSH
-STORE v14, 0x0000(v2)
+STORE v15, 0x0000
 FLUSH
 RETURN
 ```
@@ -684,17 +686,16 @@ BRA_DIV white, p0          # even → white; odd → black (fall-through)
 
 # Black
 LDI_LO v11.xyzw, 0x0000
-STORE v11, 0x0000(v2)
 SYNC
 
 # White
 white:
 LDI_LO v11.xyzw, 0x0000
 LDI_HI v11.xyzw, 0x3F80   # 1.0f
-STORE v11, 0x0000(v2)
 SYNC
 
 reconv:
 FLUSH
+STORE v11, 0x0000
 RETURN
 ```

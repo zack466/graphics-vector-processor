@@ -1,16 +1,13 @@
 # test01_thread_id.s
 # Simplest possible test: store raw integer thread ID to memory.
-# Expected: pixel N = W=Z=Y=X = N (as raw integer, not float)
-# e.g. pixel 0: "00000000 00000000 00000000 00000000"
-#      pixel 1: "00000001 00000001 00000001 00000001"
-#      pixel 2: "00000002 00000002 00000002 00000002"
+# Expected: pixel N = {W=255, Z=N, Y=N, X=N}
+# e.g. pixel 0: "FF000000"
+#      pixel 1: "FF010101"
+#      pixel 2: "FF020202"
 
 THREAD_ID v0.xyzw       # v0.xyzw = absolute thread index
+LDI_LO v0.w, 0x00FF     # Make alpha opaque
 FLUSH
-LDI_LO v1.xyzw, 0x0004  # v1 = 4  (shift amount for *16 byte offset)
-FLUSH
-ISHL v2.xyzw, v0, v1    # v2 = thread_id * 16  (byte address in framebuffer)
-FLUSH
-STORE v0, 0x0000(v2)    # store v0 at address v2
+STORE v0, 0x0000        # store block of v0 at 0x0000
 FLUSH
 RETURN

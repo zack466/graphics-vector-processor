@@ -14,8 +14,8 @@
 --   u_decode : instruction_decoder — combinational: instruction word → control records
 --   u_issue  : instruction_issue   — cycles through all 32 thread IDs, driving VRF reads
 --   u_exec   : execution_unit      — FPU / ALU / RED pipelines + writeback
---   u_mem    : memory_unit         — scatter/gather MCU + Avalon bridge
---   u_vrf    : vector_reg_file     — 512-entry dual-port register file (Port A = exec, Port B = mem)
+--   u_mem    : memory_unit         — block transfer MCU + Avalon bridge
+--   u_vrf    : vector_reg_file     — 512-entry dual-port register file (Port A = exec)
 --   u_prf    : predicate_reg_file  — 512-entry predicate file; also collapses predicate → branch mask
 --
 -- PROCESSOR FSM STATES AND RATIONALE:
@@ -60,9 +60,9 @@
 --
 --   MEM_WAIT      : Spins until mem_stall deasserts.  The MCU drives mem_stall
 --                   combinationally, so it is already asserted on the same cycle
---                   as the mem_op_valid pulse.  All scatter/gather memory
---                   traffic (including DDR3 waitrequest back-pressure) is
---                   absorbed here.  The FSM goes directly from DECODE→MEM_WAIT.
+--                   as the mem_op_valid pulse.  All memory traffic (including
+--                   DDR3 waitrequest back-pressure) is absorbed here.  The FSM
+--                   goes directly from DECODE→MEM_WAIT.
 --
 --   ADVANCE_PC    : Deasserts ifu_stall for exactly ONE clock cycle.  The IFU
 --                   samples active_pc_ctrl during this cycle to compute the
@@ -113,7 +113,8 @@ entity processor is
         IMEM_ADDR_WIDTH : integer := 8;
         WARP_SIZE       : integer := 32;
         ADDR_WIDTH      : integer := 32;
-        DATA_WIDTH      : integer := 128
+        DATA_WIDTH      : integer := 128;
+        REG_WIDTH       : integer := 4
     );
     port (
         clk               : in  std_logic;
@@ -258,16 +259,14 @@ architecture structural of processor is
     signal exec_wb_prf_we  : std_logic;
     signal exec_wb_mask    : std_logic_vector(3 downto 0); -- Component write-enable for VRF
 
-    -- Memory unit control / VRF Port B wiring.
-    -- mem_vrf_rd/wr_addr use the same 9-bit {thread_id, reg_idx} format as
-    -- the execution port so Port B is structurally identical to Port A.
+    -- Memory unit control / block transfer snooping
     signal mem_op_valid    : std_logic; -- 1-cycle pulse from FSM DECODE state
-    signal mem_stall       : std_logic; -- Asserted by MCU while scatter/gather is in progress
-    signal mem_vrf_rd_addr : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
-    signal mem_vrf_rd_data : vector_t;
-    signal mem_vrf_wr_addr : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
-    signal mem_vrf_wr_data : vector_t;
-    signal mem_vrf_we      : std_logic;
+    signal mem_stall       : std_logic; -- Asserted by MCU while block store is in progress
+
+    -- Block Transfer Store Data Snoop (from execution unit to memory unit)
+    signal exec_mem_store_valid   : std_logic;
+    signal exec_mem_store_data    : vector_t;
+    signal exec_mem_store_thread_id : std_logic_vector(4 downto 0);
 
     -- exec_flush_active: asserted by execution_unit while the FLUSH token is
     -- propagating through the pipeline (FPU_MAX_LATENCY cycles).  FSM uses
@@ -277,14 +276,17 @@ architecture structural of processor is
     -- mem_phys_addr: full 32-bit Avalon byte address for memory operations.
     -- WHY shift dec_mem.base_addr left by 16: the instruction encodes a 16-bit
     -- base in bits[31:16] of the address space, producing 64 KB-aligned windows.
-    -- Per-thread fine-grained offsets are added by the MCU using the offset register.
+    -- csr_warp_offset * 4 (bytes per pixel) is added to place each warp's
+    -- 128-byte block at the correct offset in the framebuffer.
     signal mem_phys_addr : std_logic_vector(31 downto 0);
 
 begin
 
     -- mem_phys_addr: place the 16-bit instruction immediate in the upper half
     -- of the 32-bit Avalon address, giving 64 KB-aligned base addresses.
-    mem_phys_addr <= dec_mem.base_addr & x"0000";
+    -- We add the csr_warp_offset * 4 (since each thread outputs a 4-byte pixel)
+    -- to correctly place the block in memory for the current warp.
+    mem_phys_addr <= std_logic_vector(unsigned(std_logic_vector'(dec_mem.base_addr & x"0000")) + unsigned(std_logic_vector'(csr_warp_offset(29 downto 0) & "00")));
 
     -- ========================================================================
     -- SIMULATION DEBUG MONITOR
@@ -496,11 +498,9 @@ begin
                     next_state <= ADVANCE_PC;
 
                 elsif v_inst_type = INST_TYPE_MEM then
-                    -- Pulse mem_op_valid for exactly 1 cycle.  The MCU asserts
-                    -- mem_stall combinationally on this same cycle, so MEM_WAIT
-                    -- immediately sees stall='1' on entry with no bubble needed.
-                    mem_op_valid <= '1';
-                    next_state <= MEM_WAIT;
+                    -- Trigger barrel scheduler to issue 32 threads for MEM instructions
+                    iss_valid_in <= '1';
+                    next_state <= EXEC_WAIT;
 
                 elsif v_inst_type = INST_TYPE_SYS then
                     if ifu_inst_out(31 downto 26) = OP_RETURN then
@@ -550,18 +550,16 @@ begin
                 end if;
 
             when EXEC_WAIT =>
-                -- WHY two exit conditions:
-                --   iss_issue_valid = '0': the barrel issuer has stepped through
-                --     all 32 threads; the instruction has been fully dispatched.
-                --   exec_flush_active = '0': only checked for FLUSH instructions.
-                --     For arithmetic ops, the 32-cycle barrel gap guarantees the
-                --     pipeline has drained by the time iss_issue_valid drops, so
-                --     testing exec_flush_active would be redundant.  Skipping it
-                --     for non-FLUSH makes the intent clear: we only wait for the
-                --     pipeline drain signal when we actually sent a FLUSH token.
+                -- Wait for issue to finish
                 if iss_issue_valid = '0' and
                    (ifu_inst_out(31 downto 26) /= OP_FLUSH or exec_flush_active = '0') then
-                    next_state <= ADVANCE_PC;
+                    
+                    if ifu_inst_out(3 downto 0) = INST_TYPE_MEM then
+                        mem_op_valid <= '1';
+                        next_state <= MEM_WAIT;
+                    else
+                        next_state <= ADVANCE_PC;
+                    end if;
                 end if;
 
             when MEM_WAIT =>
@@ -671,6 +669,27 @@ begin
             exec_mux_ctrl.wb_mux_sel     <= dec_red.wb_mux_sel;
             exec_mux_ctrl.vrf_we         <= dec_red.vrf_we;
 
+        elsif v_type = INST_TYPE_MEM then
+            -- For MEM instructions, route opcode and rs1_addr_local so barrel scheduler
+            -- accesses the correct VRF data for the store instruction.
+            exec_mux_ctrl.opcode         <= ifu_inst_out(31 downto 26);
+            exec_mux_ctrl.rs1_addr_local <= dec_mem.dest_src_reg_idx;
+            exec_mux_ctrl.rd_addr_local  <= dec_mem.dest_src_reg_idx;
+            exec_mux_ctrl.rs2_addr_local <= dec_fpu.rs2_addr_local;
+            exec_mux_ctrl.rs3_addr_local <= dec_fpu.rs3_addr_local;
+            exec_mux_ctrl.swiz_sel_a     <= dec_fpu.swiz_sel_a;
+            exec_mux_ctrl.swiz_sel_b     <= dec_fpu.swiz_sel_b;
+            exec_mux_ctrl.swiz_sel_c     <= dec_fpu.swiz_sel_c;
+            exec_mux_ctrl.write_mask     <= dec_fpu.write_mask;
+            exec_mux_ctrl.wb_mux_sel     <= dec_fpu.wb_mux_sel;
+            exec_mux_ctrl.cmp_invert     <= dec_fpu.cmp_invert;
+            exec_mux_ctrl.cmp_swap       <= dec_fpu.cmp_swap;
+            exec_mux_ctrl.vrf_we         <= '0';
+            exec_mux_ctrl.prf_we         <= '0';
+            exec_mux_ctrl.is_logic_op    <= dec_fpu.is_logic_op;
+            exec_mux_ctrl.is_load        <= '0';
+            exec_mux_ctrl.imm_data       <= (others => '0');
+
         elsif v_type = INST_TYPE_SYS then
             -- SYS instructions (FLUSH, RETURN, BREAK, INT) use the dec_fpu
             -- defaults set above.  The opcode field is correctly exposed by
@@ -749,7 +768,7 @@ begin
     -- thread IDs (0–31); 16 registers per thread requires 4 bits.  Together
     -- they produce the 9-bit global VRF address.
     u_issue : entity work.instruction_issue
-        generic map ( THREAD_WIDTH => THREAD_ID_WIDTH, REG_WIDTH => LOCAL_REG_WIDTH )
+        generic map ( THREAD_WIDTH => THREAD_ID_WIDTH, REG_WIDTH => REG_WIDTH )
         port map (
             clk             => clk, reset => reset, exec_ctrl_in => exec_mux_ctrl,
             valid_in        => iss_valid_in, current_thread => iss_thread_id,
@@ -820,23 +839,27 @@ begin
             wb_rd_addr_out    => exec_wb_rd_addr, wb_vrf_data_out => exec_wb_vrf_data,
             wb_prf_data_out   => exec_wb_prf_data, wb_vrf_we_out => exec_wb_vrf_we,
             wb_prf_we_out     => exec_wb_prf_we, wb_mask_out => exec_wb_mask,
-            flush_active_out  => exec_flush_active
+            flush_active_out  => exec_flush_active,
+            mem_store_valid   => exec_mem_store_valid,
+            mem_store_data    => exec_mem_store_data,
+            mem_store_thread_id => exec_mem_store_thread_id
         );
 
-    -- u_mem: scatter/gather memory subsystem (see memory_unit.vhd for details).
+    -- u_mem: block transfer memory subsystem (see memory_unit.vhd for details).
     -- WHY REG_WIDTH=>4: 16 registers per thread, requiring a 4-bit local index
     --   (same as the VRF address scheme used everywhere else in the design).
     -- base_addr is driven by mem_phys_addr (see signal declaration above).
     u_mem : entity work.memory_unit
-        generic map ( WARP_SIZE => WARP_SIZE, ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH, REG_WIDTH => 4 )
+        generic map ( WARP_SIZE => WARP_SIZE, ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH, REG_WIDTH => REG_WIDTH )
         port map (
             clk               => clk, reset => reset, mem_op_valid => mem_op_valid,
-            is_store          => dec_mem.is_store, base_addr => mem_phys_addr,
-            offset_reg_idx    => dec_mem.offset_reg_idx, dest_src_reg_idx => dec_mem.dest_src_reg_idx,
+            base_addr         => mem_phys_addr,
+            dest_src_reg_idx  => dec_mem.dest_src_reg_idx,
             exec_mask         => ifu_exec_mask, mem_stall => mem_stall,
-            reg_read_addr     => mem_vrf_rd_addr, reg_read_data => mem_vrf_rd_data,
-            reg_write_addr    => mem_vrf_wr_addr, reg_write_data => mem_vrf_wr_data,
-            reg_write_en      => mem_vrf_we, avm_address => avm_address,
+            mem_store_valid   => exec_mem_store_valid,
+            mem_store_thread  => exec_mem_store_thread_id,
+            mem_store_data    => exec_mem_store_data,
+            avm_address => avm_address,
             avm_burstcount    => avm_burstcount, avm_write => avm_write,
             avm_writedata     => avm_writedata, avm_byteenable => avm_byteenable,
             avm_read          => avm_read, avm_readdata => avm_readdata,
@@ -848,19 +871,16 @@ begin
     --   The 9-bit address is formed as {thread_id[4:0], reg_idx[3:0]} by the issuer and MCU.
     -- WHY Port A has 3 read ports (rs1/rs2/rs3): FMA and other ternary FPU
     --   ops need three independent source operands per thread.  Port B (memory)
-    --   only needs one read port (the source/destination register) per thread.
-    -- WHY write_mask_B is hardwired to "1111": memory loads always write all
-    --   four vector components; there is no per-component masking for loads.
-    --   Component masking is only used for arithmetic writebacks (Port A).
+    --   is currently unused since loads are not implemented.
     u_vrf : entity work.vector_reg_file
         generic map ( ADDR_WIDTH => VRF_ADDR_WIDTH )
         port map (
             clk => clk, reset => reset, rs1_addr => iss_rs1_global, rs2_addr => iss_rs2_global,
             rs3_addr => iss_rs3_global, rs1_data => vrf_rs1_data, rs2_data => vrf_rs2_data,
             rs3_data => vrf_rs3_data, rd_addr_A => exec_wb_rd_addr, rd_data_A => exec_wb_vrf_data,
-            write_mask_A => exec_wb_mask, we_A => exec_wb_vrf_we, rd_addr_B => mem_vrf_rd_addr,
-            rd_data_B => mem_vrf_rd_data, wr_addr_B => mem_vrf_wr_addr, wr_data_B => mem_vrf_wr_data,
-            write_mask_B => "1111", we_B => mem_vrf_we
+            write_mask_A => exec_wb_mask, we_A => exec_wb_vrf_we, rd_addr_B => (others => '0'),
+            rd_data_B => open, wr_addr_B => (others => '0'), wr_data_B => (others => (others => '0')),
+            write_mask_B => "1111", we_B => '0'
         );
 
     -- u_prf: 512-entry predicate register file.

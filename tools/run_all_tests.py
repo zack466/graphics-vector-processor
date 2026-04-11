@@ -91,11 +91,19 @@ def generate_image(dump_file, output_png):
         for line in f:
             parts = line.strip().split()
             if len(parts) == 4:
-                r = max(0, min(255, int(hex_to_float(parts[3]) * 255)))
-                g = max(0, min(255, int(hex_to_float(parts[2]) * 255)))
-                b = max(0, min(255, int(hex_to_float(parts[1]) * 255)))
-                a = max(0, min(255, int(hex_to_float(parts[0]) * 255)))
-                pixels.append((r, g, b, a))
+                # The line contains four 32-bit pixels (from 128-bit word)
+                # Dump order: parts[0] is pixel 3, parts[1] is pixel 2, parts[2] is pixel 1, parts[3] is pixel 0
+                for part in reversed(parts):
+                    try:
+                        val = int(part, 16)
+                    except ValueError:
+                        val = 0
+                    # Pixel format is W, Z, Y, X (Alpha, Blue, Green, Red)
+                    r = val & 0xFF
+                    g = (val >> 8) & 0xFF
+                    b = (val >> 16) & 0xFF
+                    a = (val >> 24) & 0xFF
+                    pixels.append((r, g, b, a))
 
     if not pixels:
         return

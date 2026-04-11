@@ -58,7 +58,7 @@
 --           destination value; needed by LDI_HI to preserve the lower 16 bits)
 --          (full_mask bit: 1 => write_mask="1111" to update all components)
 --
---   MEM  : [31:26]=opcode  [25:12]=base_addr(14b) [11:8]=offset_reg
+--   MEM  : [31:26]=opcode  [25:12]=base_addr(14b) [11:8]=reserved
 --          [7:4]=dest_src_reg
 --          (base_addr is zero-extended to 16 bits by prepending "00")
 --
@@ -73,7 +73,7 @@
 --   red_ctrl    - Decoded reduction control record.
 --   alu_ctrl    - Decoded integer ALU control record. Also carries IMM ops.
 --   pc_ctrl     - Decoded branch/jump control record.
---   mem_ctrl    - Decoded memory (scatter/gather) control record.
+--   mem_ctrl    - Decoded memory control record.
 -- =============================================================================
 
 library IEEE;
@@ -170,9 +170,7 @@ begin
         v_alu.imm_data       := (others => '0');
 
         v_mem.is_valid         := '0';
-        v_mem.is_store         := '0';
         v_mem.base_addr        := (others => '0');
-        v_mem.offset_reg_idx   := "0000";
         v_mem.dest_src_reg_idx := "0000";
 
         -- ====================================================================
@@ -368,27 +366,18 @@ begin
 
         elsif inst_type = INST_TYPE_MEM then
             -- ----------------------------------------------------------------
-            -- MEMORY INSTRUCTION MAP (Routes to Scatter/Gather Unit)
-            -- [31:26] Opcode | [25:12] Base Addr Imm (14b) | [11:8] Offset Reg
-            -- [7:4] Dest/Src Reg | [3:0] Type
+            -- MEMORY INSTRUCTION MAP (Routes to Block Transfer Unit)
+            -- [31:26] Opcode | [25:12] Base Addr Imm (14b) | [11:8] Rsvd
+            -- [7:4] Src Reg      | [3:0] Type
             -- ----------------------------------------------------------------
             v_mem.is_valid         := '1';
             -- base_addr is 14 bits in the instruction, zero-extended to 16 bits
             -- ("00" prepended) to match the address bus width of the memory
-            -- controller. The 2 MSBs of address space are effectively reserved.
+            -- controller. The 2 MSBs of the immediate are effectively reserved.
+            -- Bits [11:8] of the instruction word are reserved and ignored.
             v_mem.base_addr        := "00" & instruction(25 downto 12);
-            -- offset_reg holds a per-thread address offset read from the VRF,
-            -- enabling scatter/gather: each thread accesses a different address.
-            v_mem.offset_reg_idx   := instruction(11 downto 8);
-            -- dest_src_reg is the VRF register to load into (LOAD) or store from
-            -- (STORE). The same field is used for both directions to save bits.
+            -- dest_src_reg is the VRF register whose data all 32 threads store.
             v_mem.dest_src_reg_idx := instruction(7 downto 4);
-
-            if internal_opcode = OP_STORE then
-                v_mem.is_store := '1';
-            else
-                v_mem.is_store := '0';
-            end if;
 
         elsif inst_type = INST_TYPE_SYS then
             -- ----------------------------------------------------------------

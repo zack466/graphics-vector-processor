@@ -320,12 +320,7 @@ package processor_constants_pkg is
     -- convention ("11xxxx") by placing memory ops in the upper quarter of
     -- the opcode space, making them visually distinguishable from arithmetic
     -- ops (which start at "00xxxx").
-    -- WHY LOAD and STORE are separate opcodes (not a single MEM + is_store bit):
-    --   The is_store direction bit is already decoded from the instruction word
-    --   by the decoder into dec_mem.is_store.  The separate opcode values
-    --   provide a redundant check and make disassembly output unambiguous.
-    constant OP_LOAD    : std_logic_vector(5 downto 0) := "100000"; -- Scatter-gather load: VRF[dest] ← DDR3[base + offset[t]]
-    constant OP_STORE   : std_logic_vector(5 downto 0) := "100001"; -- Scatter-gather store: DDR3[base + offset[t]] ← VRF[src]
+    constant OP_STORE   : std_logic_vector(5 downto 0) := "100001"; -- Block transfer store: DDR3[base] ← VRF[src]
 
     -- ========================================================================
     -- CSR (CONTROL STATUS REGISTER) ADDRESS MAP (3-Bit)
@@ -458,10 +453,8 @@ package processor_constants_pkg is
     --   immediate in bits[31:16] of the Avalon address.
     type mem_ctrl_t is record
         is_valid         : std_logic;                    -- Mirrors mem_op_valid; available for the MCU
-        is_store         : std_logic;                    -- '1' = scatter (write DDR3), '0' = gather (read DDR3)
         base_addr        : std_logic_vector(15 downto 0); -- 16-bit instruction immediate; upper half of byte address
-        offset_reg_idx   : std_logic_vector(3 downto 0); -- Local register index of per-thread byte offset
-        dest_src_reg_idx : std_logic_vector(3 downto 0); -- Local register index of load destination / store source
+        dest_src_reg_idx : std_logic_vector(3 downto 0); -- Local register index of store source
     end record;
 
     -- ========================================================================

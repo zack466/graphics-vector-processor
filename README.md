@@ -97,11 +97,9 @@ The Memory Control Unit (MCU) is split into three independent domains linked by 
 
 **7.2. VRF Port B Arbitration & Latency Tracking**
 The MCU accesses the Vector Register File (VRF) via the dedicated Port B.
-* **2-Cycle Read Latency:** To read data for `STORE` instructions, the MCU's state machine implements a strict 2-stage shift register (`read_active_q1`, `read_active_q2`). This accounts for the synchronous nature of the M10K blocks, ensuring data is stable on the bus before pushing it into the Write Data FIFO.
-* **Asynchronous Write Collisions:** When memory returns from a `LOAD` instruction, the MCU writes it back to Port B. Because the math pipeline has strict priority on Port A, Port B writes are routed through an internal VRF collision buffer (FIFO) and drain into the RAM autonomously on the next free clock cycle.
+* **Block Stores and Pixel Packing:** `STORE` operations now perform sequential 128-bit Avalon burst writes of packed pixel data. As the `execution_unit` barrel scheduler issues the `STORE` instruction over 32 cycles, the memory controller snoops the VRF read data. It extracts the lower 8 bits of each component (W, Z, Y, X) and packs them into a 32-bit RGBA pixel, accumulating exactly 32 pixels in an internal M10K-backed `warp_buffer`.
+* **Sequential Burst Output:** Upon completing the 32-cycle schedule, the MCU transitions to `MEM_WAIT` and blasts exactly eight sequential 128-bit write beats to the DDR3 controller as fast as the Avalon bus allows.
+* **Block Loads:** `LOAD` operations perform similar sequential Avalon burst reads.
 
 **7.3. Asynchronous Load Tracking (Non-Blocking Reads)**
-Because the MCU drops `mem_stall` immediately after dispatching a read command, the processor will move on to the next instruction while the DDR3 memory is still fetching the data.
-* **Load Tracking FIFO:** The frontend pushes an 18-bit token (`dest_src_reg_idx` + `burst_len` + `start_thread_idx`) into a tracking FIFO.
-* **Asynchronous Receiver:** When `avm_readdatavalid` pulses high cycles later, an independent background process pops the context from the tracking FIFO. This ensures the incoming data is written to the correct thread index and the correct destination register, even if the processor's pipeline has already advanced to an entirely different instruction.
-* *Note on Hazards:* Because memory reads are non-blocking, software must manage memory Read-After-Write (RAW) hazards. If an instruction attempts to use loaded data before the Avalon bus returns it, the software compiler must inject `NOPs` or synchronization barriers.
+(Note: Deprecated with the block transfer architecture. `LOAD` and `STORE` now block until the burst transfer is completed over the Avalon bus, enforcing strict sequential memory ordering.)

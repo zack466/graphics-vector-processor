@@ -183,6 +183,10 @@ begin
                     -- the next edge when valid_in has been deasserted.
                     if exec_ctrl_in.opcode = OP_FLUSH then
                         count <= to_unsigned(32, 6);
+                    -- Fast track memory operations to idle, since the MCU controls them now?
+                    -- WAIT! The memory controller *needs* the barrel scheduler to iterate
+                    -- through threads 0-31 so it can snoop the data via mem_store_data.
+                    -- So we MUST do the full 32 cycles!
                     else
                         -- For all normal instructions: thread 0 is handled
                         -- combinationally this cycle (via valid_in='1' path in

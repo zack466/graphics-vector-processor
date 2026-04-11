@@ -3,7 +3,8 @@
 #
 # Architecture notes:
 #  - ALU/FPU/IMM instructions run for ALL 32 threads regardless of exec_mask.
-#    Only STORE respects exec_mask (from IFU) to select which threads write memory.
+#    However, STORE now masks Avalon byte enables based on exec_mask, so
+#    each path's STORE only writes to its active threads' pixel locations.
 #  - FLUSH is required before BRA_DIV to ensure all threads' ICMP results
 #    are settled in the Predicate Register File (PRF) before the branch reads them.
 #  - SSY marks the reconvergence point. BRA_DIV: taken threads jump to if_label;
@@ -15,14 +16,14 @@
 #   FLUSH                  (wait for all 32 PRF writes before branch)
 #   SSY reconv             (save reconvergence PC)
 #   BRA_DIV white, p0      (even threads jump to white; odd fall through to black)
-#   black: store 0.0f, SYNC
-#   white: store 1.0f, SYNC
+#   black: store 0, SYNC
+#   white: store 255, SYNC
 #   reconv: FLUSH, RETURN
 #
-# Expected: even pixels = 0x3F800000 (1.0f), odd pixels = 0x00000000 (0.0f)
-#   pixel 0 (even): "3F800000 3F800000 3F800000 3F800000"
-#   pixel 1 (odd):  "00000000 00000000 00000000 00000000"
-#   pixel 2 (even): "3F800000 3F800000 3F800000 3F800000"
+# Expected: even pixels = 255, odd pixels = 0
+#   pixel 0 (even): 255
+#   pixel 1 (odd):  0
+#   pixel 2 (even): 255
 
 THREAD_ID v0.xyzw        # v0 = global thread id
 LDI_LO v1.xyzw, 0x0001  # v1 = 1 (mask for bit 0)
@@ -36,15 +37,14 @@ SSY reconv               # save reconvergence PC
 BRA_DIV white, p0        # even (p0=1) jump to white; odd fall through to black path
 
 # ---- Black path (odd threads, not-taken) ----
-LDI_LO v6.xyzw, 0x0000  # v6 = 0.0f (black) -- runs for ALL threads but only odd write
-STORE v6, 0x0000(v5)    # store 0.0f; exec_mask = odd threads only
+LDI_LO v6.xyzw, 0x0000  # v6 = 0 (black) -- runs for ALL threads
+STORE v6, 0x0000
 SYNC                     # end of black path: switch to white (even) threads
 
 # ---- White path (even threads, taken) ----
 white:
-LDI_LO v6.xyzw, 0x0000  # v6 lower = 0x0000 -- runs for ALL threads
-LDI_HI v6.xyzw, 0x3F80  # v6 = 0x3F800000 = 1.0f (white)
-STORE v6, 0x0000(v5)    # store 1.0f; exec_mask = even threads only
+LDI_LO v6.xyzw, 0x00FF  # v6 = 255 (white) -- runs for ALL threads
+STORE v6, 0x0000
 SYNC                     # end of white path: reconverge
 
 # ---- Reconvergence ----

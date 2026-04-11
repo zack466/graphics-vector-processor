@@ -11,7 +11,7 @@ SOURCES = vector_types.vhd \
 		  instruction_fetch_unit.vhd \
 		  writeback_controller.vhd \
 		  execution_unit.vhd \
-		  mcu_scatter_gather.vhd \
+		  mcu_block_transfer.vhd \
 		  avm_burst_bridge.vhd \
 		  avm_sim_memory.vhd \
 		  instruction_decoder.vhd \
@@ -28,7 +28,7 @@ TESTBENCH_SOURCES = tb_fp_sim.vhd \
 					tb_issuer_writeback_integration.vhd \
 					tb_full_execution_integration.vhd \
 					tb_avm_sim_memory.vhd \
-					tb_avm.vhd tb_mcu_scatter_gather.vhd \
+					tb_avm.vhd tb_mcu_block_transfer.vhd \
 					tb_processor.vhd tb_processor_automated.vhd
 
 # Testbench executable names
@@ -36,7 +36,7 @@ TESTBENCHES = tb_fp_sim tb_vector_reg_file tb_swizzle_network tb_fpu_lane tb_alu
 			  tb_instruction_issue tb_issuer_writeback_integration \
 			  tb_vector_reduction_unit tb_full_execution_integration \
 			  tb_instruction_memory tb_instruction_fetch_unit \
-			  tb_avm tb_avm_sim_memory tb_mcu_scatter_gather \
+			  tb_avm tb_avm_sim_memory tb_mcu_block_transfer \
 			  tb_processor tb_processor_automated
 
 WAVEFORM = waveform.ghw
