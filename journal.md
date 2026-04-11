@@ -6,6 +6,10 @@
 * add immediate FPU instructions, don't support things like swizzling or mask, but allow encoding low-precision immediate constants, for things like scalar multiplication, negation, etc
   * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
 * test memory controller with real DDR3 memory
+* review documentation manually and verify that it is accurate
+* instead of triggering top-level for every warp invocation, add simple warp scheduler that just schedules the single warp to draw an entire frame.
+* create top top level that can trigger processor to draw a frame, and keeps it in sync with the VIP framebuffer.
+  should probably hardcode addresses of two backbuffers for double buffering.
 
 # Agent changes
 
@@ -210,4 +214,63 @@
   Memory layout reference (confirmed):
   - Dump format: "W Z Y X" per line (MSB to LSB of 128-bit bus word)
   - runner.py maps: parts[3]=X=R, parts[2]=Y=G, parts[1]=Z=B, parts[0]=W=A
+
+  ---
+  Design Simplification Pass (proposals.md → implemented)
+
+  All changes verified: 9/9 automated tests pass before and after each group.
+  Proposals P9, P12, P13, P14, P16 were assessed as too invasive and skipped.
+
+  **Group A — processor_constants_pkg.vhd** (P1, P5, P19)
+  - P1: `FPU_MAX_LATENCY` now derived as `LAT_FRSQRT` instead of hardcoded 28.
+    Future IP latency changes only require updating the relevant LAT_* constant.
+  - P5: Added `THREAD_ID_WIDTH = 5`, `LOCAL_REG_WIDTH = 4`, `VRF_ADDR_WIDTH = THREAD_ID_WIDTH + LOCAL_REG_WIDTH`.
+    Eliminates scattered magic 5/4/9 literals.
+  - P19: Added `WARP_SIZE = 32` as a named constant in the package.
+
+  **Group B — processor.vhd** (P2, P3, P6, P8, P11, P15)
+  - P2: Signal declarations and component instantiations (u_vrf, u_prf, u_issue) now
+    use `VRF_ADDR_WIDTH`, `THREAD_ID_WIDTH`, `LOCAL_REG_WIDTH` instead of magic 9/5/4.
+  - P3: `mem_phys_addr <= dec_mem.base_addr & x"0000"` extracted as a named concurrent
+    signal instead of inline concatenation at the port map call site.
+  - P6: FSM states renamed `FETCH_1 → FETCH_ADDR`, `FETCH_2 → FETCH_DATA` for clarity.
+  - P8: EXEC_WAIT exit condition split: for arithmetic ops only `iss_issue_valid='0'`
+    is checked; `exec_flush_active='0'` is additionally required only for FLUSH.
+    Before: `iss_issue_valid='0' and exec_flush_active='0'` for all cases.
+    After:  `iss_issue_valid='0' and (opcode/=OP_FLUSH or exec_flush_active='0')`.
+  - P11: Added explanatory comment for the four `rs*_addr_local <= "0000"` dead-field
+    assignments (the execution unit reads VRF data buses, not local addr fields).
+  - P15: Added explicit `elsif v_type = INST_TYPE_SYS then null;` branch in the
+    exec_mux_ctrl process so SYS fall-through to dec_fpu defaults is visible.
+
+  **Group C — instruction_issue.vhd** (P4)
+  - Replaced 6-bit `count` sentinel (idle = 32) with a separate `active : std_logic`
+    flag and a 5-bit `count` (range 0–31).
+  - `active='1'` during threads 1–31 replay; `active='0'` when idle or after FLUSH.
+  - `issue_valid <= '1' when valid_in='1' or active='1'` (was `count < 32`).
+  - FLUSH now clears `active='0'` immediately (was `count <= 32`), same single-cycle
+    behavior but without the sentinel magic number.
+
+  **Group D — mcu_scatter_gather.vhd + processor.vhd** (P7)
+  - `mem_stall` changed from registered to combinational in the MCU:
+    `mem_stall <= '1' when (state=IDLE and mem_op_valid='1') or
+                           (state/=IDLE and state/=FINISH) else '0';`
+  - This asserts stall on the same cycle as the `mem_op_valid` pulse, eliminating
+    the 1-cycle propagation delay.
+  - `MEM_WAIT_START` state removed from processor FSM (was needed as a bubble for the
+    registered stall). DECODE now goes directly to MEM_WAIT.
+  - No combinational loop: `mem_op_valid` is only driven in DECODE; `mem_stall` is
+    read in MEM_WAIT; the state register breaks any feedback.
+  - Performance gain: every memory instruction saves 1 cycle (MEM_WAIT_START removed).
+
+  **Group E — comment-only fixes** (P10, P17, P18)
+  - P10 (mcu_scatter_gather.vhd): Added "2-CYCLE VRF READ PIPELINE" header comments
+    to both GATHER_ADDR and FETCH_WDATA states explaining the shared M10K latency
+    contract and why each state uses a different tracking idiom.
+  - P17 (vector_reg_file.vhd): Added comment to `fifo_count : unsigned(6 downto 0)`
+    explaining why 7 bits are needed for a 64-entry FIFO (must represent 64 without
+    wrapping, requiring one extra bit beyond the 6-bit head/tail pointers).
+  - P18 (vector_reduction_unit.vhd): Added `constant PAD_STAGES : integer :=
+    FPU_MAX_LATENCY - LAT_REDUCT;` and updated res_pipe comment to reference it,
+    making the two-part latency budget (IP core + padding) self-documenting.
 

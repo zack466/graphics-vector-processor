@@ -23,20 +23,20 @@
 --                   If do_force_pc is also set when csr_run rises, skip directly
 --                   to ADVANCE_PC to apply the forced PC before the first fetch.
 --
---   FETCH_1       : First fetch wait cycle.  instruction_memory is M10K BRAM,
+--   FETCH_ADDR    : First fetch wait cycle.  instruction_memory is M10K BRAM,
 --                   which has a 1-cycle registered-read latency: the address
 --                   must be stable for one cycle before data appears.  The IFU
 --                   is STALLED here (ifu_stall='1') so the PC does not advance
 --                   while we are waiting.
 --
---   FETCH_2       : Second fetch wait cycle.  The IFU pipeline has its own
+--   FETCH_DATA    : Second fetch wait cycle.  The IFU pipeline has its own
 --                   internal register stage before presenting instruction_out.
 --                   One cycle is insufficient; two guarantees stable data at
 --                   DECODE regardless of IFU implementation details.
 --
 --   DECODE        : Instruction is stable on ifu_inst_out.  The FSM inspects
 --                   the bottom 4 bits (INST_TYPE) and dispatches:
---                   MEM              → pulse mem_op_valid='1' for 1 cycle → MEM_WAIT_START
+--                   MEM              → pulse mem_op_valid='1' for 1 cycle → MEM_WAIT
 --                   SYS / OP_RETURN  → deassert csr_run, go to HALTED (no PC advance)
 --                   SYS / OP_BREAK   → deassert csr_run + set break_hit, go to ADVANCE_PC
 --                                      (PC advances so BREAK is not re-hit on resume)
@@ -58,21 +58,17 @@
 --                   makes exec_flush_active stay high until all in-flight results
 --                   have committed.
 --
---   MEM_WAIT_START: One idle cycle inserted after pulsing mem_op_valid.  The MCU
---                   state machine takes exactly one cycle to assert mem_stall
---                   after receiving the valid pulse.  Without this state the FSM
---                   would read mem_stall='0' on the very next cycle and
---                   mistakenly conclude the operation was already complete.
---
---   MEM_WAIT      : Spins until mem_stall deasserts.  All scatter/gather
---                   memory traffic (including DDR3 waitrequest back-pressure)
---                   is absorbed here.
+--   MEM_WAIT      : Spins until mem_stall deasserts.  The MCU drives mem_stall
+--                   combinationally, so it is already asserted on the same cycle
+--                   as the mem_op_valid pulse.  All scatter/gather memory
+--                   traffic (including DDR3 waitrequest back-pressure) is
+--                   absorbed here.  The FSM goes directly from DECODE→MEM_WAIT.
 --
 --   ADVANCE_PC    : Deasserts ifu_stall for exactly ONE clock cycle.  The IFU
 --                   samples active_pc_ctrl during this cycle to compute the
 --                   next PC (branch taken / not-taken / sequential), then
 --                   re-presents the updated PC as ifu_imem_addr.  The FSM
---                   immediately returns to FETCH_1 on the following cycle.
+--                   immediately returns to FETCH_ADDR on the following cycle.
 --
 -- PORT DESCRIPTIONS:
 --   clk               : System clock.  All state registers are rising-edge.
@@ -98,7 +94,7 @@
 --     (registered in the CSR process).
 --   - A write to CSR_ADDR_START_PC sets do_force_pc='1'; the forced jump is
 --     consumed in the next ADVANCE_PC cycle, after which do_force_pc clears.
---   - Minimum instruction throughput is 2 cycles (ADVANCE_PC + FETCH_1/2 +
+--   - Minimum instruction throughput is 2 cycles (ADVANCE_PC + FETCH_ADDR/DATA +
 --     DECODE) for CTRL instructions.  Arithmetic instructions cost that plus
 --     32 issue cycles (one per thread).  Memory instructions cost that plus
 --     DDR3 round-trip latency.
@@ -160,13 +156,14 @@ architecture structural of processor is
     -- ========================================================================
     -- PROCESSOR STATE MACHINE
     -- ========================================================================
-    -- WHY eight states rather than fewer:
-    --   FETCH_1/FETCH_2 exist because M10K BRAM has a 1-cycle registered read
-    --   latency AND the IFU has its own pipeline register — two cycles total.
-    --   MEM_WAIT_START exists because the MCU takes 1 cycle to assert mem_stall
-    --   after receiving mem_op_valid; without it, the FSM would see stall='0'
-    --   immediately and exit before the operation begins.
-    type proc_state_t is (HALTED, FETCH_1, FETCH_2, DECODE, EXEC_WAIT, MEM_WAIT_START, MEM_WAIT, ADVANCE_PC);
+    -- WHY seven states rather than eight:
+    --   FETCH_ADDR/FETCH_DATA exist because M10K BRAM has a 1-cycle registered
+    --   read latency AND the IFU has its own pipeline register — two cycles total.
+    --   MEM_WAIT_START was previously needed because the MCU asserted mem_stall
+    --   one cycle after mem_op_valid.  Now that mem_stall is combinational in the
+    --   MCU (asserts on the same cycle as mem_op_valid), DECODE can go directly
+    --   to MEM_WAIT without a bubble state.
+    type proc_state_t is (HALTED, FETCH_ADDR, FETCH_DATA, DECODE, EXEC_WAIT, MEM_WAIT, ADVANCE_PC);
     signal state, next_state : proc_state_t;
 
     -- ========================================================================
@@ -190,7 +187,7 @@ architecture structural of processor is
     signal imem_rd_data    : word_t;                                   -- IMEM read data back to IFU
 
     signal ifu_stall       : std_logic; -- '1' holds the IFU PC; released for exactly 1 cycle in ADVANCE_PC
-    signal ifu_inst_out    : word_t;    -- Stable instruction word from FETCH_2 onward
+    signal ifu_inst_out    : word_t;    -- Stable instruction word from FETCH_DATA onward
     signal ifu_exec_mask   : std_logic_vector(WARP_SIZE-1 downto 0); -- Active-thread mask (from divergence stack)
     signal ifu_fetch_valid : std_logic; -- Unused structural wire; reserved for future pipeline validity
 
@@ -225,11 +222,11 @@ architecture structural of processor is
     signal iss_issue_valid : std_logic; -- '1' while issuer is stepping through threads 0–31
     signal iss_opcode      : std_logic_vector(5 downto 0);
     signal iss_thread_id   : std_logic_vector(4 downto 0); -- Current thread index (0–31), advances each cycle
-    -- Global VRF addresses: {thread_id[4:0], reg_idx[3:0]} = 9-bit address into 512-entry VRF
-    signal iss_rs1_global  : std_logic_vector(8 downto 0);
-    signal iss_rs2_global  : std_logic_vector(8 downto 0);
-    signal iss_rs3_global  : std_logic_vector(8 downto 0);
-    signal iss_rd_global   : std_logic_vector(8 downto 0);
+    -- Global VRF addresses: {thread_id[4:0], reg_idx[3:0]} = VRF_ADDR_WIDTH-bit flat address into VRF
+    signal iss_rs1_global  : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
+    signal iss_rs2_global  : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
+    signal iss_rs3_global  : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
+    signal iss_rd_global   : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
 
     signal iss_swiz_a      : swizzle_sel_t;
     signal iss_swiz_b      : swizzle_sel_t;
@@ -254,7 +251,7 @@ architecture structural of processor is
 
     -- Execution unit writeback: delayed FPU_MAX_LATENCY cycles from issue so
     -- all units (ALU, RED, FPU) commit at a uniform time without extra buffering.
-    signal exec_wb_rd_addr : std_logic_vector(8 downto 0); -- Global VRF/PRF write address
+    signal exec_wb_rd_addr : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0); -- Global VRF/PRF write address
     signal exec_wb_vrf_data: vector_t;
     signal exec_wb_prf_data: std_logic_vector(3 downto 0);
     signal exec_wb_vrf_we  : std_logic;
@@ -266,9 +263,9 @@ architecture structural of processor is
     -- the execution port so Port B is structurally identical to Port A.
     signal mem_op_valid    : std_logic; -- 1-cycle pulse from FSM DECODE state
     signal mem_stall       : std_logic; -- Asserted by MCU while scatter/gather is in progress
-    signal mem_vrf_rd_addr : std_logic_vector(8 downto 0);
+    signal mem_vrf_rd_addr : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
     signal mem_vrf_rd_data : vector_t;
-    signal mem_vrf_wr_addr : std_logic_vector(8 downto 0);
+    signal mem_vrf_wr_addr : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
     signal mem_vrf_wr_data : vector_t;
     signal mem_vrf_we      : std_logic;
 
@@ -277,7 +274,17 @@ architecture structural of processor is
     -- this in EXEC_WAIT to ensure all in-flight results commit before advancing.
     signal exec_flush_active : std_logic;
 
+    -- mem_phys_addr: full 32-bit Avalon byte address for memory operations.
+    -- WHY shift dec_mem.base_addr left by 16: the instruction encodes a 16-bit
+    -- base in bits[31:16] of the address space, producing 64 KB-aligned windows.
+    -- Per-thread fine-grained offsets are added by the MCU using the offset register.
+    signal mem_phys_addr : std_logic_vector(31 downto 0);
+
 begin
+
+    -- mem_phys_addr: place the 16-bit instruction immediate in the upper half
+    -- of the 32-bit Avalon address, giving 64 KB-aligned base addresses.
+    mem_phys_addr <= dec_mem.base_addr & x"0000";
 
     -- ========================================================================
     -- SIMULATION DEBUG MONITOR
@@ -362,7 +369,7 @@ begin
                 -- WHY clear in ADVANCE_PC rather than immediately: ADVANCE_PC
                 -- is the cycle when the IFU samples active_pc_ctrl.  Clearing
                 -- here guarantees do_force_pc stays high across the entire
-                -- HALTED→ADVANCE_PC→FETCH_1 path so active_pc_ctrl remains
+                -- HALTED→ADVANCE_PC→FETCH_ADDR path so active_pc_ctrl remains
                 -- the synthetic JMP for that one ADVANCE_PC cycle.
                 if state = ADVANCE_PC and do_force_pc = '1' then
                     do_force_pc <= '0';
@@ -466,16 +473,16 @@ begin
                 -- while the processor is halted and then asserts csr_run, we need
                 -- to apply the forced PC before fetching.  Going to ADVANCE_PC
                 -- first ensures active_pc_ctrl (the synthetic JMP) is seen by
-                -- the IFU exactly once before FETCH_1 begins.
+                -- the IFU exactly once before FETCH_ADDR begins.
                 if csr_run = '1' then
-                    if do_force_pc = '1' then next_state <= ADVANCE_PC; else next_state <= FETCH_1; end if;
+                    if do_force_pc = '1' then next_state <= ADVANCE_PC; else next_state <= FETCH_ADDR; end if;
                 end if;
 
             -- WHY two fetch states: M10K BRAM requires the read address to be
             -- stable for one cycle before data appears (registered-read mode).
-            -- FETCH_1 presents the address; FETCH_2 waits for stable data.
-            when FETCH_1 => next_state <= FETCH_2;
-            when FETCH_2 => next_state <= DECODE;
+            -- FETCH_ADDR presents the address; FETCH_DATA waits for stable data.
+            when FETCH_ADDR => next_state <= FETCH_DATA;
+            when FETCH_DATA => next_state <= DECODE;
 
             when DECODE =>
                 if csr_run = '0' then
@@ -489,12 +496,11 @@ begin
                     next_state <= ADVANCE_PC;
 
                 elsif v_inst_type = INST_TYPE_MEM then
-                    -- Pulse mem_op_valid for exactly 1 cycle.  The MCU latches
-                    -- the control inputs on this cycle.  We move to MEM_WAIT_START
-                    -- rather than MEM_WAIT directly because mem_stall takes 1 cycle
-                    -- to assert after the valid pulse.
+                    -- Pulse mem_op_valid for exactly 1 cycle.  The MCU asserts
+                    -- mem_stall combinationally on this same cycle, so MEM_WAIT
+                    -- immediately sees stall='1' on entry with no bubble needed.
                     mem_op_valid <= '1';
-                    next_state <= MEM_WAIT_START;
+                    next_state <= MEM_WAIT;
 
                 elsif v_inst_type = INST_TYPE_SYS then
                     if ifu_inst_out(31 downto 26) = OP_RETURN then
@@ -544,24 +550,19 @@ begin
                 end if;
 
             when EXEC_WAIT =>
-                -- WHY both conditions: iss_issue_valid guards arithmetic ops
-                -- (issuer done = all threads dispatched); exec_flush_active guards
-                -- FLUSH ops (pipeline drained = all results committed).  For
-                -- arithmetic, exec_flush_active is already '0' by the time
-                -- iss_issue_valid drops, so the two conditions collapse to one
-                -- in practice.  Checking both here makes FLUSH correct without
-                -- a special state.
-                if iss_issue_valid = '0' and exec_flush_active = '0' then
+                -- WHY two exit conditions:
+                --   iss_issue_valid = '0': the barrel issuer has stepped through
+                --     all 32 threads; the instruction has been fully dispatched.
+                --   exec_flush_active = '0': only checked for FLUSH instructions.
+                --     For arithmetic ops, the 32-cycle barrel gap guarantees the
+                --     pipeline has drained by the time iss_issue_valid drops, so
+                --     testing exec_flush_active would be redundant.  Skipping it
+                --     for non-FLUSH makes the intent clear: we only wait for the
+                --     pipeline drain signal when we actually sent a FLUSH token.
+                if iss_issue_valid = '0' and
+                   (ifu_inst_out(31 downto 26) /= OP_FLUSH or exec_flush_active = '0') then
                     next_state <= ADVANCE_PC;
                 end if;
-
-            when MEM_WAIT_START =>
-                -- One mandatory idle cycle after pulsing mem_op_valid.  The MCU
-                -- state machine registers the valid pulse and asserts mem_stall
-                -- on the NEXT cycle.  Without this state, the FSM would check
-                -- mem_stall='0' immediately (it hasn't risen yet) and
-                -- prematurely conclude the memory operation is complete.
-                next_state <= MEM_WAIT;
 
             when MEM_WAIT =>
                 -- Spin until the MCU deasserts mem_stall.  All DDR3 back-pressure
@@ -572,9 +573,9 @@ begin
                 -- Deassert ifu_stall for exactly ONE cycle.  The IFU samples
                 -- active_pc_ctrl on this cycle to compute and latch the next PC.
                 -- On the following cycle ifu_stall returns to '1' (default) and
-                -- the FSM enters FETCH_1 to wait for the new instruction.
+                -- the FSM enters FETCH_ADDR to wait for the new instruction.
                 ifu_stall <= '0';
-                next_state <= FETCH_1;
+                next_state <= FETCH_ADDR;
 
         end case;
     end process;
@@ -669,6 +670,14 @@ begin
             exec_mux_ctrl.swiz_sel_b     <= dec_red.swiz_sel_b;
             exec_mux_ctrl.wb_mux_sel     <= dec_red.wb_mux_sel;
             exec_mux_ctrl.vrf_we         <= dec_red.vrf_we;
+
+        elsif v_type = INST_TYPE_SYS then
+            -- SYS instructions (FLUSH, RETURN, BREAK, INT) use the dec_fpu
+            -- defaults set above.  The opcode field is correctly exposed by
+            -- dec_fpu (bits[31:26] are the same for all instruction types), and
+            -- all WE fields remain '0' so no accidental writeback occurs.
+            -- This explicit branch makes the fall-through intent visible.
+            null;
         end if;
     end process;
 
@@ -740,7 +749,7 @@ begin
     -- thread IDs (0–31); 16 registers per thread requires 4 bits.  Together
     -- they produce the 9-bit global VRF address.
     u_issue : entity work.instruction_issue
-        generic map ( THREAD_WIDTH => 5, REG_WIDTH => 4 )
+        generic map ( THREAD_WIDTH => THREAD_ID_WIDTH, REG_WIDTH => LOCAL_REG_WIDTH )
         port map (
             clk             => clk, reset => reset, exec_ctrl_in => exec_mux_ctrl,
             valid_in        => iss_valid_in, current_thread => iss_thread_id,
@@ -777,6 +786,9 @@ begin
     iss_exec_record.wb_mux_sel  <= iss_wb_mux;
     iss_exec_record.vrf_we      <= iss_vrf_we;
     iss_exec_record.prf_we      <= iss_prf_we;
+    -- Local address fields are unused past the issuer: the issuer has already
+    -- concatenated them with the thread ID and driven the global addresses to the VRF.
+    -- The execution unit reads operands from vrf_rs*_data, not from these fields.
     iss_exec_record.rs1_addr_local <= "0000"; iss_exec_record.rs2_addr_local <= "0000";
     iss_exec_record.rs3_addr_local <= "0000"; iss_exec_record.rd_addr_local  <= "0000";
 
@@ -812,20 +824,14 @@ begin
         );
 
     -- u_mem: scatter/gather memory subsystem (see memory_unit.vhd for details).
-    -- WHY base_addr => dec_mem.base_addr & x"0000":
-    --   dec_mem.base_addr is 16 bits extracted from the instruction encoding.
-    --   The Avalon bus is 32 bits wide.  Concatenating x"0000" places the
-    --   instruction immediate in bits[31:16], making it a byte address with
-    --   the lower 16 bits implicitly zero.  Effective address range is therefore
-    --   0x00000000 to 0xFFFF0000 in 64 KB steps — a 1 GB word-aligned window.
-    --   Per-thread byte granularity comes from the offset register added by MCU.
     -- WHY REG_WIDTH=>4: 16 registers per thread, requiring a 4-bit local index
     --   (same as the VRF address scheme used everywhere else in the design).
+    -- base_addr is driven by mem_phys_addr (see signal declaration above).
     u_mem : entity work.memory_unit
         generic map ( WARP_SIZE => WARP_SIZE, ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH, REG_WIDTH => 4 )
         port map (
             clk               => clk, reset => reset, mem_op_valid => mem_op_valid,
-            is_store          => dec_mem.is_store, base_addr => dec_mem.base_addr & x"0000",
+            is_store          => dec_mem.is_store, base_addr => mem_phys_addr,
             offset_reg_idx    => dec_mem.offset_reg_idx, dest_src_reg_idx => dec_mem.dest_src_reg_idx,
             exec_mask         => ifu_exec_mask, mem_stall => mem_stall,
             reg_read_addr     => mem_vrf_rd_addr, reg_read_data => mem_vrf_rd_data,
@@ -838,8 +844,8 @@ begin
         );
 
     -- u_vrf: 512-entry vector register file (32 threads × 16 registers).
-    -- WHY ADDR_WIDTH=9: ceil(log2(512)) = 9.  The 9-bit address is formed as
-    --   {thread_id[4:0], reg_idx[3:0]} by the issuer and MCU.
+    -- WHY ADDR_WIDTH=VRF_ADDR_WIDTH (=9): THREAD_ID_WIDTH+LOCAL_REG_WIDTH = 5+4 = 9.
+    --   The 9-bit address is formed as {thread_id[4:0], reg_idx[3:0]} by the issuer and MCU.
     -- WHY Port A has 3 read ports (rs1/rs2/rs3): FMA and other ternary FPU
     --   ops need three independent source operands per thread.  Port B (memory)
     --   only needs one read port (the source/destination register) per thread.
@@ -847,7 +853,7 @@ begin
     --   four vector components; there is no per-component masking for loads.
     --   Component masking is only used for arithmetic writebacks (Port A).
     u_vrf : entity work.vector_reg_file
-        generic map ( ADDR_WIDTH => 9 )
+        generic map ( ADDR_WIDTH => VRF_ADDR_WIDTH )
         port map (
             clk => clk, reset => reset, rs1_addr => iss_rs1_global, rs2_addr => iss_rs2_global,
             rs3_addr => iss_rs3_global, rs1_data => vrf_rs1_data, rs2_data => vrf_rs2_data,
@@ -858,7 +864,7 @@ begin
         );
 
     -- u_prf: 512-entry predicate register file.
-    -- WHY same 9-bit ADDR_WIDTH as VRF: predicates use the same {thread_id,
+    -- WHY same VRF_ADDR_WIDTH as VRF: predicates use the same {thread_id,
     --   reg_idx} addressing convention so the issuer can share address
     --   generation logic between VRF and PRF accesses.
     -- WHY ifu_pred_sel / ifu_pred_mod come from dec_pc rather than from a
@@ -871,7 +877,7 @@ begin
     --   tells the IFU which threads evaluate the branch as "taken", forming the
     --   basis for the SIMT divergence decision (push / pop / converge).
     u_prf : entity work.predicate_reg_file
-        generic map ( ADDR_WIDTH => 9 )
+        generic map ( ADDR_WIDTH => VRF_ADDR_WIDTH )
         port map (
             clk => clk, reset => reset, rs1_addr => iss_rs1_global, rs2_addr => iss_rs2_global,
             rs1_data => prf_rs1_data, rs2_data => prf_rs2_data, wr_addr => exec_wb_rd_addr,

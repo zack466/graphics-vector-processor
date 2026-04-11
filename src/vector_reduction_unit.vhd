@@ -134,10 +134,16 @@ architecture rtl of vector_reduction_unit is
     -- valid_pipe(FPU_MAX_LATENCY) is the output valid_out.
     signal valid_pipe : std_logic_vector(FPU_MAX_LATENCY downto 0) := (others => '0');
 
+    -- PAD_STAGES: cycles the res_pipe shift register adds after raw_result appears.
+    -- WHY derived rather than literal: if LAT_REDUCT ever changes (e.g. a faster
+    -- IP core is substituted), the padding automatically adjusts so the total
+    -- latency remains FPU_MAX_LATENCY.  No manual update needed.
+    constant PAD_STAGES : integer := FPU_MAX_LATENCY - LAT_REDUCT;
+
     -- res_pipe bridges the gap between LAT_REDUCT (when raw_result appears from
     -- the IP core) and FPU_MAX_LATENCY (when the writeback controller expects
-    -- the result).  If LAT_REDUCT == FPU_MAX_LATENCY this pipeline is 1 stage
-    -- deep and simply registers raw_result once before output.
+    -- the result).  It is PAD_STAGES deep; if LAT_REDUCT == FPU_MAX_LATENCY
+    -- PAD_STAGES = 0 and res_pipe degenerates to a 1-stage register.
     type res_pipe_t is array (1 to FPU_MAX_LATENCY) of word_t;
     signal res_pipe : res_pipe_t := (others => (others => '0'));
 

@@ -56,7 +56,7 @@
 --                 MUST match the IP core configuration used at synthesis.
 --                 Mismatches cause writeback to land in the wrong register.
 --
---   FPU_MAX_LATENCY = 28  The normalizing constant.  All execution units
+--   FPU_MAX_LATENCY = LAT_FRSQRT  The normalizing constant.  All execution units
 --                 (FPU, ALU, RED) are padded with shift-register delay lines
 --                 to exactly this many cycles, ensuring all 32 thread results
 --                 for a single instruction arrive at the VRF write port in a
@@ -76,6 +76,18 @@ use IEEE.STD_LOGIC_1164.ALL;
 use work.vector_types_pkg.all;
 
 package processor_constants_pkg is
+
+    -- ========================================================================
+    -- ARCHITECTURAL PARAMETERS
+    -- ========================================================================
+    -- WHY named constants instead of literals: every width and size that appears
+    -- in more than one place is a single source of truth here.  Changing WARP_SIZE
+    -- from 32 to 16 (hypothetically) would require only edits in this block, not
+    -- a grep across all entities.
+    constant WARP_SIZE       : integer := 32; -- Threads per warp (barrel scheduler replay count)
+    constant THREAD_ID_WIDTH : integer := 5;  -- Bits to address WARP_SIZE threads (log2(32)=5)
+    constant LOCAL_REG_WIDTH : integer := 4;  -- Bits to address 16 VRF/PRF registers per thread
+    constant VRF_ADDR_WIDTH  : integer := THREAD_ID_WIDTH + LOCAL_REG_WIDTH; -- 9-bit flat VRF/PRF address = {thread_id, reg_idx}
 
     -- ========================================================================
     -- INSTRUCTION TYPES (Bottom 4 bits [3:0])
@@ -527,6 +539,6 @@ package processor_constants_pkg is
     -- burst starting exactly FPU_MAX_LATENCY cycles after issue of thread 0.
     -- The FSM waits in EXEC_WAIT until exec_flush_active='0', which the
     -- execution unit asserts only after the last padded result has committed.
-    constant FPU_MAX_LATENCY : integer := 28;
+    constant FPU_MAX_LATENCY : integer := LAT_FRSQRT; -- Tied to bottleneck op; update LAT_FRSQRT if IP changes
 
 end package;

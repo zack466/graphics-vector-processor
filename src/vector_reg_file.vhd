@@ -116,6 +116,9 @@ architecture rtl of vector_reg_file is
     
     signal fifo_head  : unsigned(5 downto 0) := (others => '0');
     signal fifo_tail  : unsigned(5 downto 0) := (others => '0');
+    -- WHY 7 bits for a 64-entry FIFO: fifo_head and fifo_tail are 6-bit pointers
+    -- that wrap modulo 64.  fifo_count must represent the value 64 (completely full)
+    -- without wrapping to 0, so it needs one extra bit (range 0..64, not 0..63).
     signal fifo_count : unsigned(6 downto 0) := (others => '0');
 
     -- ========================================================================

@@ -21,19 +21,24 @@
 --   the processor FSM when it is safe to advance past EXEC_WAIT.
 --
 -- USAGE:
---   Instantiated once by processor.vhd. All register file read data (VRF/PRF)
---   must already be stable on the cycle when valid_in is asserted. The unit
---   adds one pipeline stage internally (S0→S1 register) before presenting data
---   to the functional units.
+--   Instantiated once by processor.vhd. The VRF has a 1-cycle registered-read
+--   latency: addresses are driven on the same cycle as valid_in, and read data
+--   appears one cycle later. The execution unit's S1 control registers are timed
+--   to match this: valid_in and inst_type_in are registered into s1_valid and
+--   s1_inst_type so that the functional-unit enables fire on the same cycle the
+--   VRF data arrives. The data path (VRF output → swizzle_network → functional
+--   units) contains no additional register inside this unit.
 --
 -- TIMING / LATENCY:
---   - S0 inputs are registered into S1 on the next rising clock edge.
---   - ALU results are available ALU_LATENCY cycles after alu_en.
---   - FPU results are available FPU_MAX_LATENCY cycles after fpu_en.
+--   - Cycle N  : valid_in asserted; VRF addresses driven; S1 control regs capture.
+--   - Cycle N+1: VRF data stable on vrf_rs*_data; s1_valid='1'; fpu_en/alu_en
+--                fire; swiz_a/b_out combinationally computed; functional units start.
+--   - Cycle N+1+FPU_MAX_LATENCY: FPU result valid; writeback_controller outputs
+--                aligned wb_* signals.
 --   - writeback_controller is driven by the UNREGISTERED (S0) signals
---     exec_ctrl_in/valid_in, and internally delays by FPU_MAX_LATENCY+1 cycles,
---     which equals the S1 stage latency (1) plus the FPU pipeline latency
---     (FPU_MAX_LATENCY). This ensures wb_* outputs align with actual FPU data.
+--     exec_ctrl_in/valid_in, and internally delays by FPU_MAX_LATENCY+1 cycles.
+--     The "+1" accounts for the VRF's 1-cycle read latency (which delays the
+--     functional-unit start by one cycle relative to valid_in).
 --   - flush_active_out stays high from the cycle a FLUSH token enters S1 until
 --     FPU_MAX_LATENCY cycles after it leaves S1, guaranteeing all preceding
 --     writes have committed before the FSM advances.
@@ -45,7 +50,8 @@
 --   exec_ctrl_in      - Decoded execution control record (opcodes, masks, mux
 --                       selects, WE flags, etc.) from the issue stage. Fed
 --                       DIRECTLY to writeback_controller (unregistered) so that
---                       the WB delay matches the S1+IP latency exactly.
+--                       the WB delay of FPU_MAX_LATENCY+1 correctly accounts for
+--                       the VRF read latency plus the FPU pipeline depth.
 --   valid_in          - Asserted when exec_ctrl_in carries a valid instruction.
 --                       Also fed DIRECTLY to writeback_controller (unregistered).
 --   inst_type_in      - 4-bit instruction class (FPU/ALU/IMM/RED/SYS/...).
@@ -56,9 +62,9 @@
 --   red_mask_in       - 4-bit per-component enable for reduction.
 --                       Registered into s1_red_mask.
 --   rd_addr_global_in - 9-bit global destination register address (warp-relative
---                       VRF index). Fed DIRECTLY to writeback_controller so the
---                       delay pipeline inside it produces the correct rd_addr at
---                       writeback time.
+--                       VRF index). Fed DIRECTLY to writeback_controller so its
+--                       FPU_MAX_LATENCY+1 delay aligns the address with the
+--                       functional-unit result at writeback time.
 --   vrf_rs1_data      - 128-bit (4×32) vector source 1 read from VRF this cycle.
 --   vrf_rs2_data      - 128-bit (4×32) vector source 2.
 --   vrf_rs3_data      - 128-bit (4×32) vector source 3 (FMA third operand).
@@ -161,13 +167,16 @@ end entity execution_unit;
 architecture rtl of execution_unit is
 
     -- -------------------------------------------------------------------------
-    -- S0 → S1 Pipeline Registers
-    -- WHY: All inputs are registered one cycle before reaching the functional
-    -- units. This extra stage improves timing closure on the critical path from
-    -- the VRF read ports through the swizzle network to the FPU inputs.
+    -- S1 Control Registers
+    -- WHY: The VRF has a 1-cycle registered-read latency, so vrf_rs*_data does
+    -- not reflect the addresses driven on cycle N until cycle N+1. These registers
+    -- delay the control signals (inst_type, opcode, swiz_sel, etc.) by the same
+    -- one cycle so they are synchronous with the arriving VRF data.
     -- NOTE: exec_ctrl_in and valid_in are deliberately NOT registered here;
     -- they go directly to writeback_controller so its internal delay of
-    -- FPU_MAX_LATENCY+1 accounts for this S1 register stage automatically.
+    -- FPU_MAX_LATENCY+1 accounts for the VRF's 1-cycle read latency automatically.
+    -- The data path (vrf_rs*_data → swizzle_network → functional units) is purely
+    -- combinational within this unit; no additional register sits on that path.
     -- -------------------------------------------------------------------------
     signal s1_ctrl        : exec_ctrl_t;
     signal s1_valid       : std_logic := '0';
@@ -288,10 +297,11 @@ begin
     -- result data.
     --
     -- WHY unregistered inputs (exec_ctrl_in, valid_in, rd_addr_global_in):
-    --   The writeback_controller's internal delay is FPU_MAX_LATENCY+1. The "+1"
-    --   accounts for the S0→S1 register stage inside this unit. If we fed the
-    --   registered (S1) signals instead, the WB signals would arrive one cycle
-    --   LATE relative to the FPU output, causing a rd_addr/data misalignment.
+    --   The functional units start one cycle after valid_in, because the VRF
+    --   read data takes one cycle to appear. The writeback_controller's delay of
+    --   FPU_MAX_LATENCY+1 encodes this: the "+1" is the VRF read latency, not
+    --   an internal pipeline register. Feeding registered (S1) signals would
+    --   make the WB signals arrive one cycle late relative to the FPU output.
     u_wb_ctrl: entity work.writeback_controller
         port map (
             clk => clk, reset => reset, iss_rd_addr => rd_addr_global_in,
@@ -302,9 +312,11 @@ begin
         );
 
     -- swizzle_network: permutes/broadcasts vector component data before it reaches
-    -- the functional unit inputs. This is combinational (zero latency). Swizzle
-    -- patterns are encoded in s1_ctrl.swiz_sel_a/b, which are the registered
-    -- versions of the decoder outputs, so the swizzle sees stable data in S1.
+    -- the functional unit inputs. Both the data path (vrf_rs*_data in, swiz_*_out)
+    -- and the connection to the functional units are purely combinational — there
+    -- is no register between the VRF output and the FPU/ALU/reduction inputs.
+    -- s1_ctrl.swiz_sel_a/b are the registered swizzle selectors, aligned with the
+    -- VRF read data that appears one cycle after valid_in.
     --
     -- When is_logic_op='1' (PAND/POR/PXOR), the swizzle network routes PRF
     -- predicate bits rather than VRF float data into the lanes.
