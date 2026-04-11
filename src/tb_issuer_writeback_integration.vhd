@@ -67,6 +67,13 @@ architecture sim of tb_issuer_writeback_integration is
     signal s1_swiz_b       : swizzle_sel_t;
     signal s1_prf_rs1      : std_logic_vector(3 downto 0) := "0000";
     signal s1_prf_rs2      : std_logic_vector(3 downto 0) := "0000";
+    -- S1-registered WB control signals: drive writeback_controller from S1 so
+    -- its depth of FPU_MAX_LATENCY aligns with the FPU lanes that also start at S1.
+    signal s1_rd_addr      : std_logic_vector(8 downto 0) := (others => '0');
+    signal s1_wb_mask      : std_logic_vector(3 downto 0) := "0000";
+    signal s1_wb_mux       : std_logic_vector(1 downto 0) := "00";
+    signal s1_vrf_we       : std_logic := '0';
+    signal s1_prf_we       : std_logic := '0';
     
     signal swiz_a_out, swiz_b_out                   : vector_t;
 
@@ -131,11 +138,11 @@ begin
     u_wb_ctrl: entity work.writeback_controller
         port map (
             clk         => clk, reset => reset,
-            iss_rd_addr => iss_rd_addr,
-            iss_mask    => iss_mask,
-            iss_wb_mux  => iss_wb_mux,
-            iss_vrf_we  => (iss_vrf_we and iss_valid),
-            iss_prf_we  => (iss_prf_we and iss_valid),
+            iss_rd_addr => s1_rd_addr,
+            iss_mask    => s1_wb_mask,
+            iss_wb_mux  => s1_wb_mux,
+            iss_vrf_we  => s1_vrf_we,
+            iss_prf_we  => s1_prf_we,
             wb_rd_addr  => wb_rd_addr,
             wb_mask     => wb_mask,
             wb_mux_sel  => wb_mux_sel,
@@ -232,6 +239,12 @@ begin
                 s1_swiz_b      <= iss_swiz_b;
                 s1_prf_rs1     <= prf_rs1_data;
                 s1_prf_rs2     <= prf_rs2_data;
+
+                s1_rd_addr     <= iss_rd_addr;
+                s1_wb_mask     <= iss_mask;
+                s1_wb_mux      <= iss_wb_mux;
+                s1_vrf_we      <= iss_vrf_we and iss_valid;
+                s1_prf_we      <= iss_prf_we and iss_valid;
             end if;
         end if;
     end process;

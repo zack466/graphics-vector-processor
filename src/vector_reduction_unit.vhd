@@ -130,9 +130,9 @@ architecture rtl of vector_reduction_unit is
     signal cond_b : vector_t;
 
     -- valid_pipe is a one-hot shift register that tracks when an operation is
-    -- in flight.  valid_pipe(0) is loaded from valid_in each cycle;
+    -- in flight.  valid_pipe(1) is loaded from valid_in each cycle;
     -- valid_pipe(FPU_MAX_LATENCY) is the output valid_out.
-    signal valid_pipe : std_logic_vector(FPU_MAX_LATENCY downto 0) := (others => '0');
+    signal valid_pipe : std_logic_vector(FPU_MAX_LATENCY downto 1) := (others => '0');
 
     -- PAD_STAGES: cycles the res_pipe shift register adds after raw_result appears.
     -- WHY derived rather than literal: if LAT_REDUCT ever changes (e.g. a faster
@@ -276,8 +276,8 @@ begin
             else
                 -- Shift the valid token through FPU_MAX_LATENCY stages so that
                 -- valid_out aligns exactly with the padded result output.
-                valid_pipe(0) <= valid_in;
-                for i in 1 to FPU_MAX_LATENCY loop
+                valid_pipe(1) <= valid_in;
+                for i in 2 to FPU_MAX_LATENCY loop
                     valid_pipe(i) <= valid_pipe(i-1);
                 end loop;
 

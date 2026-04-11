@@ -59,7 +59,7 @@ begin
             wait until rising_edge(clk);
             valid_in <= '0'; 
             
-            for i in 1 to FPU_MAX_LATENCY loop
+            for i in 1 to FPU_MAX_LATENCY - 1 loop
                 wait until rising_edge(clk);
             end loop;
             

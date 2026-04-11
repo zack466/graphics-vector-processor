@@ -40,12 +40,12 @@
 --                  own reset implicitly by draining stale data through the pipe).
 --
 --   opcode       : 6-bit instruction opcode, sampled on every rising edge into
---                  opcode_pipe(0). The pipeline carries it forward so the output
---                  MUX can inspect opcode_pipe(LAT-1) to decide which IP result
+--                  opcode_pipe(1). The pipeline carries it forward so the output
+--                  MUX can inspect opcode_pipe(LAT) to decide which IP result
 --                  to select at exactly the right cycle.
 --   valid_in     : Asserted for one cycle when the lane is being issued a new
 --                  instruction. Propagates through valid_pipe; valid_out fires
---                  FPU_MAX_LATENCY-1 stages later (see note on valid_out below).
+--                  FPU_MAX_LATENCY stages later (see note on valid_out below).
 --   cmp_invert   : '1' flips the boolean sense of a floating-point comparison:
 --                    LT (a<b)  -> GE (a>=b)
 --                    EQ (a==b) -> NEQ (a!=b)
@@ -67,18 +67,18 @@
 --   comp_flag    : 1-bit comparison result for FCMP / predicate logic
 --                  instructions. Undefined for non-comparison instructions.
 --   valid_out    : High for one cycle when result and comp_flag are valid.
---                  NOTE: driven from valid_pipe(FPU_MAX_LATENCY-1), one stage
---                  before the end of the pipeline, because result is resolved
---                  combinationally in the output process from that same stage's
---                  data. This keeps valid_out and result in phase.
+--                  NOTE: driven from valid_pipe(FPU_MAX_LATENCY), aligned with
+--                  the output process which resolves result combinationally from
+--                  stage FPU_MAX_LATENCY data. This keeps valid_out and result
+--                  in phase.
 --
 -- TIMING / LATENCY:
 --   Total input-to-output : FPU_MAX_LATENCY cycles for every opcode.
 --   FPU_MAX_LATENCY       : defined in processor_constants_pkg; must be >=
 --                           the longest individual IP latency constant (LAT_*).
---   valid_out             : appears at FPU_MAX_LATENCY-1 pipeline stages after
---                           valid_in (one early, combinationally aligned with
---                           the final output MUX — see architecture body).
+--   valid_out             : appears FPU_MAX_LATENCY pipeline stages after
+--                           valid_in, combinationally aligned with the final
+--                           output MUX — see architecture body.
 --   Reset recovery        : 1 cycle to clear valid_pipe; IP core drain time
 --                           depends on the longest IP latency.
 --
@@ -128,15 +128,15 @@ architecture rtl of fpu_lane is
 
     -- Control pipelines: these carry the opcode and modifier flags alongside
     -- the data so that the injection MUX at each stage knows which IP's output
-    -- to select. Indexed 0 to FPU_MAX_LATENCY-1 so that opcode_pipe(k) holds
-    -- the opcode of the instruction that was issued k+1 cycles ago.
-    type opcode_pipe_t is array (0 to FPU_MAX_LATENCY - 1) of std_logic_vector(5 downto 0);
+    -- to select. Indexed 1 to FPU_MAX_LATENCY so that opcode_pipe(k) holds
+    -- the opcode of the instruction that was issued k cycles ago.
+    type opcode_pipe_t is array (1 to FPU_MAX_LATENCY) of std_logic_vector(5 downto 0);
     signal opcode_pipe   : opcode_pipe_t := (others => (others => '0'));
-    signal valid_pipe    : std_logic_vector(FPU_MAX_LATENCY - 1 downto 0) := (others => '0');
+    signal valid_pipe    : std_logic_vector(FPU_MAX_LATENCY downto 1) := (others => '0');
     -- cmp_inv_pipe must travel alongside the opcode so the XOR inversion is
     -- applied at the exact cycle the raw comparison result exits its IP core,
     -- not one cycle early or late.
-    signal cmp_inv_pipe  : std_logic_vector(FPU_MAX_LATENCY - 1 downto 0) := (others => '0');
+    signal cmp_inv_pipe  : std_logic_vector(FPU_MAX_LATENCY downto 1) := (others => '0');
 
     -- FMADD input mux signals. The FMADD core is always running; these signals
     -- select what it actually computes based on the current opcode.
@@ -270,15 +270,14 @@ begin
                 valid_pipe <= (others => '0');
             else
                 -- 1. Shift Control Signals
-                -- WHY index 0 is the "newest" entry: the pipe is shift-right;
-                -- opcode_pipe(0) holds the opcode issued THIS cycle, and
-                -- opcode_pipe(k) will hold it k cycles from now when the
+                -- Index 1 holds the opcode/valid issued THIS cycle;
+                -- opcode_pipe(k) holds it k cycles from now when the
                 -- corresponding IP result emerges.
-                valid_pipe(0)   <= valid_in;
-                opcode_pipe(0)  <= opcode;
-                cmp_inv_pipe(0) <= cmp_invert;
+                valid_pipe(1)   <= valid_in;
+                opcode_pipe(1)  <= opcode;
+                cmp_inv_pipe(1) <= cmp_invert;
 
-                for i in 1 to FPU_MAX_LATENCY - 1 loop
+                for i in 2 to FPU_MAX_LATENCY loop
                     valid_pipe(i)   <= valid_pipe(i - 1);
                     opcode_pipe(i)  <= opcode_pipe(i - 1);
                     cmp_inv_pipe(i) <= cmp_inv_pipe(i - 1);
@@ -308,41 +307,41 @@ begin
                     -- CONDITIONING). Their results emerge simultaneously and
                     -- must all be captured at the same pipeline stage.
                     if LAT_FMADD = i - 1 then
-                        if opcode_pipe(LAT_FMADD - 1) = OP_FADD or opcode_pipe(LAT_FMADD - 1) = OP_FSUB or
-                           opcode_pipe(LAT_FMADD - 1) = OP_FMUL or opcode_pipe(LAT_FMADD - 1) = OP_FMADD then
+                        if opcode_pipe(LAT_FMADD) = OP_FADD or opcode_pipe(LAT_FMADD) = OP_FSUB or
+                           opcode_pipe(LAT_FMADD) = OP_FMUL or opcode_pipe(LAT_FMADD) = OP_FMADD then
                             shared_res_pipe(i) <= raw_madd;
                         end if;
                     end if;
 
                     if LAT_FRCP = i - 1 then
-                        if opcode_pipe(LAT_FRCP - 1) = OP_FRCP then shared_res_pipe(i) <= raw_rcp; end if;
+                        if opcode_pipe(LAT_FRCP) = OP_FRCP then shared_res_pipe(i) <= raw_rcp; end if;
                     end if;
                     if LAT_FSQRT = i - 1 then
-                        if opcode_pipe(LAT_FSQRT - 1) = OP_FSQRT then shared_res_pipe(i) <= raw_sqrt; end if;
+                        if opcode_pipe(LAT_FSQRT) = OP_FSQRT then shared_res_pipe(i) <= raw_sqrt; end if;
                     end if;
                     if LAT_FLOG2 = i - 1 then
-                        if opcode_pipe(LAT_FLOG2 - 1) = OP_FLOG2 then shared_res_pipe(i) <= raw_log2; end if;
+                        if opcode_pipe(LAT_FLOG2) = OP_FLOG2 then shared_res_pipe(i) <= raw_log2; end if;
                     end if;
                     if LAT_FEXP2 = i - 1 then
-                        if opcode_pipe(LAT_FEXP2 - 1) = OP_FEXP2 then shared_res_pipe(i) <= raw_exp2; end if;
+                        if opcode_pipe(LAT_FEXP2) = OP_FEXP2 then shared_res_pipe(i) <= raw_exp2; end if;
                     end if;
                     if LAT_FSIN = i - 1 then
-                        if opcode_pipe(LAT_FSIN - 1) = OP_SIN then shared_res_pipe(i) <= raw_sin; end if;
+                        if opcode_pipe(LAT_FSIN) = OP_SIN then shared_res_pipe(i) <= raw_sin; end if;
                     end if;
                     if LAT_FCOS = i - 1 then
-                        if opcode_pipe(LAT_FCOS - 1) = OP_COS then shared_res_pipe(i) <= raw_cos; end if;
+                        if opcode_pipe(LAT_FCOS) = OP_COS then shared_res_pipe(i) <= raw_cos; end if;
                     end if;
                     if LAT_FMIN = i - 1 then
-                        if opcode_pipe(LAT_FMIN - 1) = OP_FMIN then shared_res_pipe(i) <= raw_min; end if;
+                        if opcode_pipe(LAT_FMIN) = OP_FMIN then shared_res_pipe(i) <= raw_min; end if;
                     end if;
                     if LAT_FMAX = i - 1 then
-                        if opcode_pipe(LAT_FMAX - 1) = OP_FMAX then shared_res_pipe(i) <= raw_max; end if;
+                        if opcode_pipe(LAT_FMAX) = OP_FMAX then shared_res_pipe(i) <= raw_max; end if;
                     end if;
                     if LAT_I2F = i - 1 then
-                        if opcode_pipe(LAT_I2F - 1) = OP_I2F then shared_res_pipe(i) <= raw_i2f; end if;
+                        if opcode_pipe(LAT_I2F) = OP_I2F then shared_res_pipe(i) <= raw_i2f; end if;
                     end if;
                     if LAT_F2I = i - 1 then
-                        if opcode_pipe(LAT_F2I - 1) = OP_F2I then shared_res_pipe(i) <= raw_f2i; end if;
+                        if opcode_pipe(LAT_F2I) = OP_F2I then shared_res_pipe(i) <= raw_f2i; end if;
                     end if;
 
                     -- Floating Point Comparisons.
@@ -352,13 +351,13 @@ begin
                     -- MUX. The inversion is a single gate and adds no area to the
                     -- shared pipeline stages that follow.
                     if LAT_FCMP_LT = i - 1 then
-                        if opcode_pipe(LAT_FCMP_LT - 1) = OP_FCMP_LT then
-                            shared_cmp_pipe(i) <= raw_lt xor cmp_inv_pipe(LAT_FCMP_LT - 1);
+                        if opcode_pipe(LAT_FCMP_LT) = OP_FCMP_LT then
+                            shared_cmp_pipe(i) <= raw_lt xor cmp_inv_pipe(LAT_FCMP_LT);
                         end if;
                     end if;
                     if LAT_FCMP_EQ = i - 1 then
-                        if opcode_pipe(LAT_FCMP_EQ - 1) = OP_FCMP_EQ then
-                            shared_cmp_pipe(i) <= raw_eq xor cmp_inv_pipe(LAT_FCMP_EQ - 1);
+                        if opcode_pipe(LAT_FCMP_EQ) = OP_FCMP_EQ then
+                            shared_cmp_pipe(i) <= raw_eq xor cmp_inv_pipe(LAT_FCMP_EQ);
                         end if;
                     end if;
 
@@ -415,27 +414,27 @@ begin
         -- pipeline register and take the raw IP output directly. This
         -- eliminates one register of extra latency for the deepest IP.
         if LAT_FMADD = FPU_MAX_LATENCY then
-            if opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FADD or opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FSUB or
-               opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FMUL or opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FMADD then
+            if opcode_pipe(FPU_MAX_LATENCY) = OP_FADD or opcode_pipe(FPU_MAX_LATENCY) = OP_FSUB or
+               opcode_pipe(FPU_MAX_LATENCY) = OP_FMUL or opcode_pipe(FPU_MAX_LATENCY) = OP_FMADD then
                 result <= raw_madd;
             end if;
         end if;
-        if LAT_FRCP  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FRCP  then result <= raw_rcp;  end if;
-        if LAT_FSQRT = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FSQRT then result <= raw_sqrt; end if;
-        if LAT_FLOG2 = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FLOG2 then result <= raw_log2; end if;
-        if LAT_FEXP2 = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FEXP2 then result <= raw_exp2; end if;
-        if LAT_FSIN  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_SIN   then result <= raw_sin;  end if;
-        if LAT_FCOS  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_COS   then result <= raw_cos;  end if;
-        if LAT_FMIN  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FMIN  then result <= raw_min;  end if;
-        if LAT_FMAX  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FMAX  then result <= raw_max;  end if;
-        if LAT_I2F   = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_I2F   then result <= raw_i2f;  end if;
-        if LAT_F2I   = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_F2I   then result <= raw_f2i;  end if;
+        if LAT_FRCP  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FRCP  then result <= raw_rcp;  end if;
+        if LAT_FSQRT = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FSQRT then result <= raw_sqrt; end if;
+        if LAT_FLOG2 = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FLOG2 then result <= raw_log2; end if;
+        if LAT_FEXP2 = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FEXP2 then result <= raw_exp2; end if;
+        if LAT_FSIN  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_SIN   then result <= raw_sin;  end if;
+        if LAT_FCOS  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_COS   then result <= raw_cos;  end if;
+        if LAT_FMIN  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FMIN  then result <= raw_min;  end if;
+        if LAT_FMAX  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FMAX  then result <= raw_max;  end if;
+        if LAT_I2F   = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_I2F   then result <= raw_i2f;  end if;
+        if LAT_F2I   = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_F2I   then result <= raw_f2i;  end if;
 
         -- Same bypass for comparisons: apply inversion combinationally at the
-        -- output so that cmp_inv_pipe(FPU_MAX_LATENCY-1) is used, which holds
+        -- output so that cmp_inv_pipe(FPU_MAX_LATENCY) is used, which holds
         -- the cmp_invert flag for the instruction currently being output.
-        if LAT_FCMP_LT = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FCMP_LT then comp_flag <= raw_lt xor cmp_inv_pipe(FPU_MAX_LATENCY - 1); end if;
-        if LAT_FCMP_EQ = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY - 1) = OP_FCMP_EQ then comp_flag <= raw_eq xor cmp_inv_pipe(FPU_MAX_LATENCY - 1); end if;
+        if LAT_FCMP_LT = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FCMP_LT then comp_flag <= raw_lt xor cmp_inv_pipe(FPU_MAX_LATENCY); end if;
+        if LAT_FCMP_EQ = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FCMP_EQ then comp_flag <= raw_eq xor cmp_inv_pipe(FPU_MAX_LATENCY); end if;
 
         -- WHY this guard is "0 = FPU_MAX_LATENCY": PXOR/PAND/POR are zero
         -- real-latency ops. If FPU_MAX_LATENCY were somehow 0 (impossible in
@@ -451,14 +450,11 @@ begin
 
     end process;
 
-    -- WHY valid_pipe(FPU_MAX_LATENCY-1) and not (FPU_MAX_LATENCY):
+    -- WHY valid_pipe(FPU_MAX_LATENCY) and not a later stage:
     -- The output process above resolves result and comp_flag COMBINATIONALLY
-    -- from data that was registered at stage FPU_MAX_LATENCY-1 one cycle ago
-    -- (or from raw IP outputs that also became valid at that same cycle).
-    -- valid_out must therefore pulse on the same clock cycle as the combinational
-    -- result becomes stable, which is one stage before the pipeline tail.
-    -- Using FPU_MAX_LATENCY would make valid_out arrive one cycle too late,
-    -- misaligning it with the data at the output ports.
-    valid_out <= valid_pipe(FPU_MAX_LATENCY - 1);
+    -- from data registered at stage FPU_MAX_LATENCY (opcode_pipe, shared pipes)
+    -- or from raw IP outputs that become valid at that same cycle.
+    -- valid_out pulses on the same clock cycle the combinational output is stable.
+    valid_out <= valid_pipe(FPU_MAX_LATENCY);
 
 end architecture rtl;

@@ -21,39 +21,35 @@
 --   the processor FSM when it is safe to advance past EXEC_WAIT.
 --
 -- USAGE:
---   Instantiated once by processor.vhd. The VRF has a 1-cycle registered-read
---   latency: addresses are driven on the same cycle as valid_in, and read data
---   appears one cycle later. The execution unit's S1 control registers are timed
---   to match this: valid_in and inst_type_in are registered into s1_valid and
---   s1_inst_type so that the functional-unit enables fire on the same cycle the
---   VRF data arrives. The data path (VRF output → swizzle_network → functional
---   units) contains no additional register inside this unit.
+--   Instantiated once by processor.vhd. The pipeline has two explicit register
+--   stages before functional units start:
+--     S1 (N+1): VRF read data arrives (1-cycle registered read). Control signals
+--               are registered into s1_*. Swizzle runs combinationally this cycle.
+--     S2 (N+2): Swizzle outputs and all S1 controls are registered into s2_*.
+--               Functional units start here with fully stable, registered inputs.
+--   The writeback_controller is driven from S2, so its depth equals FPU_MAX_LATENCY
+--   exactly — no off-by-one correction required.
 --
 -- TIMING / LATENCY:
 --   - Cycle N  : valid_in asserted; VRF addresses driven; S1 control regs capture.
---   - Cycle N+1: VRF data stable on vrf_rs*_data; s1_valid='1'; fpu_en/alu_en
---                fire; swiz_a/b_out combinationally computed; functional units start.
---   - Cycle N+1+FPU_MAX_LATENCY: FPU result valid; writeback_controller outputs
---                aligned wb_* signals.
---   - writeback_controller is driven by the UNREGISTERED (S0) signals
---     exec_ctrl_in/valid_in, and internally delays by FPU_MAX_LATENCY+1 cycles.
---     The "+1" accounts for the VRF's 1-cycle read latency (which delays the
---     functional-unit start by one cycle relative to valid_in).
+--   - Cycle N+1: VRF data stable; s1_valid='1'; swizzle runs combinationally.
+--                S2 registers capture swiz_a/b_out, s2_ctrl, s2_rd_addr, etc.
+--   - Cycle N+2: s2_valid='1'; fpu_en/alu_en/red_en fire; functional units start.
+--                writeback_controller loads its pipe(0) this cycle.
+--   - Cycle N+2+FPU_MAX_LATENCY: FPU result valid; wb_* outputs aligned.
 --   - flush_active_out stays high from the cycle a FLUSH token enters S1 until
---     FPU_MAX_LATENCY cycles after it leaves S1, guaranteeing all preceding
---     writes have committed before the FSM advances.
+--     all preceding writes have committed (FPU_MAX_LATENCY cycles after S1).
 --
 -- PORTS:
 --   clk               - System clock. All state updates on rising edge.
 --   reset             - Synchronous active-high reset. Clears s1_valid and
 --                       flush_shift_reg; functional units handle their own reset.
 --   exec_ctrl_in      - Decoded execution control record (opcodes, masks, mux
---                       selects, WE flags, etc.) from the issue stage. Fed
---                       DIRECTLY to writeback_controller (unregistered) so that
---                       the WB delay of FPU_MAX_LATENCY+1 correctly accounts for
---                       the VRF read latency plus the FPU pipeline depth.
+--                       selects, WE flags, etc.) from the issue stage. Registered
+--                       into S1, then into S2 before reaching the writeback_controller
+--                       and functional units.
 --   valid_in          - Asserted when exec_ctrl_in carries a valid instruction.
---                       Also fed DIRECTLY to writeback_controller (unregistered).
+--                       Registered through S1 (s1_valid) and S2 (s2_valid).
 --   inst_type_in      - 4-bit instruction class (FPU/ALU/IMM/RED/SYS/...).
 --                       Registered into s1_inst_type to gate functional-unit
 --                       enable signals in S1.
@@ -62,9 +58,8 @@
 --   red_mask_in       - 4-bit per-component enable for reduction.
 --                       Registered into s1_red_mask.
 --   rd_addr_global_in - 9-bit global destination register address (warp-relative
---                       VRF index). Fed DIRECTLY to writeback_controller so its
---                       FPU_MAX_LATENCY+1 delay aligns the address with the
---                       functional-unit result at writeback time.
+--                       VRF index). Registered through S1 (s1_rd_addr) and S2
+--                       (s2_rd_addr) before reaching the writeback_controller.
 --   vrf_rs1_data      - 128-bit (4×32) vector source 1 read from VRF this cycle.
 --   vrf_rs2_data      - 128-bit (4×32) vector source 2.
 --   vrf_rs3_data      - 128-bit (4×32) vector source 3 (FMA third operand).
@@ -167,38 +162,52 @@ end entity execution_unit;
 architecture rtl of execution_unit is
 
     -- -------------------------------------------------------------------------
-    -- S1 Control Registers
-    -- WHY: The VRF has a 1-cycle registered-read latency, so vrf_rs*_data does
-    -- not reflect the addresses driven on cycle N until cycle N+1. These registers
-    -- delay the control signals (inst_type, opcode, swiz_sel, etc.) by the same
-    -- one cycle so they are synchronous with the arriving VRF data.
-    -- NOTE: exec_ctrl_in and valid_in are deliberately NOT registered here;
-    -- they go directly to writeback_controller so its internal delay of
-    -- FPU_MAX_LATENCY+1 accounts for the VRF's 1-cycle read latency automatically.
-    -- The data path (vrf_rs*_data → swizzle_network → functional units) is purely
-    -- combinational within this unit; no additional register sits on that path.
+    -- S1 and S2 Pipeline Registers
+    --
+    -- S1 (registered from inputs on the cycle after valid_in):
+    --   The VRF has a 1-cycle registered-read latency, so vrf_rs*_data arrives
+    --   one cycle after valid_in. S1 registers align all control signals with
+    --   the arriving VRF data. The swizzle network runs combinationally in S1,
+    --   consuming vrf_rs*_data and s1_ctrl.swiz_sel_*.
+    --
+    -- S2 (registered from S1 on the following cycle):
+    --   Captures the swizzle outputs and all remaining S1 signals. Functional
+    --   units are enabled and driven from S2, so their inputs are fully
+    --   registered and the SRAM→swizzle→FPU critical path is broken.
+    --   The writeback_controller is also driven from S2 so its depth equals
+    --   FPU_MAX_LATENCY with no off-by-one correction.
     -- -------------------------------------------------------------------------
     signal s1_ctrl        : exec_ctrl_t;
     signal s1_valid       : std_logic := '0';
     signal s1_inst_type   : std_logic_vector(3 downto 0);
     signal s1_red_mode    : std_logic_vector(1 downto 0);
     signal s1_red_mask    : std_logic_vector(3 downto 0);
-
-    -- PRF data registered into S1 so swizzle_network sees stable predicate bits
-    -- on the same cycle as the registered VRF data.
     signal s1_prf_rs1     : std_logic_vector(3 downto 0) := "0000";
     signal s1_prf_rs2     : std_logic_vector(3 downto 0) := "0000";
-    -- thread_id registered into S1 so ALU sees it coincident with swizzled operands.
     signal s1_thread_id   : std_logic_vector(4 downto 0) := (others => '0');
+    signal s1_warp_offset : std_logic_vector(31 downto 0) := (others => '0');
+    signal s1_rd_addr     : std_logic_vector(8 downto 0)  := (others => '0');
+
+    signal s2_valid       : std_logic := '0';
+    signal s2_ctrl        : exec_ctrl_t;
+    signal s2_inst_type   : std_logic_vector(3 downto 0);
+    signal s2_red_mode    : std_logic_vector(1 downto 0);
+    signal s2_red_mask    : std_logic_vector(3 downto 0);
+    signal s2_thread_id   : std_logic_vector(4 downto 0) := (others => '0');
+    signal s2_warp_offset : std_logic_vector(31 downto 0) := (others => '0');
+    signal s2_swiz_a      : vector_t;
+    signal s2_swiz_b      : vector_t;
+    signal s2_rs3         : vector_t;
+    signal s2_rd_addr     : std_logic_vector(8 downto 0)  := (others => '0');
 
     -- -------------------------------------------------------------------------
     -- FLUSH Token Tracking
     -- WHY: A FLUSH instruction is a sentinel that marks the end of a batch of
-    -- instructions. The processor FSM must not advance until ALL instructions
-    -- preceding the flush have written back. Because the FPU is pipelined to
-    -- FPU_MAX_LATENCY depth, we must wait that many additional cycles after the
-    -- FLUSH enters S1. flush_shift_reg is a one-hot shift register that tracks
-    -- the token as it travels down the FPU pipeline depth.
+    -- instructions. The processor FSM must not advance until ALL preceding writes
+    -- have committed. The last instruction before FLUSH enters S2 one cycle before
+    -- FLUSH enters S1, so its WB commits FPU_MAX_LATENCY cycles after S1 of FLUSH.
+    -- flush_shift_reg tracks the token from S1 through FPU_MAX_LATENCY more cycles,
+    -- holding flush_active_out high until all writes have retired.
     -- -------------------------------------------------------------------------
     signal is_flush_stage1 : std_logic;
     signal flush_shift_reg : std_logic_vector(FPU_MAX_LATENCY-1 downto 0) := (others => '0');
@@ -248,75 +257,85 @@ begin
     begin
         if rising_edge(clk) then
             if reset = '1' then
-                -- On reset: invalidate the S1 stage so no stale instruction
-                -- accidentally enables a functional unit or blocks flush detection.
+                -- Invalidate both pipeline stages so no stale instruction enables
+                -- a functional unit or blocks flush detection after reset.
                 s1_valid <= '0';
+                s2_valid <= '0';
                 -- Clear the shift register so flush_active_out deasserts immediately
                 -- after reset, allowing the FSM to start without stalling.
                 flush_shift_reg <= (others => '0');
             else
-                -- S0 → S1 pipeline register. All inputs captured here.
-                -- exec_ctrl_in/valid_in/rd_addr_global_in are intentionally NOT
-                -- registered here; see writeback_controller port map comment.
-                s1_valid     <= valid_in;
-                s1_ctrl      <= exec_ctrl_in;
-                s1_inst_type <= inst_type_in;
-                s1_red_mode  <= red_mode_in;
-                s1_red_mask  <= red_mask_in;
-                s1_prf_rs1   <= prf_rs1_data;
-                s1_prf_rs2   <= prf_rs2_data;
-                s1_thread_id <= thread_id_in;
+                -- S0 → S1: register all control inputs so they arrive coincident
+                -- with vrf_rs*_data (which has a 1-cycle registered-read latency).
+                s1_valid       <= valid_in;
+                s1_ctrl        <= exec_ctrl_in;
+                s1_inst_type   <= inst_type_in;
+                s1_red_mode    <= red_mode_in;
+                s1_red_mask    <= red_mask_in;
+                s1_prf_rs1     <= prf_rs1_data;
+                s1_prf_rs2     <= prf_rs2_data;
+                s1_thread_id   <= thread_id_in;
+                s1_warp_offset <= warp_offset_in;
+                s1_rd_addr     <= rd_addr_global_in;
+
+                -- S1 → S2: register swizzle outputs (combinational in S1) and
+                -- all remaining S1 controls. Functional units start from S2 so
+                -- the SRAM→swizzle→FPU path has a register break at this point.
+                s2_valid       <= s1_valid;
+                s2_ctrl        <= s1_ctrl;
+                s2_inst_type   <= s1_inst_type;
+                s2_red_mode    <= s1_red_mode;
+                s2_red_mask    <= s1_red_mask;
+                s2_thread_id   <= s1_thread_id;
+                s2_warp_offset <= s1_warp_offset;
+                s2_swiz_a      <= swiz_a_out;
+                s2_swiz_b      <= swiz_b_out;
+                s2_rs3         <= vrf_rs3_data;
+                s2_rd_addr     <= s1_rd_addr;
 
                 -- Shift the flush token down the pipeline.
-                -- Bit 0 of flush_shift_reg corresponds to one cycle after S1;
-                -- bit FPU_MAX_LATENCY-1 corresponds to the last FPU output stage.
-                -- The LSB is loaded with is_flush_stage1 each cycle.
+                -- Bit 0 is loaded from is_flush_stage1 (S1 detection); it covers
+                -- S2 on the next cycle, then FPU_MAX_LATENCY-1 stages beyond that.
                 flush_shift_reg <= flush_shift_reg(FPU_MAX_LATENCY-2 downto 0) & is_flush_stage1;
             end if;
         end if;
     end process;
 
     -- flush_active_out: HIGH whenever the FLUSH token is anywhere in the pipeline.
-    -- The OR of is_flush_stage1 covers the cycle the token is in S1 but before
-    -- it has been shifted into flush_shift_reg (shift happens on the NEXT edge).
+    -- is_flush_stage1 covers the cycle the token is in S1. flush_shift_reg(0)
+    -- covers S2 (loaded one cycle later). The remaining bits cover the FPU
+    -- pipeline. Together they span from S1 entry through the last WB commit.
     -- The processor FSM must hold EXEC_WAIT as long as this is asserted.
     flush_active_out <= '1' when (flush_shift_reg /= ZERO_FLUSH_REG) or (is_flush_stage1 = '1') else '0';
 
-    -- Functional-unit enable strobes: gated on s1_valid AND the registered
-    -- instruction type. Using s1_inst_type (registered) rather than inst_type_in
-    -- (combinational) ensures enables are synchronous with the S1 operand data.
-    fpu_en <= '1' when (s1_valid = '1' and s1_inst_type = INST_TYPE_FPU) else '0';
-    red_en <= '1' when (s1_valid = '1' and s1_inst_type = INST_TYPE_RED) else '0';
+    -- Functional-unit enable strobes: gated on s2_valid AND the S2-registered
+    -- instruction type. All functional units start in S2, so their enables and
+    -- operands (s2_swiz_a/b, s2_ctrl.*) are guaranteed to be stable registers.
+    fpu_en <= '1' when (s2_valid = '1' and s2_inst_type = INST_TYPE_FPU) else '0';
+    red_en <= '1' when (s2_valid = '1' and s2_inst_type = INST_TYPE_RED) else '0';
     -- WHY INST_TYPE_IMM here: LDI_LO and LDI_HI are encoded as IMM instructions
     -- but are executed by the ALU lane (which decodes the is_load flag to switch
     -- to immediate-load behavior). Both types share the same ALU lane path.
-    alu_en <= '1' when (s1_valid = '1' and (s1_inst_type = INST_TYPE_ALU or s1_inst_type = INST_TYPE_IMM)) else '0';
+    alu_en <= '1' when (s2_valid = '1' and (s2_inst_type = INST_TYPE_ALU or s2_inst_type = INST_TYPE_IMM)) else '0';
 
-    -- writeback_controller: delays all WB control signals by FPU_MAX_LATENCY+1
-    -- cycles so they arrive at the register file on the same cycle as the FPU
-    -- result data.
-    --
-    -- WHY unregistered inputs (exec_ctrl_in, valid_in, rd_addr_global_in):
-    --   The functional units start one cycle after valid_in, because the VRF
-    --   read data takes one cycle to appear. The writeback_controller's delay of
-    --   FPU_MAX_LATENCY+1 encodes this: the "+1" is the VRF read latency, not
-    --   an internal pipeline register. Feeding registered (S1) signals would
-    --   make the WB signals arrive one cycle late relative to the FPU output.
+    -- writeback_controller: delays all WB control signals by exactly FPU_MAX_LATENCY
+    -- cycles so they arrive at the register file on the same cycle as functional-unit
+    -- results. Driven from S2 — the same stage at which functional units start —
+    -- so the depth is a direct 1:1 match with the FPU pipeline depth.
     u_wb_ctrl: entity work.writeback_controller
         port map (
-            clk => clk, reset => reset, iss_rd_addr => rd_addr_global_in,
-            iss_mask => exec_ctrl_in.write_mask, iss_wb_mux => exec_ctrl_in.wb_mux_sel,
-            iss_vrf_we => (exec_ctrl_in.vrf_we and valid_in), iss_prf_we => (exec_ctrl_in.prf_we and valid_in),
+            clk => clk, reset => reset, iss_rd_addr => s2_rd_addr,
+            iss_mask => s2_ctrl.write_mask, iss_wb_mux => s2_ctrl.wb_mux_sel,
+            iss_vrf_we => (s2_ctrl.vrf_we and s2_valid), iss_prf_we => (s2_ctrl.prf_we and s2_valid),
             wb_rd_addr => wb_rd_addr_out, wb_mask => wb_mask_out, wb_mux_sel => wb_mux_sel_out,
             wb_vrf_we => wb_vrf_we_out, wb_prf_we => wb_prf_we_out
         );
 
-    -- swizzle_network: permutes/broadcasts vector component data before it reaches
-    -- the functional unit inputs. Both the data path (vrf_rs*_data in, swiz_*_out)
-    -- and the connection to the functional units are purely combinational — there
-    -- is no register between the VRF output and the FPU/ALU/reduction inputs.
-    -- s1_ctrl.swiz_sel_a/b are the registered swizzle selectors, aligned with the
-    -- VRF read data that appears one cycle after valid_in.
+    -- swizzle_network: permutes/broadcasts vector component data. Runs combinationally
+    -- in S1, consuming vrf_rs*_data (which just arrived from the VRF) and the
+    -- registered S1 control selectors. Its outputs (swiz_a_out, swiz_b_out) are
+    -- captured into s2_swiz_a/b at the S1→S2 register boundary, breaking the
+    -- SRAM→swizzle→FPU critical path.
     --
     -- When is_logic_op='1' (PAND/POR/PXOR), the swizzle network routes PRF
     -- predicate bits rather than VRF float data into the lanes.
@@ -328,20 +347,14 @@ begin
         );
 
     -- Four FPU lanes (u_lane_x/y/z/w): one per vector component.
-    -- WHY four identical instances rather than a loop: explicit instantiation
-    -- makes it straightforward to tie different swiz_a/b/c component indices to
-    -- each lane and keeps the hierarchy visible in simulation waveforms.
-    --
-    -- All four lanes share: opcode, valid_in (fpu_en), cmp_invert, cmp_swap.
-    -- Each lane receives its own component slice of the swizzled operand buses.
-    -- vrf_rs3_data (op_c) is NOT swizzled — swizzle only applies to rs1/rs2.
-    --
-    -- valid_out is left open because the writeback_controller drives WB timing;
-    -- we do not need a separate valid chain from the FPU lanes themselves.
-    u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_ctrl.opcode, valid_in=>fpu_en, op_a=>swiz_a_out(0), op_b=>swiz_b_out(0), op_c=>vrf_rs3_data(0), result=>fpu_res_x, valid_out=>open, comp_flag=>comp_flag_x, cmp_invert=>s1_ctrl.cmp_invert, cmp_swap=>s1_ctrl.cmp_swap);
-    u_lane_y: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_ctrl.opcode, valid_in=>fpu_en, op_a=>swiz_a_out(1), op_b=>swiz_b_out(1), op_c=>vrf_rs3_data(1), result=>fpu_res_y, valid_out=>open, comp_flag=>comp_flag_y, cmp_invert=>s1_ctrl.cmp_invert, cmp_swap=>s1_ctrl.cmp_swap);
-    u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_ctrl.opcode, valid_in=>fpu_en, op_a=>swiz_a_out(2), op_b=>swiz_b_out(2), op_c=>vrf_rs3_data(2), result=>fpu_res_z, valid_out=>open, comp_flag=>comp_flag_z, cmp_invert=>s1_ctrl.cmp_invert, cmp_swap=>s1_ctrl.cmp_swap);
-    u_lane_w: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s1_ctrl.opcode, valid_in=>fpu_en, op_a=>swiz_a_out(3), op_b=>swiz_b_out(3), op_c=>vrf_rs3_data(3), result=>fpu_res_w, valid_out=>open, comp_flag=>comp_flag_w, cmp_invert=>s1_ctrl.cmp_invert, cmp_swap=>s1_ctrl.cmp_swap);
+    -- All inputs come from S2 registers, so every FPU input is fully registered.
+    -- s2_swiz_a/b carry the permuted operands; s2_rs3 carries the FMA addend
+    -- (not swizzled, but registered through S1→S2 alongside the other operands).
+    -- valid_out is left open; the writeback_controller drives WB timing.
+    u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(0), op_b=>s2_swiz_b(0), op_c=>s2_rs3(0), result=>fpu_res_x, valid_out=>open, comp_flag=>comp_flag_x, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
+    u_lane_y: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(1), op_b=>s2_swiz_b(1), op_c=>s2_rs3(1), result=>fpu_res_y, valid_out=>open, comp_flag=>comp_flag_y, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
+    u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(2), op_b=>s2_swiz_b(2), op_c=>s2_rs3(2), result=>fpu_res_z, valid_out=>open, comp_flag=>comp_flag_z, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
+    u_lane_w: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(3), op_b=>s2_swiz_b(3), op_c=>s2_rs3(3), result=>fpu_res_w, valid_out=>open, comp_flag=>comp_flag_w, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
 
     -- vector_reduction_unit: collapses a vector (or pair of vectors) to a single
     -- scalar using the configured red_mode (sum, min, max, dot-product, etc.).
@@ -350,8 +363,8 @@ begin
     -- when wb_mux_sel = WB_MUX_RED, writing the same scalar to every active lane.
     u_reduction: entity work.vector_reduction_unit
         port map (
-            clk => clk, reset => reset, valid_in => red_en, vec_a => swiz_a_out, vec_b => swiz_b_out,
-            reduce_mask => s1_red_mask, red_mode => s1_red_mode, result => red_res_scalar, valid_out => open
+            clk => clk, reset => reset, valid_in => red_en, vec_a => s2_swiz_a, vec_b => s2_swiz_b,
+            reduce_mask => s2_red_mask, red_mode => s2_red_mode, result => red_res_scalar, valid_out => open
         );
 
     -- alu_lane: scalar integer ALU. Operates ONLY on component 0 of the swizzled
@@ -368,10 +381,10 @@ begin
     -- hardware thread identity into a register (used for parallel address generation).
     u_alu: entity work.alu_lane
         port map (
-            clk => clk, reset => reset, opcode => s1_ctrl.opcode, valid_in => alu_en,
-            is_load => s1_ctrl.is_load, imm_data => s1_ctrl.imm_data,
-            op_a => swiz_a_out(0), op_b => swiz_b_out(0),
-            thread_id => s1_thread_id, warp_offset => warp_offset_in,
+            clk => clk, reset => reset, opcode => s2_ctrl.opcode, valid_in => alu_en,
+            is_load => s2_ctrl.is_load, imm_data => s2_ctrl.imm_data,
+            op_a => s2_swiz_a(0), op_b => s2_swiz_b(0),
+            thread_id => s2_thread_id, warp_offset => s2_warp_offset,
             result => alu_res, comp_flag => alu_comp_flag, valid_out => open
         );
 

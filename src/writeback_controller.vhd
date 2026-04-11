@@ -61,10 +61,13 @@
 --
 -- TIMING / LATENCY
 -- ----------------
--- Every signal is delayed by exactly (FPU_MAX_LATENCY + 1) rising edges:
--- one edge to load stage 0, then FPU_MAX_LATENCY edges to shift to the output.
+-- Every signal is delayed by exactly FPU_MAX_LATENCY rising edges:
+-- one edge to load stage 1, then FPU_MAX_LATENCY-1 edges to shift to the output.
 -- The output signals are purely registered (no combinational output path), so
 -- they are glitch-free and can drive the register-file write ports directly.
+-- The depth equals FPU_MAX_LATENCY exactly because the iss_* inputs are driven
+-- from S2 of the execution unit — the same stage at which functional units start.
+-- No off-by-one correction is needed.
 --
 -- Only vrf_we and prf_we are reset to '0' — the other pipeline stages hold
 -- their FPGA power-on state until written.  This is intentional: the data
@@ -112,13 +115,13 @@ architecture rtl of writeback_controller is
     -- ========================================================================
     -- PIPELINE TYPES (Derived directly from processor_constants_pkg)
     -- ========================================================================
-    -- Array bounds are (0 to FPU_MAX_LATENCY), giving FPU_MAX_LATENCY+1 stages.
-    -- Index 0 is the input register (loaded from iss_* each cycle).
+    -- Array bounds are (1 to FPU_MAX_LATENCY), giving FPU_MAX_LATENCY stages.
+    -- Index 1 is the input register (loaded from iss_* each cycle).
     -- Index FPU_MAX_LATENCY is the output register (tapped to wb_* ports).
-    type addr_pipe_t is array (0 to FPU_MAX_LATENCY) of std_logic_vector(8 downto 0);
-    type mask_pipe_t is array (0 to FPU_MAX_LATENCY) of std_logic_vector(3 downto 0);
-    type mux_pipe_t  is array (0 to FPU_MAX_LATENCY) of std_logic_vector(1 downto 0);
-    type we_pipe_t   is array (0 to FPU_MAX_LATENCY) of std_logic;
+    type addr_pipe_t is array (1 to FPU_MAX_LATENCY) of std_logic_vector(8 downto 0);
+    type mask_pipe_t is array (1 to FPU_MAX_LATENCY) of std_logic_vector(3 downto 0);
+    type mux_pipe_t  is array (1 to FPU_MAX_LATENCY) of std_logic_vector(1 downto 0);
+    type we_pipe_t   is array (1 to FPU_MAX_LATENCY) of std_logic;
 
     -- ========================================================================
     -- SHIFT REGISTERS
@@ -152,18 +155,18 @@ begin
                 --    This happens every cycle; when no instruction is being issued
                 --    the issuer drives WE='0', which propagates as a bubble through
                 --    the shift register and prevents a spurious register-file write.
-                rd_addr_pipe(0) <= iss_rd_addr;
-                mask_pipe(0)    <= iss_mask;
-                mux_pipe(0)     <= iss_wb_mux;
-                vrf_we_pipe(0)  <= iss_vrf_we;
-                prf_we_pipe(0)  <= iss_prf_we;
+                rd_addr_pipe(1) <= iss_rd_addr;
+                mask_pipe(1)    <= iss_mask;
+                mux_pipe(1)     <= iss_wb_mux;
+                vrf_we_pipe(1)  <= iss_vrf_we;
+                prf_we_pipe(1)  <= iss_prf_we;
 
                 -- 2. Unconditionally shift the pipeline to match FPU math progression.
                 --    WHY unconditional (no enable/stall)?  The barrel scheduler never
                 --    stalls mid-instruction — it issues all 32 threads back-to-back
                 --    with no bubbles.  A stall signal would complicate the design
                 --    without any benefit in this architecture.
-                for i in 1 to FPU_MAX_LATENCY loop
+                for i in 2 to FPU_MAX_LATENCY loop
                     rd_addr_pipe(i) <= rd_addr_pipe(i-1);
                     mask_pipe(i)    <= mask_pipe(i-1);
                     mux_pipe(i)     <= mux_pipe(i-1);

@@ -6,10 +6,16 @@
 * add immediate FPU instructions, don't support things like swizzling or mask, but allow encoding low-precision immediate constants, for things like scalar multiplication, negation, etc
   * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
 * test memory controller with real DDR3 memory
-* review documentation manually and verify that it is accurate
+* (in progress) review documentation manually and verify that it is accurate
 * instead of triggering top-level for every warp invocation, add simple warp scheduler that just schedules the single warp to draw an entire frame.
+  * could also implement latency hiding for memory operations? Would also help to simplify MCU. We definitely have enough M10K blocks.
+  * add an output pixel buffer to every single warp, those get written to memory whenever it gets a chance.
+    for pure shaders, reading is not necessary, only need to know thread ID and global registers like width/height, mouse position, etc.
 * create top top level that can trigger processor to draw a frame, and keeps it in sync with the VIP framebuffer.
   should probably hardcode addresses of two backbuffers for double buffering.
+* special pixel-packing pipeline and memory write operation, since framebuffer will be expected each pixel to be a 32-bit packed RGBA value with integers from 0 to 255
+* replace coalescing memory unit, assume accesses are always "src + thread offset", will probably massively simplify logic and maybe speed up memory throughput too
+* might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard)
 
 # Agent changes
 
@@ -273,4 +279,46 @@
   - P18 (vector_reduction_unit.vhd): Added `constant PAD_STAGES : integer :=
     FPU_MAX_LATENCY - LAT_REDUCT;` and updated res_pipe comment to reference it,
     making the two-part latency budget (IP core + padding) self-documenting.
+
+
+# DONE: Add S2 Register Stage and Clean Up WB Controller Timing
+
+## What was done
+
+### `src/execution_unit.vhd`
+- Added S2 pipeline stage: `s2_swiz_a`, `s2_swiz_b`, `s2_rs3`, `s2_valid`, `s2_ctrl`,
+  `s2_inst_type`, `s2_red_mode`, `s2_red_mask`, `s2_thread_id`, `s2_warp_offset`, `s2_rd_addr`
+- Added `s1_warp_offset` and `s1_rd_addr` to the existing S1 register stage
+- Swizzle network still runs combinationally in S1; its outputs are registered into S2
+- Functional unit enables (`fpu_en`, `alu_en`, `red_en`) now derive from `s2_valid`/`s2_inst_type`
+- All functional unit port maps updated to use S2 signals
+- Writeback controller now driven from S2 (`s2_rd_addr`, `s2_ctrl.*`, `s2_valid`)
+- Flush shift register size unchanged (FPU_MAX_LATENCY bits); coverage is correct
+  because the VRF write commit time is N+2+FPU_MAX_LATENCY in both old and new designs
+
+### `src/writeback_controller.vhd`
+- Reduced depth from `FPU_MAX_LATENCY+1` to `FPU_MAX_LATENCY` (removed the off-by-one)
+- Array bounds changed from `(0 to FPU_MAX_LATENCY)` to `(0 to FPU_MAX_LATENCY-1)`
+- Loop and output taps updated accordingly
+
+## Final pipeline (from valid_in at cycle N)
+- Cycle N   : valid_in='1'; VRF addresses driven; S1 captures all control inputs
+- Cycle N+1 : VRF data stable; s1_valid='1'; swizzle runs combinationally → swiz_a/b_out
+              S2 registers capture: s2_swiz_a/b, s2_ctrl, s2_rd_addr, etc.
+- Cycle N+2 : s2_valid='1'; fpu_en/alu_en/red_en fire; functional units start;
+              WB controller loads pipe(0) from S2 signals
+- Cycle N+2+FPU_MAX_LATENCY: FPU result valid; WB controller pipe(FPU_MAX_LATENCY-1)
+              drives wb_* outputs; VRF write commits at the following rising edge
+
+## Why this is clean
+- S2 is the single start-of-execution reference point for both functional units and WB
+- WB depth = FPU_MAX_LATENCY exactly (direct 1:1 with FPU pipeline depth, no +1)
+- No cross-module timing dependencies; execution_unit is self-contained
+- SRAM→swizzle→FPU critical path broken by S2 register
+
+## Date: 2026-04-11
+
+### Fixed vector_reduction_unit testbench
+- Changed the polling loop in `tb_vector_reduction_unit.vhd` from `1 to FPU_MAX_LATENCY` to `1 to FPU_MAX_LATENCY - 1` to accurately reflect the timing when `valid_out` is asserted.
+- Verified that the `vector_reduction_unit` testbench now passes successfully without any assertion errors.
 
