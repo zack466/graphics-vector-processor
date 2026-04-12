@@ -433,7 +433,11 @@ begin
     -- Provide valid memory data to memory unit during execution of OP_STORE.
     -- OP_STORE doesn't write back to VRF via the writeback_controller, so it
     -- is routed directly from the S1 stage to the memory unit.
-    mem_store_valid <= '1' when (s1_valid = '1' and s1_ctrl.opcode = OP_STORE) else '0';
+    -- Snoop is active for both OP_STORE (MEM type) and OP_RETURN (SYS type, combined
+    -- store+halt instruction).  Both read a source register and pack it into the pixel
+    -- buffer; the FSM treats the resulting pixel_snoop data identically in either case.
+    mem_store_valid <= '1' when (s1_valid = '1' and
+        (s1_ctrl.opcode = OP_STORE or s1_ctrl.opcode = OP_RETURN)) else '0';
     mem_store_data <= vrf_rs1_data;
     mem_store_thread_id <= s1_thread_id;
 

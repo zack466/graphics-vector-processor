@@ -36,7 +36,5 @@ FSUB v14.z, v13, v13    # v14.Z = 255.0f - 255.0f = 0.0f  (Blue = 0)
 # v14.W stays 255.0f from LDI above (Alpha = 255)
 
 F2I v15.xyzw, v14       # convert floats to integers: {255, 0, G_int, R_int}
-FLUSH                    # drain pipeline before MCU reads VRF
-STORE v15, 0x0000       # store packed RGBA pixels for all 32 threads
-FLUSH
-RETURN
+FLUSH                    # drain pipeline before pixel snoop reads VRF
+RETURN v15               # write packed RGBA for all 32 threads and halt warp

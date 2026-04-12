@@ -8,44 +8,41 @@
 -- TEST PROGRAM (tools/test10_call_stack.s assembled to instruction words):
 --
 --   PC  0: 0x00000214  LDI_LO v1.xyzw, 0x0000  -- clear v1
---   PC  1: 0xD8000801  BRA_L leaf               -- call leaf; link_reg = 2
+--   PC  1: 0xD8000601  BRA_L leaf               -- call leaf (PC 6); link_reg = 2
 --   PC  2: 0x4BC84000  MOV v2.xyzw, v1          -- v2 = v1 = 0x42 (tests MOV)
---   PC  3: 0xD8000A01  BRA_L outer              -- call outer; link_reg = 4
+--   PC  3: 0xD8000801  BRA_L outer              -- call outer (PC 8); link_reg = 4
 --   PC  4: 0xF8000006  FLUSH
---   PC  5: 0x84000025  STORE v2, 0x0000         -- write v2 to framebuffer
---   PC  6: 0xF8000006  FLUSH
---   PC  7: 0xFC000006  RETURN
---   PC  8: 0x00010A14  LDI_LO v1.xyzw, 0x0042  -- leaf: v1 = 66 (0x42)
---   PC  9: 0xDC000001  BRA_X                    -- return to link_reg
---   PC 10: 0xE0000001  PUSH_L                   -- outer: save link
---   PC 11: 0xD8000801  BRA_L leaf               -- call leaf; link_reg = 12
---   PC 12: 0xE4000001  POP_L                    -- restore link
---   PC 13: 0xDC000001  BRA_X                    -- return to caller
+--   PC  5: 0xFC000026  RETURN v2                -- store v2 + halt warp
+--   PC  6: 0x00010A14  LDI_LO v1.xyzw, 0x0042  -- leaf: v1 = 66 (0x42)
+--   PC  7: 0xDC000001  BRA_X                    -- return to link_reg
+--   PC  8: 0xE0000001  PUSH_L                   -- outer: save link
+--   PC  9: 0xD8000601  BRA_L leaf               -- call leaf (PC 6); link_reg = 10
+--   PC 10: 0xE4000001  POP_L                    -- restore link
+--   PC 11: 0xDC000001  BRA_X                    -- return to caller
 --
 -- EXECUTION TRACE:
 --   PC0 : v1 = 0
---   PC1 : BRA_L → link=2, PC=8
---   PC8 : v1.xyzw = 0x42
---   PC9 : BRA_X  → PC=2
+--   PC1 : BRA_L → link=2, PC=6
+--   PC6 : v1.xyzw = 0x42
+--   PC7 : BRA_X  → PC=2
 --   PC2 : v2.xyzw = v1 = 0x42   (MOV tested)
---   PC3 : BRA_L  → link=4, PC=10
---   PC10: PUSH_L → call_stack[0]=4, csp=1, PC=11
---   PC11: BRA_L  → link=12, PC=8
---   PC8 : v1.xyzw = 0x42 (unchanged, already set)
---   PC9 : BRA_X  → PC=12
---   PC12: POP_L  → link=4, csp=0, PC=13
---   PC13: BRA_X  → PC=4
+--   PC3 : BRA_L  → link=4, PC=8
+--   PC8 : PUSH_L → call_stack[0]=4, csp=1, PC=9
+--   PC9 : BRA_L  → link=10, PC=6
+--   PC6 : v1.xyzw = 0x42 (unchanged, already set)
+--   PC7 : BRA_X  → PC=10
+--   PC10: POP_L  → link=4, csp=0, PC=11
+--   PC11: BRA_X  → PC=4
 --   PC4 : FLUSH  (drain FPU pipeline)
---   PC5 : STORE v2 → pixel_buf  (v2={0x42,0x42,0x42,0x42} for all 32 threads)
---   PC6 : FLUSH
---   PC7 : RETURN → warp_halted
+--   PC5 : RETURN v2 → pixel snoop fills (v2={0x42,0x42,0x42,0x42}),
+--         pixel_buf_valid, → MEM_WAIT → warp_halted
 --
 -- ASSERTIONS:
 --   (A) pixel_buf_valid fires exactly once.
---   (B) pixel_buf_addr = 0x00000000 (base_addr=0 << 16 + warp_offset=0 * 4).
+--   (B) pixel_buf_addr = 0x00000000 (fb_base_addr=0 << 16 + warp_offset=0 * 4).
 --   (C) All 32 thread pixels = 0x42424242
 --       (each RGBA byte = bottom 8 bits of the 0x42 integer stored in v2).
---   (D) warp_halted asserts cleanly after OP_RETURN.
+--   (D) warp_halted asserts cleanly after RETURN v2 completes MEM_WAIT.
 --   (E) warp_break is never asserted (no OP_BREAK in this program).
 -- ============================================================================
 
@@ -78,10 +75,11 @@ architecture sim of tb_call_stack is
     signal imem_data : std_logic_vector(31 downto 0);
 
     -- Warp control
-    signal warp_start  : std_logic := '0';
-    signal warp_offset : std_logic_vector(31 downto 0) := (others => '0');
-    signal warp_halted : std_logic;
-    signal warp_break  : std_logic;
+    signal warp_start    : std_logic := '0';
+    signal warp_offset   : std_logic_vector(31 downto 0) := (others => '0');
+    signal fb_base_addr  : std_logic_vector(15 downto 0) := (others => '0'); -- base 0 → phys 0x00000000
+    signal warp_halted   : std_logic;
+    signal warp_break    : std_logic;
 
     -- Pixel buffer outputs
     signal pixel_buf_valid : std_logic;
@@ -137,6 +135,7 @@ begin
             imem_data       => imem_data,
             warp_start      => warp_start,
             warp_offset     => warp_offset,
+            fb_base_addr    => fb_base_addr,
             warp_halted     => warp_halted,
             warp_break      => warp_break,
             pixel_buf_valid => pixel_buf_valid,
@@ -151,17 +150,19 @@ begin
     -- ========================================================================
     process
         -- Instruction word constants (pre-assembled from test10_call_stack.s)
-        constant INST_LDI_CLEAR  : std_logic_vector(31 downto 0) := x"00000214"; -- LDI_LO v1.xyzw, 0x0000
-        constant INST_BRA_L_LEAF : std_logic_vector(31 downto 0) := x"D8000801"; -- BRA_L leaf (PC 8)
-        constant INST_MOV_V2_V1  : std_logic_vector(31 downto 0) := x"4BC84000"; -- MOV v2.xyzw, v1
-        constant INST_BRA_L_OUTER: std_logic_vector(31 downto 0) := x"D8000A01"; -- BRA_L outer (PC 10)
-        constant INST_FLUSH      : std_logic_vector(31 downto 0) := x"F8000006"; -- FLUSH
-        constant INST_STORE_V2   : std_logic_vector(31 downto 0) := x"84000025"; -- STORE v2, 0x0000
-        constant INST_RETURN     : std_logic_vector(31 downto 0) := x"FC000006"; -- RETURN
-        constant INST_LDI_42     : std_logic_vector(31 downto 0) := x"00010A14"; -- LDI_LO v1.xyzw, 0x0042
-        constant INST_BRA_X      : std_logic_vector(31 downto 0) := x"DC000001"; -- BRA_X
-        constant INST_PUSH_L     : std_logic_vector(31 downto 0) := x"E0000001"; -- PUSH_L
-        constant INST_POP_L      : std_logic_vector(31 downto 0) := x"E4000001"; -- POP_L
+        constant INST_LDI_CLEAR   : std_logic_vector(31 downto 0) := x"00000214"; -- LDI_LO v1.xyzw, 0x0000
+        -- BRA_L leaf targets PC 6: (54<<26)|(6<<8)|1 = 0xD8000601
+        constant INST_BRA_L_LEAF  : std_logic_vector(31 downto 0) := x"D8000601"; -- BRA_L leaf (PC 6)
+        constant INST_MOV_V2_V1   : std_logic_vector(31 downto 0) := x"4BC84000"; -- MOV v2.xyzw, v1
+        -- BRA_L outer targets PC 8: (54<<26)|(8<<8)|1 = 0xD8000801
+        constant INST_BRA_L_OUTER : std_logic_vector(31 downto 0) := x"D8000801"; -- BRA_L outer (PC 8)
+        constant INST_FLUSH       : std_logic_vector(31 downto 0) := x"F8000006"; -- FLUSH
+        -- RETURN v2: (63<<26)|(2<<4)|6 = 0xFC000026
+        constant INST_RETURN_V2   : std_logic_vector(31 downto 0) := x"FC000026"; -- RETURN v2
+        constant INST_LDI_42      : std_logic_vector(31 downto 0) := x"00010A14"; -- LDI_LO v1.xyzw, 0x0042
+        constant INST_BRA_X       : std_logic_vector(31 downto 0) := x"DC000001"; -- BRA_X
+        constant INST_PUSH_L      : std_logic_vector(31 downto 0) := x"E0000001"; -- PUSH_L
+        constant INST_POP_L       : std_logic_vector(31 downto 0) := x"E4000001"; -- POP_L
 
         -- Expected pixel value: v2 = {X=0x42, Y=0x42, Z=0x42, W=0x42}
         -- Packed: W[7:0] & Z[7:0] & Y[7:0] & X[7:0] = 0x42424242
@@ -177,29 +178,27 @@ begin
         wait for CLK_PERIOD;
 
         -- ----------------------------------------------------------------
-        -- 2. Program instruction memory (14 instructions)
+        -- 2. Program instruction memory (12 instructions)
         --
-        --   PC  0-7  : Main code
-        --   PC  8-9  : leaf function
-        --   PC 10-13 : outer function
+        --   PC  0-5  : Main code
+        --   PC  6-7  : leaf function
+        --   PC  8-11 : outer function
         -- ----------------------------------------------------------------
         write_imem(prog_we, prog_wr_addr, prog_wr_data,  0, INST_LDI_CLEAR,   clk);
         write_imem(prog_we, prog_wr_addr, prog_wr_data,  1, INST_BRA_L_LEAF,  clk);
         write_imem(prog_we, prog_wr_addr, prog_wr_data,  2, INST_MOV_V2_V1,   clk);
         write_imem(prog_we, prog_wr_addr, prog_wr_data,  3, INST_BRA_L_OUTER, clk);
         write_imem(prog_we, prog_wr_addr, prog_wr_data,  4, INST_FLUSH,        clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data,  5, INST_STORE_V2,    clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data,  6, INST_FLUSH,        clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data,  7, INST_RETURN,       clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data,  5, INST_RETURN_V2,   clk);
         -- leaf function
-        write_imem(prog_we, prog_wr_addr, prog_wr_data,  8, INST_LDI_42,      clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data,  9, INST_BRA_X,        clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data,  6, INST_LDI_42,      clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data,  7, INST_BRA_X,        clk);
         -- outer function
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 10, INST_PUSH_L,       clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 11, INST_BRA_L_LEAF,  clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 12, INST_POP_L,        clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 13, INST_BRA_X,        clk);
-        report "IMEM programmed (14 instructions)";
+        write_imem(prog_we, prog_wr_addr, prog_wr_data,  8, INST_PUSH_L,       clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data,  9, INST_BRA_L_LEAF,  clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data, 10, INST_POP_L,        clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data, 11, INST_BRA_X,        clk);
+        report "IMEM programmed (12 instructions)";
 
         -- ----------------------------------------------------------------
         -- 3. Start the warp
@@ -257,7 +256,7 @@ begin
         assert warp_break = '0'
             report "FAIL (E): warp_break should not be asserted" severity failure;
 
-        report ">> tb_call_stack: ALL TESTS PASSED (BRA_L, BRA_X, PUSH_L, POP_L, MOV verified)";
+        report ">> tb_call_stack: ALL TESTS PASSED (BRA_L, BRA_X, PUSH_L, POP_L, MOV, RETURN reg verified)";
         std.env.stop;
     end process;
 

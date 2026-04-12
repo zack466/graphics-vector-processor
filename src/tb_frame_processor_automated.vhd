@@ -38,7 +38,8 @@ entity tb_frame_processor_automated is
         FRAME_WIDTH      : integer := 32;   -- pixels per row
         FRAME_HEIGHT     : integer := 32;   -- rows per frame
         DUMP_START_ADDR  : integer := 0;    -- framebuffer base in DDR3
-        DUMP_END_ADDR    : integer := 4096  -- 32*32*4 bytes
+        DUMP_END_ADDR    : integer := 4096; -- 32*32*4 bytes
+        FB_BASE_ADDR     : integer := 0     -- framebuffer base (16-bit upper word of DDR3 byte address)
     );
 end entity tb_frame_processor_automated;
 
@@ -133,7 +134,8 @@ begin
             frame_start       => frame_start,
             frame_width       => fp_width,
             frame_height      => fp_height,
-            frame_done        => frame_done
+            frame_done        => frame_done,
+            fb_base_addr      => std_logic_vector(to_unsigned(FB_BASE_ADDR, 16))
         );
 
     -- ========================================================================

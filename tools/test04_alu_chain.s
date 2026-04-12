@@ -22,6 +22,4 @@ IADD v3.xyzw, v0, v0    # v3 = 2*tid  [no FLUSH: 32-cycle sep > 29-cycle latency
 IADD v4.xyzw, v3, v3    # v4 = 4*tid  [no FLUSH: chained dep on v3]
 LDI_LO v4.w, 0x00FF      # Make alpha opaque
 FLUSH                    # drain pipeline before MCU reads VRF
-STORE v4, 0x0000        # store 4*tid to framebuffer
-FLUSH
-RETURN
+RETURN v4               # write packed pixels from v4 to framebuffer and halt

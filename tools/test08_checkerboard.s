@@ -41,6 +41,9 @@ STORE v11, 0x0000
 SYNC
 
 # ---- Reconvergence ----
+# Both divergent paths already STOREd their pixels with exec_mask byte enables.
+# BREAK halts the warp without a second pixel write (which would overwrite the
+# divergent STOREs with the wrong value from the last-executed path's register).
 reconv:
 FLUSH
-RETURN
+BREAK

@@ -15,7 +15,6 @@
   should probably hardcode addresses of two backbuffers for double buffering.
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard).
   Or just one warp that utilizes latency hiding should be ok.
-* implement branch with link/exchange (BRA_L, BRA_X) instructions. Also PUSH_L and POP_L which push/pop the link register for arbitrary call depths.
 
 # Agent changes
 
@@ -475,3 +474,54 @@ Added a link register and a small dedicated call stack to the IFU, supporting wa
 - `tools/test10_call_stack.s` — Assembly program that calls a leaf function (tests BRA_L/BRA_X), copies the result with MOV, calls a non-leaf function that internally uses PUSH_L/POP_L for nesting, then stores to memory.
 - `src/tb_call_stack.vhd` — VHDL testbench that programs `warp_unit` with the above program, verifies `pixel_buf_valid` fires, checks all 32 thread pixels = `0x42424242`, and confirms clean halt.
 - All 18 testbenches pass after the change.
+
+  ---
+  RETURN reg: combined pixel-write and warp-halt instruction
+
+  Consolidated STORE + bare RETURN into a single `RETURN reg` instruction that
+  reads the source register, writes the framebuffer via an 8-beat Avalon burst,
+  and halts the warp — all in one opcode. This eliminates the need for a separate
+  STORE before the end of every shader and simplifies the standard shader epilogue
+  from `FLUSH / STORE vN, 0x0000 / FLUSH / RETURN` to just `FLUSH / RETURN vN`.
+
+  Encoding: `(63 << 26) | (reg_idx << 4) | TYPE_SYS`.
+  Examples: `RETURN v2` = 0xFC000026, `RETURN v15` = 0xFC0000F6.
+
+  The fb_base_addr (16-bit upper word of the DDR3 byte address) now flows through:
+    frame_processor → warp_scheduler (pass-through) → warp_unit.
+  This enables future double-buffering by toggling fb_base_addr between frames.
+
+  FSM changes in warp_unit.vhd:
+  - DECODE: OP_RETURN issues through barrel scheduler (iss_valid_in='1') → EXEC_WAIT.
+  - EXEC_WAIT: added OP_RETURN alongside INST_TYPE_MEM for the pixel_buf_valid path.
+  - MEM_WAIT: OP_RETURN → HALTED (not ADVANCE_PC like STORE).
+
+  Instruction address update: test10_call_stack.s reduced from 14 to 12 instructions
+  (leaf moves from PC 8→6, outer from PC 10→8) since STORE+FLUSH+RETURN→RETURN reg
+  saves 3 instructions. BRA_L targets updated accordingly.
+
+  Root-cause of stale program.hex: program.hex retained the old 14-instruction
+  encoding (STORE+RETURN style), causing the automated testbench to fire two
+  pixel_buf_valid pulses per warp. The second fire (from old bare RETURN now
+  decoded as RETURN v0) overwrote correct pixels with zeros. Fixed by regenerating
+  program.hex from the updated test10_call_stack.s.
+
+  Files changed:
+  - src/execution_unit.vhd — added OP_RETURN to mem_store_valid condition.
+  - src/warp_unit.vhd — new fb_base_addr port; mem_phys_base mux; FSM DECODE/
+    EXEC_WAIT/MEM_WAIT updates for OP_RETURN; DECODE mux for register extraction.
+  - src/warp_scheduler.vhd — added fb_base_addr/fb_base_out pass-through ports.
+  - src/frame_processor.vhd — added fb_base_addr port, wired through scheduler.
+  - src/tb_warp_unit.vhd — updated to use fb_base_addr port and RETURN v1.
+  - src/tb_call_stack.vhd — updated BRA_L targets (PC 6/8) and RETURN v2.
+  - src/tb_frame_processor.vhd — updated program to FLUSH + RETURN v1.
+  - src/tb_frame_processor_automated.vhd — added FB_BASE_ADDR generic.
+  - src/tb_warp_scheduler.vhd — added fb_base_addr/fb_base_out connections.
+  - src/Makefile — added test-gradient target.
+  - src/program.hex — regenerated from test10_call_stack.s (12 instructions).
+  - tools/assembler.py — RETURN now accepts an optional register argument.
+  - tools/test09_gradient.s — updated epilogue to FLUSH + RETURN v15.
+  - tools/test10_call_stack.s — updated BRA_L targets and epilogue.
+  - programming_manual.md — documented RETURN reg, updated FLUSH rules and examples.
+
+  All 19 testbenches (including make test-gradient) pass.

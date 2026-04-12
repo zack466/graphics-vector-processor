@@ -42,9 +42,10 @@ architecture sim of tb_warp_scheduler is
     signal frame_height : std_logic_vector(15 downto 0) := (others => '0');
     signal frame_done   : std_logic;
 
-    signal warp_start  : std_logic;
-    signal warp_offset : std_logic_vector(ADDR_WIDTH-1 downto 0);
-    signal warp_halted : std_logic := '1'; -- starts halted (no warp running)
+    signal warp_start   : std_logic;
+    signal warp_offset  : std_logic_vector(ADDR_WIDTH-1 downto 0);
+    signal warp_halted  : std_logic := '1'; -- starts halted (no warp running)
+    signal fb_base_out  : std_logic_vector(15 downto 0); -- fb_base pass-through (ignored)
 
 begin
     clk <= not clk after CLK_PERIOD / 2;
@@ -62,7 +63,9 @@ begin
             frame_done   => frame_done,
             warp_start   => warp_start,
             warp_offset  => warp_offset,
-            warp_halted  => warp_halted
+            warp_halted  => warp_halted,
+            fb_base_addr => (others => '0'),
+            fb_base_out  => fb_base_out
         );
 
     -- ========================================================================

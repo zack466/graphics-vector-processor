@@ -8,35 +8,29 @@
 --   asserts warp_halted after OP_RETURN.
 --
 -- TEST PROGRAM (loaded into instruction_memory):
---   Addr 0: OP_FLUSH  (drain pipeline)         0xF8000006
---   Addr 1: OP_STORE  reg1, base_imm=1         0x00001015
---   Addr 2: OP_RETURN (halt warp)              0xFC000006
+--   Addr 0: OP_FLUSH              (drain pipeline)        0xF8000006
+--   Addr 1: RETURN v1             (store reg1 + halt)     0xFC000016
 --
 -- INSTRUCTION ENCODING:
 --   [3:0]   = inst_type
---   [7:4]   = dest_src_reg_idx (MEM only)
---   [11:8]  = reserved (MEM)
---   [25:12] = base_addr 14-bit immediate (MEM); zero-extended to 16 bits
---             as "00" & instruction(25:12) in the decoder.
+--   [7:4]   = source register index (RETURN only)
 --   [31:26] = opcode (SYS instructions)
 --
 --   INST_TYPE_SYS  = "0110" = 0x6
---   INST_TYPE_MEM  = "0101" = 0x5
 --   OP_FLUSH       = "111110" in [31:26] → 0xF8000006
---   OP_RETURN      = "111111" in [31:26] → 0xFC000006
---   OP_STORE (MEM): type=0x5, reg=1 in [7:4], base_imm=1 in [25:12] (bit 12 set)
---     → bit12=1, [7:4]=1, [3:0]=5 → 0x00001015
---     decoder: base_addr = "00" & 0x0001 = 0x0001
---     phys_addr = 0x0001 << 16 + warp_offset*4 = 0x00010000 (for offset=0)
+--   RETURN v1 (SYS): opcode=0x3F, reg=1 in [7:4], type=0x6
+--     → (63<<26) | (1<<4) | 6 = 0xFC000016
+--     phys_addr = fb_base_addr << 16 + warp_offset*4
+--     With fb_base_addr=0x0001: phys = 0x00010000 (for offset=0)
 --
 -- SEQUENCE:
 --   1. Reset, then program IMEM.
---   2. Pulse warp_start with warp_offset=0.
+--   2. Pulse warp_start with warp_offset=0; fb_base_addr=0x0001.
 --   3. Warp runs: FETCH×2 → DECODE(OP_FLUSH) → EXEC_WAIT(28+32 cycles) →
---      ADVANCE_PC → FETCH×2 → DECODE(OP_STORE) → EXEC_WAIT(32 cycles) →
+--      ADVANCE_PC → FETCH×2 → DECODE(RETURN v1) → EXEC_WAIT(32 cycles) →
 --      pixel_buf_valid pulse → MEM_WAIT.
 --   4. TB asserts mem_stall='0' to release MEM_WAIT.
---   5. ADVANCE_PC → FETCH×2 → DECODE(OP_RETURN) → warp_halted='1'.
+--   5. MEM_WAIT → HALTED (RETURN goes directly to HALTED, no ADVANCE_PC).
 -- ============================================================================
 
 library IEEE;
@@ -70,6 +64,7 @@ architecture sim of tb_warp_unit is
     -- Warp control
     signal warp_start   : std_logic := '0';
     signal warp_offset  : std_logic_vector(31 downto 0) := (others => '0');
+    signal fb_base_addr : std_logic_vector(15 downto 0) := x"0001"; -- base 0x0001 → phys 0x00010000
     signal warp_halted  : std_logic;
     signal warp_break   : std_logic;
 
@@ -125,6 +120,7 @@ begin
             imem_data       => imem_data,
             warp_start      => warp_start,
             warp_offset     => warp_offset,
+            fb_base_addr    => fb_base_addr,
             warp_halted     => warp_halted,
             warp_break      => warp_break,
             pixel_buf_valid => pixel_buf_valid,
@@ -136,9 +132,9 @@ begin
 
     process
         -- Instruction encodings
-        constant INST_FLUSH  : std_logic_vector(31 downto 0) := x"F8000006"; -- OP_FLUSH | SYS
-        constant INST_STORE  : std_logic_vector(31 downto 0) := x"00001015"; -- base_imm=1, reg=1, MEM
-        constant INST_RETURN : std_logic_vector(31 downto 0) := x"FC000006"; -- OP_RETURN | SYS
+        constant INST_FLUSH     : std_logic_vector(31 downto 0) := x"F8000006"; -- OP_FLUSH | SYS
+        -- RETURN v1: (63<<26)|(1<<4)|6 = 0xFC000016; address = fb_base_addr<<16 + warp_offset*4
+        constant INST_RETURN_V1 : std_logic_vector(31 downto 0) := x"FC000016"; -- RETURN v1 | SYS
     begin
         -- ----------------------------------------------------------------
         -- 1. Reset
@@ -148,11 +144,10 @@ begin
         wait for CLK_PERIOD;
 
         -- ----------------------------------------------------------------
-        -- 2. Program instruction memory
+        -- 2. Program instruction memory (2 instructions)
         -- ----------------------------------------------------------------
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 0, INST_FLUSH,  clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 1, INST_STORE,  clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 2, INST_RETURN, clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data, 0, INST_FLUSH,     clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data, 1, INST_RETURN_V1, clk);
         report "IMEM programmed";
 
         -- ----------------------------------------------------------------

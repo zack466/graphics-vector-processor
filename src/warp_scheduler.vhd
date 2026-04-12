@@ -73,7 +73,12 @@ entity warp_scheduler is
         -- Warp 0 control (NUM_WARPS=1 for now; extend to arrays for Change 3)
         warp_start   : out std_logic;
         warp_offset  : out std_logic_vector(ADDR_WIDTH-1 downto 0);
-        warp_halted  : in  std_logic    -- '1' while warp FSM is in HALTED state
+        warp_halted  : in  std_logic;   -- '1' while warp FSM is in HALTED state
+
+        -- Framebuffer addressing (passed through to warp_unit unchanged; future
+        -- double-buffering logic will toggle this between two base addresses here)
+        fb_base_addr : in  std_logic_vector(15 downto 0);  -- input from frame_processor
+        fb_base_out  : out std_logic_vector(15 downto 0)   -- forwarded to warp_unit
     );
 end entity warp_scheduler;
 
@@ -89,6 +94,10 @@ architecture rtl of warp_scheduler is
     signal next_offset  : unsigned(31 downto 0) := (others => '0');
 
 begin
+
+    -- Pass fb_base_addr through unchanged.  In a future double-buffering
+    -- extension the scheduler would toggle between two addresses here.
+    fb_base_out <= fb_base_addr;
 
     process(clk)
     begin

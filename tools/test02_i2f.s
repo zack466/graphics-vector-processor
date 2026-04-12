@@ -10,6 +10,4 @@ I2F v3.xyzw, v0          # v3 = float(thread_id)
 F2I v4.xyzw, v3          # v4 = int(float(thread_id))
 LDI_LO v4.w, 0x00FF      # Make alpha opaque
 FLUSH
-STORE v4, 0x0000         # store int value
-FLUSH
-RETURN
+RETURN v4                # write packed pixels from v4 to framebuffer and halt

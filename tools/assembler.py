@@ -95,6 +95,10 @@ def assemble_line(line, labels, pc):
     # SYS
     if mnemonic in SYS_OPCODES:
         op = SYS_OPCODES[mnemonic]
+        if mnemonic == 'RETURN' and args:
+            # RETURN reg: encodes register index in bits[7:4] (combined store+halt)
+            reg, _, _ = parse_reg(args[0])
+            return (op << 26) | (reg << 4) | TYPE_SYS
         return (op << 26) | TYPE_SYS
         
     # MEM

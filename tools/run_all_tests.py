@@ -80,11 +80,7 @@ def hex_to_float(hex_str):
 
 
 def generate_image(dump_file, output_png):
-    try:
-        from PIL import Image
-    except ImportError:
-        return  # silently skip if Pillow not installed
-
+    from PIL import Image
     import math
     pixels = []
     with open(dump_file, 'r') as f:

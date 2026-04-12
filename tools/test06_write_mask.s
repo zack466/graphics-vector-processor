@@ -22,6 +22,4 @@ FLUSH                    # settle v4 before modifying
 IADD v4.xy, v0, v0      # v4.xy = 2*tid, v4.zw = 0 (write mask: X and Y only)
 LDI_LO v4.w, 0x00FF      # Make alpha opaque
 FLUSH                    # drain pipeline before MCU reads VRF
-STORE v4, 0x0000        # store {W=255, Z=0, Y=2*tid, X=2*tid}
-FLUSH
-RETURN
+RETURN v4               # write packed pixels from v4 to framebuffer and halt

@@ -315,6 +315,7 @@ STORE v4, 0x0001       # mem[0x00010000...] = packed(v4)
 - The memory controller snoops this data, extracts the lower 8 bits of the W, Z, Y, and X components of each thread's vector, and packs them into a 32-bit integer (RGBA format: Alpha=W, Blue=Z, Green=Y, Red=X).
 - It then issues 8 back-to-back 128-bit Avalon burst writes to memory.
 - **FLUSH is required before STORE** to ensure all threads' vector register values are committed before the memory controller reads the VRF.
+- After a `STORE`, execution continues at the next PC (unlike `RETURN reg`, which also halts the warp).
 
 ---
 
@@ -408,12 +409,23 @@ Stall the warp until the entire pipeline has drained — all in-flight ALU, FPU,
 Required before:
 - Any `STORE` instruction (MCU reads VRF for all 32 threads after all STOREs are issued).
 - Any `BRA_DIV` instruction (branch reads PRF combinationally; all ICMP results must be settled).
-- Optionally before `RETURN` for correctness if stores are pending.
+- `RETURN reg` (pixel snoop reads VRF; all arithmetic results must be committed first).
 
 **Not required between dependent arithmetic instructions** — the barrel scheduler provides a natural 32-cycle separation between same-thread instructions, which exceeds the maximum write-back latency.
 
-#### `RETURN`
-End of shader execution for this warp.
+#### `RETURN reg`
+Combined pixel-write and end-of-warp instruction.  Reads the source register `reg` for all 32 threads, packs the pixel data, writes 32 pixels to the framebuffer via an 8-beat Avalon burst, and then halts the warp.
+
+```asm
+FLUSH           # ensure all register writes are committed
+RETURN v15      # write packed pixels from v15 and halt warp
+```
+
+- `reg` must be a vector register (`v0`–`v15`).
+- The destination address is `fb_base_addr << 16 + warp_offset * 4`, where `fb_base_addr` is supplied by the `frame_processor` host interface and `warp_offset` is set by the warp scheduler for each warp.
+- Pixel packing is identical to `STORE`: lower 8 bits of W, Z, Y, X per thread → Alpha, Blue, Green, Red.
+- **`FLUSH` is required immediately before `RETURN reg`** to ensure all thread register writes are committed before the pixel snoop reads the VRF.
+- Encoding: `(63 << 26) | (reg_idx << 4) | TYPE_SYS`. Examples: `RETURN v2` = `0xFC000026`, `RETURN v15` = `0xFC0000F6`.
 
 #### `BREAK`
 Software breakpoint (halts simulation for debugging).
@@ -449,16 +461,23 @@ FMUL v4.xyzw, v3, v3   # v3 is ready
 |---|---|
 | Before `STORE` | MCU reads VRF for all 32 threads after all STOREs are issued. Thread 31's write-back (~cycle 60) may not be complete when MCU reads at cycle ~38 without FLUSH. |
 | Before `BRA_DIV` | BRA_DIV reads the PRF combinationally at decode time. Thread 31's ICMP result (written at ~cycle 60) is not settled by decode (~cycle 38) without FLUSH. |
-| After the last `STORE` block before `RETURN` | Ensures all memory writes complete. |
+| Before `RETURN reg` | Pixel snoop reads VRF for all 32 threads. Same latency issue as STORE. |
 
 ### Pattern
 
 ```asm
 # ... arithmetic ...
-FLUSH                  # drain before store
-STORE v_result, 0x0000 # write warp to address 0x00000000
-FLUSH                  # drain after store (before RETURN)
-RETURN
+FLUSH                    # drain pipeline before pixel read
+RETURN v_result          # write packed pixels from v_result and halt warp
+```
+
+For shaders that use intermediate `STORE` to memory (not the final pixel write):
+
+```asm
+FLUSH                    # drain before intermediate store
+STORE v_tmp, 0x0001      # write to auxiliary buffer at 0x00010000
+FLUSH                    # drain after store, before RETURN
+RETURN v_result          # write framebuffer pixels and halt
 ```
 
 ---
@@ -493,7 +512,7 @@ if_label:
 # ---- reconvergence ----
 reconv:
     FLUSH
-    RETURN
+    RETURN v_result     # write final pixels and halt (all threads reconverged)
 ```
 
 ### Notes
@@ -568,12 +587,10 @@ THREAD_ID v0.xyzw            # global_tid
 #   W component = Alpha
 
 # ... your computation here ...
-# Use F2I to convert float results to integers before STORE.
+# Use F2I to convert float results to integers before RETURN.
 
 FLUSH
-STORE v_out, 0x0000
-FLUSH
-RETURN
+RETURN v_out        # write packed pixels to framebuffer and halt warp
 ```
 
 ### Assembling and Running

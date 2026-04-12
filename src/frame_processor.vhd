@@ -97,7 +97,13 @@ entity frame_processor is
         frame_start       : in  std_logic;
         frame_width       : in  std_logic_vector(15 downto 0);
         frame_height      : in  std_logic_vector(15 downto 0);
-        frame_done        : out std_logic
+        frame_done        : out std_logic;
+
+        -- Framebuffer base address: upper 16 bits of the DDR3 byte address used
+        -- by the RETURN instruction.  Passed through warp_scheduler → warp_unit.
+        -- Set to 0x0000 for a single framebuffer; alternate between 0x0000 and a
+        -- second page address to implement double buffering with vsync later.
+        fb_base_addr      : in  std_logic_vector(15 downto 0) := (others => '0')
     );
 end entity frame_processor;
 
@@ -114,6 +120,7 @@ architecture structural of frame_processor is
     -- Scheduler → Warp
     signal sched_warp_start  : std_logic;
     signal sched_warp_offset : std_logic_vector(ADDR_WIDTH-1 downto 0);
+    signal sched_fb_base     : std_logic_vector(15 downto 0); -- fb_base forwarded by scheduler
     signal warp_halted_sig   : std_logic;
 
     -- Warp → MCU
@@ -174,7 +181,9 @@ begin
             frame_done   => frame_done,
             warp_start   => sched_warp_start,
             warp_offset  => sched_warp_offset,
-            warp_halted  => warp_halted_sig
+            warp_halted  => warp_halted_sig,
+            fb_base_addr => fb_base_addr,
+            fb_base_out  => sched_fb_base
         );
 
     -- ========================================================================
@@ -195,6 +204,7 @@ begin
             imem_data       => imem_rd_data,
             warp_start      => sched_warp_start,
             warp_offset     => sched_warp_offset,
+            fb_base_addr    => sched_fb_base,
             warp_halted     => warp_halted_sig,
             warp_break      => open,
             pixel_buf_valid => warp_pixel_valid,

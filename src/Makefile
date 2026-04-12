@@ -96,4 +96,14 @@ clean:
 	ghdl --clean --workdir=$(WORKDIR) --std=08
 	rm -rf $(WORKDIR)
 
-.PHONY: test test-all test-% clean build view
+# Run gradient shader through the automated testbench and dump the framebuffer.
+# Assembles test09_gradient.s, renders a 32x32 frame, writes gradient_dump.hex.
+test-gradient: $(WORKDIR)tb_frame_processor_automated
+	python3 ../tools/assembler.py ../tools/test09_gradient.s gradient_program.hex
+	$(WORKDIR)tb_frame_processor_automated --ieee-asserts=disable --stop-time=10ms \
+		-gPROGRAM_FILE=gradient_program.hex \
+		-gMEMORY_DUMP_FILE=gradient_dump.hex \
+		-gFRAME_WIDTH=32 -gFRAME_HEIGHT=32 \
+		-gDUMP_START_ADDR=0 -gDUMP_END_ADDR=4096
+
+.PHONY: test test-all test-% test-gradient clean build view

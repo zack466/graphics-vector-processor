@@ -13,6 +13,4 @@ FLUSH
 F2I v4.xyzw, v3          # v4 = 255
 FLUSH
 
-STORE v4, 0x0000         # store 255 to all pixels
-FLUSH
-RETURN
+RETURN v4                # write packed pixels from v4 to framebuffer and halt

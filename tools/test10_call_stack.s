@@ -9,8 +9,9 @@
 #   3. Call outer (non-leaf function that itself calls leaf):
 #      outer: PUSH_L saves the caller's link, BRA_L calls leaf again,
 #             POP_L restores the link, BRA_X returns.
-#   4. FLUSH + STORE v2 + FLUSH + RETURN
-#      Stores 32 copies of v2 = {0x42,0x42,0x42,0x42} to the framebuffer.
+#   4. FLUSH + RETURN v2
+#      Stores 32 copies of v2 = {0x42,0x42,0x42,0x42} to the framebuffer
+#      and halts the warp (combined store+halt instruction).
 #
 # Expected pixel output:
 #   Each of the 32 threads stores v2, whose four 8-bit lanes are all 0x42,
@@ -22,17 +23,15 @@ BRA_L leaf                  # call leaf; link_reg = PC+1 (= next instruction)
 MOV v2.xyzw, v1             # v2 = v1 = 0x42 in all components (tests MOV)
 BRA_L outer                 # call outer (non-leaf); link_reg = PC+1
 FLUSH
-STORE v2, 0x0000            # write 32 threads' v2 to framebuffer base 0x0000
-FLUSH
-RETURN
+RETURN v2                   # write 32 threads' v2 to framebuffer and halt warp
 
-# --- leaf (PC 8) ---
+# --- leaf (PC 6) ---
 # Leaf function: sets v1 = 0x42 in all four vector components.
 leaf:
 LDI_LO v1.xyzw, 0x0042     # v1 = 66 (0x42) -- same value in all 4 components
 BRA_X                       # return to caller via link register
 
-# --- outer (PC 10) ---
+# --- outer (PC 8) ---
 # Non-leaf function: saves its own return address, calls leaf, then returns.
 outer:
 PUSH_L                      # push link_reg (outer's return addr) onto call stack

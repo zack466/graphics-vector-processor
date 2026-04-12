@@ -8,6 +8,4 @@
 THREAD_ID v0.xyzw       # v0.xyzw = absolute thread index
 LDI_LO v0.w, 0x00FF     # Make alpha opaque
 FLUSH
-STORE v0, 0x0000        # store block of v0 at 0x0000
-FLUSH
-RETURN
+RETURN v0               # write packed pixels from v0 to framebuffer and halt

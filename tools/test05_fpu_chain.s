@@ -23,6 +23,4 @@ FMUL v3.xyzw, v1, v1    # v3 = tid^2        [FPU, chained dep on v1, no FLUSH]
 F2I v4.xyzw, v3         # v4 = int(tid^2)   [FPU, chained dep on v3, no FLUSH]
 LDI_LO v4.w, 0x00FF      # Make alpha opaque
 FLUSH                    # drain pipeline before MCU reads VRF
-STORE v4, 0x0000        # store int(tid^2)
-FLUSH
-RETURN
+RETURN v4               # write packed pixels from v4 to framebuffer and halt

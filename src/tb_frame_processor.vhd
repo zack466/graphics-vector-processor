@@ -10,16 +10,16 @@
 --
 -- TEST PROGRAM:
 --   Addr 0: OP_FLUSH  — drain any in-flight pipeline ops
---   Addr 1: OP_STORE  — write warp pixel buffer to DDR3 (base_imm=1 → 0x00010000)
---   Addr 2: OP_RETURN — halt warp
+--   Addr 1: RETURN v1 — write warp pixel buffer to DDR3 and halt warp
+--             (address = fb_base_addr << 16 + warp_offset * 4)
 --
 -- FRAME PARAMETERS:
 --   Test 1: 4×8  = 32  pixels → 1 warp  (offset 0)
 --   Test 2: 8×8  = 64  pixels → 2 warps (offsets 0, 32)
 --
--- ADDRESS MAPPING (from warp_unit / processor constants):
---   phys_addr = base_addr_16 << 16 + warp_offset * 4
---   base_imm=1 → base_addr_16=0x0001 → base = 0x00010000
+-- ADDRESS MAPPING:
+--   phys_addr = fb_base_addr << 16 + warp_offset * 4
+--   fb_base_addr=0x0001 → base = 0x00010000
 --   warp 0: 0x00010000, warp 1: 0x00010080
 -- ============================================================================
 
@@ -65,6 +65,7 @@ architecture sim of tb_frame_processor is
     signal frame_width  : std_logic_vector(15 downto 0) := (others => '0');
     signal frame_height : std_logic_vector(15 downto 0) := (others => '0');
     signal frame_done   : std_logic;
+    signal fb_base_addr : std_logic_vector(15 downto 0) := x"0001"; -- base 0x0001 → phys 0x00010000
 
     -- Observation: count Avalon burst write transactions
     signal write_beats_seen : integer := 0;
@@ -118,7 +119,8 @@ begin
             frame_start       => frame_start,
             frame_width       => frame_width,
             frame_height      => frame_height,
-            frame_done        => frame_done
+            frame_done        => frame_done,
+            fb_base_addr      => fb_base_addr
         );
 
     -- ========================================================================
@@ -164,12 +166,11 @@ begin
     process
         -- Instruction encodings
         -- FLUSH: opcode=111110 in [31:26], type=SYS (0110) in [3:0]
-        constant INST_FLUSH  : std_logic_vector(31 downto 0) := x"F8000006";
-        -- STORE: base_imm=1 in [25:12] (bit 12 set), reg=1 in [7:4], type=MEM (0101) in [3:0]
-        --   base_addr = "00" & 0x0001 = 0x0001 → phys = 0x00010000 + warp_offset*4
-        constant INST_STORE  : std_logic_vector(31 downto 0) := x"00001015";
-        -- RETURN: opcode=111111 in [31:26], type=SYS (0110) in [3:0]
-        constant INST_RETURN : std_logic_vector(31 downto 0) := x"FC000006";
+        constant INST_FLUSH     : std_logic_vector(31 downto 0) := x"F8000006";
+        -- RETURN v1: opcode=111111, reg=1 in [7:4], type=SYS (0110) in [3:0]
+        --   phys_addr = fb_base_addr << 16 + warp_offset*4
+        --   (63<<26)|(1<<4)|6 = 0xFC000016
+        constant INST_RETURN_V1 : std_logic_vector(31 downto 0) := x"FC000016";
 
         variable prev_beats : integer;
     begin
@@ -181,11 +182,10 @@ begin
         wait for CLK_PERIOD;
 
         -- ----------------------------------------------------------------
-        -- 2. Program IMEM
+        -- 2. Program IMEM (2 instructions: FLUSH + RETURN v1)
         -- ----------------------------------------------------------------
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 0, INST_FLUSH,  clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 1, INST_STORE,  clk);
-        write_imem(prog_we, prog_wr_addr, prog_wr_data, 2, INST_RETURN, clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data, 0, INST_FLUSH,     clk);
+        write_imem(prog_we, prog_wr_addr, prog_wr_data, 1, INST_RETURN_V1, clk);
         report "IMEM programmed";
 
         -- ----------------------------------------------------------------
