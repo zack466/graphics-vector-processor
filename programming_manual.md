@@ -123,7 +123,7 @@ All ALU instructions operate on 32-bit integers. Each instruction runs in **all 
 #### `THREAD_ID  dest[.mask]`
 Load the global thread ID into all selected components of `dest`.
 - `global_tid = warp_offset + lane_index` (0–1023 across 32 warps of 32 threads)
-- The `warp_offset` register is set by the testbench before each warp launches.
+- The `warp_offset` is set automatically by `warp_scheduler` before each warp launches. Shaders do not need to read it directly.
 
 ```asm
 THREAD_ID v0.xyzw    # v0 = global thread ID in all 4 components
@@ -516,16 +516,15 @@ Each thread writes one 128-bit pixel to the framebuffer:
 | [95:64] | Z | Blue (B) |
 | [127:96] | W | Alpha (A) |
 
-Colors are **IEEE 754 single-precision floats** in the range [0.0, 1.0]. The `runner.py` image generator multiplies by 255 to produce 8-bit RGBA values.
+Colors are **raw 8-bit integers** in the range [0, 255], stored in the lower 8 bits of each 32-bit VRF component. `runner.py` reads these directly without any scaling. Use `F2I` to convert floating-point intermediate results to integers before `STORE`.
 
-Useful float constants:
+Useful integer constants:
 
-| Float value | Hex encoding | Assembly |
-|---|---|---|
-| 0.0f | `0x00000000` | `LDI_LO vN.xyzw, 0x0000` |
-| 1.0f | `0x3F800000` | `LDI_LO vN.xyzw, 0x0000` + `LDI_HI vN.xyzw, 0x3F80` |
-| 0.5f | `0x3F000000` | `LDI_LO vN.xyzw, 0x0000` + `LDI_HI vN.xyzw, 0x3F00` |
-| 1/32 = 0.03125f | `0x3D000000` | `LDI_LO vN.xyzw, 0x0000` + `LDI_HI vN.xyzw, 0x3D00` |
+| Value | Assembly |
+|---|---|
+| 0 (black) | `LDI_LO vN.xyzw, 0x0000` |
+| 255 (white/opaque) | `LDI_LO vN.xyzw, 0x00FF` |
+| 128 (mid-gray) | `LDI_LO vN.xyzw, 0x0080` |
 
 ### Pixel Address
 
@@ -556,16 +555,15 @@ ISHR      v_y.xyzw, v0, v_sh    # y = tid >> 5     (row 0..31)
 # my_shader.s — minimal shader template
 
 THREAD_ID v0.xyzw            # global_tid
-LDI_LO v_sh.xyzw, 0x0004
-ISHL v_addr.xyzw, v0, v_sh   # byte address = tid * 16
 
-# --- compute color into v_out (RGBA as floats) ---
+# --- compute color into v_out (RGBA as integers 0–255) ---
 #   X component = Red
 #   Y component = Green
 #   Z component = Blue
 #   W component = Alpha
 
 # ... your computation here ...
+# Use F2I to convert float results to integers before STORE.
 
 FLUSH
 STORE v_out, 0x0000
@@ -577,13 +575,15 @@ RETURN
 
 ```bash
 # Assemble one shader and generate an image
-python tools/runner.py tools/my_shader.s
+uv run python tools/runner.py tools/my_shader.s
 
 # Output:
 #   src/program.hex    — assembled machine code
 #   src/memory_dump.hex — raw framebuffer output
 #   tools/my_shader.png — rendered image (requires Pillow)
 ```
+
+> **Note:** Use `uv run python` (not bare `python`) to ensure the managed virtual environment is active and Pillow is available for PNG generation. If you use system Python, image generation will silently be skipped.
 
 ---
 
@@ -592,26 +592,26 @@ python tools/runner.py tools/my_shader.s
 ### Single Test
 
 ```bash
-python tools/runner.py tools/test01_thread_id.s
+uv run python tools/runner.py tools/test01_thread_id.s
 ```
 
 This will:
 1. Assemble the `.s` file to `src/program.hex`
 2. Run `make clean && make build` in `src/`
-3. Run the simulation (`tb_processor_automated`)
+3. Run the simulation (`tb_frame_processor_automated`)
 4. Save a PNG image alongside the `.s` file
 
 ### All Tests
 
 ```bash
 # Full run — rebuild VHDL from scratch, then run all tests and generate images
-python tools/run_all_tests.py
+uv run python tools/run_all_tests.py
 
 # Skip VHDL rebuild (faster when only .s files changed)
-python tools/run_all_tests.py --no-rebuild
+uv run python tools/run_all_tests.py --no-rebuild
 
 # Skip PNG generation
-python tools/run_all_tests.py --no-images
+uv run python tools/run_all_tests.py --no-images
 ```
 
 The script discovers all files matching `tools/test[0-9][0-9]_*.s` (sorted), runs them in order, and prints a pass/fail summary:
@@ -632,7 +632,7 @@ Exit code is 0 if all tests pass, 1 if any fail.
 
 ### Testbench Configuration
 
-The automated testbench (`src/tb_processor_automated.vhd`) runs **32 warps** sequentially, with `warp_offset` = 0, 32, 64, ..., 992. After simulation, the framebuffer contents are written to `src/memory_dump.hex` in the format:
+The automated testbench (`src/tb_frame_processor_automated.vhd`) drives a single `frame_start` pulse to `frame_processor`. The internal `warp_scheduler` then automatically dispatches **32 warps** sequentially, advancing `warp_offset` by 32 each time (0, 32, 64, ..., 992). The testbench waits for the `frame_done` pulse before dumping memory. After simulation, the framebuffer contents are written to `src/memory_dump.hex` in the format:
 
 ```
 W Z Y X     ← each line is one pixel (128-bit bus: W=[127:96], Z=[95:64], Y=[63:32], X=[31:0])
@@ -647,12 +647,20 @@ W Z Y X     ← each line is one pixel (128-bit bus: W=[127:96], Z=[95:64], Y=[6
 ```asm
 # Each thread stores its own ID as an integer in all components.
 THREAD_ID v0.xyzw       # v0.xyzw = absolute thread index
-LDI_LO v0.w, 0x00FF     # Make alpha opaque
+# NOTE: LDI_LO/LDI_HI only support a 1-bit full-mask flag.
+# A partial mask like "v0.w" sets full_mask=0, which writes NOTHING.
+# To set all components and then fix up one, use a separate register:
+LDI_LO v1.xyzw, 0x00FF  # v1 = 255 in all components (alpha = 255)
+# STORE reads only the lower 8 bits of each component.
+# v0.x = thread_id[7:0] = R, v0.y = G, v0.z = B, v1.w will be 255 but
+# we'd need to assemble the output from multiple registers — simplest is:
 FLUSH
-STORE v0, 0x0000        # store block of v0 at 0x0000
+STORE v0, 0x0000        # store thread_id in R, G, B, A (all = thread_id)
 FLUSH
 RETURN
 ```
+
+> **Gotcha:** `LDI_LO v0.w, 0x00FF` silently does nothing because per-component masking is not supported by `LDI_LO`/`LDI_HI`. Use `.xyzw` (or no mask suffix) and a separate register when you need to load a constant into one component only.
 
 ### Example 2: Float Gradient (R = x/32, G = y/32)
 

@@ -16,7 +16,8 @@
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard).
   Or just one warp that utilizes latency hiding should be ok.
 * implement branch with link/exchange (BRA_L, BRA_X) instructions. Also PUSH_L and POP_L which push/pop the link register for arbitrary call depths.
-* fix the issue where the output images have an extra column (32 x 33) instead of (32 x 32)
+* implement MOV instruction for floating point registers
+  * screw it just copy the alu lanes four times so it matches the fpu lanes. Will make the designs more uniform.
 
 # Agent changes
 
@@ -356,8 +357,55 @@ The initial `tb_frame_processor_automated.vhd` used signal names `frame_width`/`
 **Verification:** All 9 assembly tests pass (9/9) with `tb_frame_processor_automated`. PNG images are generated for all tests.
 
 **Known issues (not yet fixed):**
-- *Thread 31 snoop timing:* `pixel_snoop[31]` is updated at the same rising edge that the MCU latches `pixel_buf_data`. VHDL delta-cycle ordering causes the MCU to see the pre-update value, so thread 31's pixel is always wrong in generated images (appears as a copy of thread 30 in the checkerboard). Root cause: `pixel_buf_valid` is asserted one cycle too early, before the last snoop write commits. Fix: hold EXEC_WAIT one extra cycle after `iss_issue_valid` drops (while `exec_mem_store_valid` is still '1') before asserting `pixel_buf_valid`.
+- *Thread 31 snoop timing:* Fixed — see entry below.
 - *LDI partial write mask:* The IMM instruction format uses a single `full_mask` bit (bit [9]). A partial register mask (e.g., `.w`) sets `full_mask=0`, which decodes to `write_mask="0000"` — nothing is written. `test01_thread_id.s` uses `LDI_LO v0.w, 0x00FF` expecting to set only the W component; the instruction silently does nothing.
+
+---
+
+## Date: 2026-04-11
+
+### Fix: Thread 31 snoop timing bug (extra column in output images)
+
+All generated images had 33 apparent columns instead of 32. The rightmost column was a duplicate of the 32nd column (thread 30's pixel value). Root cause was a VHDL delta-cycle ordering hazard in `warp_unit.vhd`.
+
+**Root cause:**
+The pixel snoop buffer is written in a registered `process(clk)` — `pixel_snoop[thread_id] <= data` commits at the rising edge of the cycle when `exec_mem_store_valid='1'`. Thread 31 is the last to be issued; when `iss_issue_valid` drops to '0' (signaling all 32 threads have been issued), `exec_mem_store_valid` is still '1' in that same delta-cycle phase. The combinational EXEC_WAIT state saw `iss_issue_valid='0'` and immediately asserted `pixel_buf_valid`, but VHDL resolved the registered write to `pixel_snoop[31]` in the same delta cycle — the MCU latched `pixel_buf_data` before `pixel_snoop[31]` was updated, always reading the previous warp's thread-31 value.
+
+**Fix (`src/warp_unit.vhd`):**
+1. Added `exec_mem_store_valid` to the combinational Process B sensitivity list.
+2. Added a guard `if exec_mem_store_valid = '0'` before asserting `pixel_buf_valid` in the EXEC_WAIT MEM branch, so the FSM holds one extra cycle until the last snoop write has committed.
+
+```vhdl
+-- Before:
+if iss_issue_valid = '0' and (...) then
+    if ifu_inst_out(3 downto 0) = INST_TYPE_MEM then
+        pixel_buf_valid <= '1';
+        next_state      <= MEM_WAIT;
+
+-- After:
+if iss_issue_valid = '0' and (...) then
+    if ifu_inst_out(3 downto 0) = INST_TYPE_MEM then
+        if exec_mem_store_valid = '0' then
+            pixel_buf_valid <= '1';
+            next_state      <= MEM_WAIT;
+        end if;
+```
+
+**Verification:** Checkerboard dump row 0 beat 7 (threads 28–31) changed from `00000000 FFFFFFFF 00000000 FFFFFFFF` (thread 31 wrongly white) to `00000000 00000000 FFFFFFFF 00000000` (thread 31 correctly black, x+y=31 odd). All 9/9 tests pass with correct images.
+
+Also removed the TODO entry "fix the issue where the output images have an extra column" from the top of this file.
+
+---
+
+## Date: 2026-04-11
+
+### Fix: PNG images not generated — Pillow missing from uv project
+
+Running `python tools/run_all_tests.py` produced simulation output but no PNG images. The `generate_image` function silently catches `ImportError` from PIL and returns without generating anything. The project uses `uv` for Python dependency management, and Pillow had never been added to `pyproject.toml`.
+
+**Fix:** Added Pillow via `uv add pillow`. This installed Pillow 12.2.0 into the managed venv and added the dependency to `pyproject.toml` and `uv.lock`. PNG generation now works when the scripts are invoked via `uv run python`.
+
+**Important:** Always use `uv run python tools/run_all_tests.py` (not bare `python`) to ensure the managed venv is active and Pillow is available.
 
 ---
 
