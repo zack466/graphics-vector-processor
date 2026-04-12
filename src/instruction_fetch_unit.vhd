@@ -89,11 +89,13 @@
 --                      decide when to advance the decode stage.
 --
 -- GENERICS:
---   PC_WIDTH    - Width of the program counter and instruction memory address.
---                 Default 16 gives a 64K instruction address space.
---   WARP_SIZE   - Number of threads per warp. Default 32.
---   STACK_DEPTH - Maximum depth of the SIMT divergence stack (max nested if/else).
---                 Default 16.
+--   PC_WIDTH         - Width of the program counter and instruction memory address.
+--                      Default 16 gives a 64K instruction address space.
+--   WARP_SIZE        - Number of threads per warp. Default 32.
+--   STACK_DEPTH      - Maximum depth of the SIMT divergence stack (max nested if/else).
+--                      Default 16.
+--   CALL_STACK_DEPTH - Maximum depth of the function call stack (max nested calls).
+--                      Default 8. Each entry holds one PC-width return address.
 -- =============================================================================
 
 library IEEE;
@@ -105,9 +107,10 @@ use work.processor_constants_pkg.all;
 
 entity instruction_fetch_unit is
     generic (
-        PC_WIDTH    : integer := 16; -- 64K Instruction Address Space
-        WARP_SIZE   : integer := 32; -- 32 Threads per Warp
-        STACK_DEPTH : integer := 16  -- Max depth of nested if/else statements
+        PC_WIDTH         : integer := 16; -- 64K Instruction Address Space
+        WARP_SIZE        : integer := 32; -- 32 Threads per Warp
+        STACK_DEPTH      : integer := 16; -- Max depth of nested if/else statements
+        CALL_STACK_DEPTH : integer := 8   -- Max depth of nested function calls
     );
     port (
         clk                : in  std_logic;
@@ -195,6 +198,24 @@ architecture rtl of instruction_fetch_unit is
     -- -------------------------------------------------------------------------
     signal fetch_mask_reg  : std_logic_vector(WARP_SIZE-1 downto 0);
 
+    -- -------------------------------------------------------------------------
+    -- Link Register and Function Call Stack
+    --
+    -- link_reg holds the return address set by BRA_L (the PC of the instruction
+    -- immediately after BRA_L). BRA_X restores the PC from link_reg to return
+    -- from a leaf function.
+    --
+    -- For nested calls a small dedicated call_stack saves and restores link_reg:
+    --   PUSH_L: call_stack[csp] := link_reg; csp++; pc++
+    --   POP_L:  link_reg := call_stack[csp-1]; csp--; pc++
+    -- The SIMT divergence stack and the call stack are entirely separate;
+    -- call instructions are warp-wide and do not interact with thread masking.
+    -- -------------------------------------------------------------------------
+    signal link_reg   : unsigned(PC_WIDTH-1 downto 0) := (others => '0');
+    type call_stack_t is array (0 to CALL_STACK_DEPTH-1) of unsigned(PC_WIDTH-1 downto 0);
+    signal call_stack : call_stack_t := (others => (others => '0'));
+    signal csp        : integer range 0 to CALL_STACK_DEPTH := 0; -- call stack pointer
+
 begin
 
     -- Drive instruction memory address directly from PC (combinational).
@@ -235,6 +256,8 @@ begin
                 sp              <= 0;
                 saved_reconv_pc <= (others => '0');
                 fetch_mask_reg  <= (others => '1');
+                link_reg        <= (others => '0');
+                csp             <= 0;
 
             elsif stall = '0' then
                 -- ---------------------------------------------------------------
@@ -423,7 +446,51 @@ begin
                     pc <= target_u;
 
                 -- =======================================================
-                -- 7. Standard Sequential Fetch
+                -- 7. Branch with Link (BRA_L)
+                -- Stores PC+1 (the return address) into link_reg, then
+                -- jumps to target. Used for warp-wide function calls.
+                -- The active_mask is not modified: function calls are
+                -- always convergent (the whole warp enters and exits the
+                -- function together).
+                -- =======================================================
+                elsif pc_ctrl.branch_type = BR_BRA_L then
+                    link_reg <= pc + 1;
+                    pc       <= target_u;
+
+                -- =======================================================
+                -- 8. Branch to Link Register (BRA_X)
+                -- Substitutes the current PC with link_reg. This is the
+                -- canonical return instruction for leaf functions. For
+                -- non-leaf callers, POP_L must restore link_reg before
+                -- BRA_X is executed.
+                -- =======================================================
+                elsif pc_ctrl.branch_type = BR_BRA_X then
+                    pc <= link_reg;
+
+                -- =======================================================
+                -- 9. Push Link Register (PUSH_L)
+                -- Saves link_reg onto the call stack so the current warp
+                -- can make a nested call without losing the outer return
+                -- address. PC advances normally (PUSH_L has no branch).
+                -- =======================================================
+                elsif pc_ctrl.branch_type = BR_PUSH_L then
+                    call_stack(csp) <= link_reg;
+                    csp             <= csp + 1;
+                    pc              <= pc + 1;
+
+                -- =======================================================
+                -- 10. Pop Call Stack (POP_L)
+                -- Restores link_reg from the top of the call stack so
+                -- the caller's return address is recovered after a nested
+                -- call completes. PC advances normally.
+                -- =======================================================
+                elsif pc_ctrl.branch_type = BR_POP_L then
+                    link_reg <= call_stack(csp - 1);
+                    csp      <= csp - 1;
+                    pc       <= pc + 1;
+
+                -- =======================================================
+                -- 11. Standard Sequential Fetch
                 -- Default case: just advance PC by 1. The active_mask and
                 -- stack are unchanged.
                 -- =======================================================

@@ -210,6 +210,10 @@ package processor_constants_pkg is
     constant OP_BRA_DIV : std_logic_vector(5 downto 0) := "110011"; -- Divergent branch: push true-path mask, execute false path
     constant OP_SSY     : std_logic_vector(5 downto 0) := "110100"; -- Set Sync: push meetup PC onto divergence stack
     constant OP_SYNC    : std_logic_vector(5 downto 0) := "110101"; -- Synchronize: pop divergence stack, merge thread masks
+    constant OP_BRA_L   : std_logic_vector(5 downto 0) := "110110"; -- Branch with link: link_reg=PC+1, PC=target_addr
+    constant OP_BRA_X   : std_logic_vector(5 downto 0) := "110111"; -- Branch to link: PC=link_reg (function return)
+    constant OP_PUSH_L  : std_logic_vector(5 downto 0) := "111000"; -- Push link register onto call stack (for nested calls)
+    constant OP_POP_L   : std_logic_vector(5 downto 0) := "111001"; -- Pop call stack into link register
 
     -- ========================================================================
     -- WRITEBACK MUX SELECTORS
@@ -240,24 +244,37 @@ package processor_constants_pkg is
     constant RED_MODE_ABS_SUM : std_logic_vector(1 downto 0) := "11"; -- Absolute sum: sum(|rs1[i]|)
 
     -- ========================================================================
+    -- CALL STACK DEPTH
+    -- ========================================================================
+    -- Maximum number of nested function calls supported by the per-warp call
+    -- stack in the IFU.  8 levels is sufficient for typical shader workloads.
+    constant CALL_STACK_DEPTH : integer := 8;
+
+    -- ========================================================================
     -- CONDENSED BRANCH TYPES & PREDICATE MODIFIERS
     -- ========================================================================
     -- WHY condensed branch types (BR_*) in addition to the raw OP_* opcodes:
     --   The IFU needs to evaluate branch conditions and update the PC using a
     --   simple case statement.  Comparing against 6-bit opcodes would give a
     --   large case with many unused values.  The decoder pre-translates each
-    --   CTRL opcode into a 3-bit BR_* code stored in pc_ctrl_t.branch_type,
+    --   CTRL opcode into a 4-bit BR_* code stored in pc_ctrl_t.branch_type,
     --   keeping the IFU's combinational logic small and fast on the critical path.
-    -- WHY BR_NONE = "000": makes the default (reset) state of pc_ctrl_t a
+    -- WHY BR_NONE = "0000": makes the default (reset) state of pc_ctrl_t a
     --   no-branch, which is correct for sequential execution and for non-CTRL
     --   instructions whose dec_pc fields are irrelevant.
-    constant BR_NONE    : std_logic_vector(2 downto 0) := "000"; -- No branch; PC increments normally
-    constant BR_JMP     : std_logic_vector(2 downto 0) := "001"; -- Unconditional jump
-    constant BR_BRA_Z   : std_logic_vector(2 downto 0) := "010"; -- Branch if predicate is zero
-    constant BR_BRA_NZ  : std_logic_vector(2 downto 0) := "011"; -- Branch if predicate is non-zero
-    constant BR_BRA_DIV : std_logic_vector(2 downto 0) := "100"; -- Divergent branch (push true mask)
-    constant BR_SSY     : std_logic_vector(2 downto 0) := "101"; -- Set sync point (push meetup PC)
-    constant BR_SYNC    : std_logic_vector(2 downto 0) := "110"; -- Synchronize (pop divergence stack)
+    -- WHY 4 bits: the 7 original codes plus 4 new call-stack codes (BRA_L,
+    --   BRA_X, PUSH_L, POP_L) require 11 values, needing a 4-bit field.
+    constant BR_NONE    : std_logic_vector(3 downto 0) := "0000"; -- No branch; PC increments normally
+    constant BR_JMP     : std_logic_vector(3 downto 0) := "0001"; -- Unconditional jump
+    constant BR_BRA_Z   : std_logic_vector(3 downto 0) := "0010"; -- Branch if predicate is zero
+    constant BR_BRA_NZ  : std_logic_vector(3 downto 0) := "0011"; -- Branch if predicate is non-zero
+    constant BR_BRA_DIV : std_logic_vector(3 downto 0) := "0100"; -- Divergent branch (push true mask)
+    constant BR_SSY     : std_logic_vector(3 downto 0) := "0101"; -- Set sync point (push meetup PC)
+    constant BR_SYNC    : std_logic_vector(3 downto 0) := "0110"; -- Synchronize (pop divergence stack)
+    constant BR_BRA_L   : std_logic_vector(3 downto 0) := "0111"; -- Branch with link: link_reg=PC+1, PC=target
+    constant BR_BRA_X   : std_logic_vector(3 downto 0) := "1000"; -- Branch to link register: PC=link_reg
+    constant BR_PUSH_L  : std_logic_vector(3 downto 0) := "1001"; -- Push link register onto call stack
+    constant BR_POP_L   : std_logic_vector(3 downto 0) := "1010"; -- Pop call stack into link register
 
     -- WHY four predicate modifiers rather than just ANY/ALL:
     --   Shaders commonly need to branch on a single specific predicate component
@@ -413,7 +430,7 @@ package processor_constants_pkg is
     --   branch condition; the PRF evaluates it combinationally into prf_mask_out.
     -- predicate_mod: PRED_MOD_* constant controlling the collapse function.
     type pc_ctrl_t is record
-        branch_type     : std_logic_vector(2 downto 0);  -- BR_* constant
+        branch_type     : std_logic_vector(3 downto 0);  -- BR_* constant (4-bit; supports 11 branch types)
         target_addr     : std_logic_vector(15 downto 0); -- Instruction-word-encoded branch target (PC-relative or absolute)
         predicate_sel   : std_logic_vector(1 downto 0);  -- Local predicate register index for conditional branches
         predicate_mod   : std_logic_vector(1 downto 0);  -- PRED_MOD_* collapse mode

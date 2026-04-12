@@ -16,7 +16,6 @@
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard).
   Or just one warp that utilizes latency hiding should be ok.
 * implement branch with link/exchange (BRA_L, BRA_X) instructions. Also PUSH_L and POP_L which push/pop the link register for arbitrary call depths.
-* implement MOV instruction for floating point registers
 
 # Agent changes
 
@@ -443,3 +442,36 @@ Added `OP_MOV` (opcode `"010010"`, decimal 18) as a new FPU-type instruction tha
 - `tools/assembler.py` — Added `'MOV': 18` to `FPU_OPCODES`.
 
 **Assembly syntax:** `MOV rd.mask, rs1[.swiz]` — identical to other two-operand FPU instructions; `rs2` is unused (assembler defaults to 0).
+
+
+## Date: 2026-04-12
+
+### Added function call instructions: BRA_L, BRA_X, PUSH_L, POP_L
+
+Added a link register and a small dedicated call stack to the IFU, supporting warp-wide (convergent) function calls without a data stack.
+
+**New instructions:**
+- `BRA_L target` — Branch with link: saves `PC+1` into the link register, jumps to `target`. Used to call a function.
+- `BRA_X` — Branch to link register: restores the PC from the link register. Used to return from a leaf function.
+- `PUSH_L` — Pushes the link register onto the call stack. Used by non-leaf callers before making a nested `BRA_L`.
+- `POP_L` — Pops the call stack into the link register. Used to restore the caller's return address before `BRA_X`.
+
+**New opcodes (CTRL type):**
+- `OP_BRA_L = "110110"` (54), `OP_BRA_X = "110111"` (55)
+- `OP_PUSH_L = "111000"` (56), `OP_POP_L = "111001"` (57)
+
+**Architecture notes:**
+- The `branch_type` field in `pc_ctrl_t` was expanded from 3 bits to 4 bits to accommodate the 4 new branch type codes (`BR_BRA_L`, `BR_BRA_X`, `BR_PUSH_L`, `BR_POP_L`) alongside the existing 7. All comparisons use named constants so the width change is backward-compatible.
+- `CALL_STACK_DEPTH = 8` constant added to `processor_constants_pkg.vhd`. The IFU has a matching `CALL_STACK_DEPTH` generic (default 8).
+- The call stack is entirely separate from the SIMT divergence stack: call instructions are warp-wide and never interact with thread masking.
+
+**Files changed:**
+- `src/processor_constants_pkg.vhd` — Added `CALL_STACK_DEPTH`, expanded `branch_type` to 4 bits, added 4 new `BR_*` and `OP_*` constants.
+- `src/instruction_decoder.vhd` — Added decode cases for the 4 new CTRL opcodes.
+- `src/instruction_fetch_unit.vhd` — Added `CALL_STACK_DEPTH` generic, `link_reg`, `call_stack`, and `csp` signals; added reset handling; added 4 new branch cases (7–10) in the PC-update process.
+- `tools/assembler.py` — Added `BRA_L`, `BRA_X`, `PUSH_L`, `POP_L` to `CTRL_OPCODES`.
+
+**New test:**
+- `tools/test10_call_stack.s` — Assembly program that calls a leaf function (tests BRA_L/BRA_X), copies the result with MOV, calls a non-leaf function that internally uses PUSH_L/POP_L for nesting, then stores to memory.
+- `src/tb_call_stack.vhd` — VHDL testbench that programs `warp_unit` with the above program, verifies `pixel_buf_valid` fires, checks all 32 thread pixels = `0x42424242`, and confirms clean halt.
+- All 18 testbenches pass after the change.

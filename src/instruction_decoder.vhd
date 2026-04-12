@@ -151,7 +151,7 @@ begin
         v_red.wb_mux_sel     := WB_MUX_RED;
         v_red.vrf_we         := '0';
 
-        v_pc.branch_type     := BR_NONE;
+        v_pc.branch_type     := BR_NONE; -- 4-bit; "0000" = no branch
         v_pc.target_addr     := (others => '0');
         v_pc.predicate_sel   := "00";
         v_pc.predicate_mod   := PRED_MOD_ANY;
@@ -300,6 +300,11 @@ begin
                 -- SYNC: reconvergence instruction. The IFU uses the SIMT stack
                 -- entry to decide whether this is the end of IF or ELSE.
                 when OP_SYNC    => v_pc.branch_type := BR_SYNC;
+                -- Function call / return instructions (link register + call stack):
+                when OP_BRA_L   => v_pc.branch_type := BR_BRA_L;
+                when OP_BRA_X   => v_pc.branch_type := BR_BRA_X;
+                when OP_PUSH_L  => v_pc.branch_type := BR_PUSH_L;
+                when OP_POP_L   => v_pc.branch_type := BR_POP_L;
                 when others     => v_pc.branch_type := BR_NONE;
             end case;
 

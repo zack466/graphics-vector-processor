@@ -26,7 +26,8 @@ ALU_OPCODES = {
 
 # CTRL Opcodes
 CTRL_OPCODES = {
-    'JMP': 48, 'BRA_Z': 49, 'BRA_NZ': 50, 'BRA_DIV': 51, 'SSY': 52, 'SYNC': 53
+    'JMP': 48, 'BRA_Z': 49, 'BRA_NZ': 50, 'BRA_DIV': 51, 'SSY': 52, 'SYNC': 53,
+    'BRA_L': 54, 'BRA_X': 55, 'PUSH_L': 56, 'POP_L': 57
 }
 
 # RED Modes

@@ -302,15 +302,10 @@ class SemanticAnalyzer:
         raise CompileError(f"No visit method for {type(node).__name__}")
 
     def visit_Program(self, node):
-        # --- PASS 1: FORWARD DECLARATIONS ---
-        # Register all function return types so 'main' can safely
-        # call functions that will be emitted after it.
         for stmt in node.statements:
             if type(stmt).__name__ == 'FuncDecl':
                 self.symtab[stmt.name] = stmt.ret_type
 
-        # --- PASS 2: REORDER AND EMIT ---
-        # Sort the AST so that 'main' is ALWAYS evaluated and emitted first
         funcs = sorted(node.statements, key=lambda f: 0 if getattr(f, 'name', '') == 'main' else 1)
         
         for stmt in funcs:
@@ -395,10 +390,8 @@ class SemanticAnalyzer:
         full_name = node.name
         
         if node.swizzle:
-            # If a variable is being READ (used in an expression), we must 
-            # splat single-character swizzles so the FPU/ALU routes it to the .x lane!
             if len(node.swizzle) == 1:
-                full_name += f".{node.swizzle * 4}"  # e.g., 'y' becomes 'yyyy'
+                full_name += f".{node.swizzle * 4}"
             else:
                 full_name += f".{node.swizzle}"
                 
@@ -533,9 +526,8 @@ class InstructionSelector:
                 self._lower_load_imm(inst)
             elif inst.op == 'FDIV':
                 self._lower_fdiv(inst)
-            elif inst.op == 'MOV':
-                self._lower_mov(inst)
             else:
+                # We now let MOV pass straight through to hardware without lowering
                 self.lowered_ir.append(inst)
                 
         self.sa.ir = self.lowered_ir
@@ -561,12 +553,6 @@ class InstructionSelector:
         temp_rcp = self.sa.new_temp('float')
         self.lowered_ir.append(TACInst("FRCP", temp_rcp, inst.src2))
         self.lowered_ir.append(TACInst("FMUL", inst.dest, inst.src1, temp_rcp))
-
-    def _lower_mov(self, inst):
-        base_dest = inst.dest.split('.')[0]
-        var_type = self.sa.symtab.get(base_dest, 'float')
-        op = 'POR' if var_type == 'bool' else 'IOR'
-        self.lowered_ir.append(TACInst(op, inst.dest, inst.src1, inst.src1))
 
 # ==========================================
 # 7. Register Allocation & Peephole Cleanup
@@ -703,15 +689,22 @@ class RegisterAllocator:
             
             is_redundant = False
             
-            if inst.op in ['IOR', 'POR']:
+            # --- PEEPHOLE OPTIMIZER ---
+            # Clean up redundant MOVs assigned to the exact same physical register
+            if inst.op == 'MOV':
                 db = self._get_base_var(new_dest)
                 s1b = self._get_base_var(new_src1)
-                s2b = self._get_base_var(new_src2)
-                if db is not None and db == s1b == s2b:
+                
+                if db is not None and db == s1b:
                     if new_src1 and '.' not in new_src1:
                         is_redundant = True
                     elif new_dest == new_src1:
                         is_redundant = True
+                    elif new_dest and new_src1 and '.' in new_dest and '.' in new_src1:
+                        d_mask = new_dest.split('.')[1]
+                        s_swiz = new_src1.split('.')[1]
+                        if len(d_mask) == 1 and s_swiz == d_mask * 4:
+                            is_redundant = True
 
             if inst.op == 'FLUSH' and final_ir and final_ir[-1].op == 'FLUSH':
                 is_redundant = True
