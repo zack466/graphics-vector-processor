@@ -5,20 +5,33 @@
 --   Structural wrapper that composes the block transfer MCU
 --   (mcu_block_transfer) and the Avalon burst bridge (avm_burst_bridge) into a
 --   single, self-contained memory subsystem.  The wrapper exists for one
---   reason: to hide the internal AXI-stream-like handshake (cmd/tx/rx buses)
+--   reason: to hide the internal AXI-stream-like handshake (cmd/tx buses)
 --   that connects the MCU to the bridge from the processor top level.  The
 --   processor only needs to see three interface groups:
 --     1. Processor-control signals (mem_op_valid / mem_stall, addressing).
---     2. Snooped data from Execution Unit
+--     2. Snooped data from the Execution Unit (collected here and packed into
+--        a flat 1024-bit buffer before being handed to mcu_block_transfer).
 --     3. An Avalon-MM master port aimed at external DDR3 SDRAM.
+--
+-- PIXEL SNOOP BUFFER:
+--   mcu_block_transfer no longer contains a snoop buffer — it expects a
+--   pre-packed flat 1024-bit pixel buffer on its pixel_buf_data port.  This
+--   wrapper owns the snoop buffer: it accumulates one packed pixel per thread
+--   as the execution unit issues mem_store_* events during EXEC_WAIT, then
+--   concatenates them into a flat vector and passes it to the MCU alongside
+--   the pixel_buf_valid trigger (= mem_op_valid from the processor FSM).
 --
 -- INTERNAL TOPOLOGY:
 --
 --   [processor FSM]
---        |  mem_op_valid, base_addr, …
+--        |  mem_op_valid, base_addr, exec_mask
 --        v
---   [ mcu_block_transfer ] <──> Execution Unit (snooped mem_store_*)
---        |   int_cmd_*  (command channel: address, burst length, direction)
+--   [pixel snoop buffer]  <── Execution Unit (snooped mem_store_*)
+--        |   int_pixel_buf_data (1024-bit flat)
+--        |   int_pixel_buf_valid (= mem_op_valid)
+--        v
+--   [ mcu_block_transfer ]
+--        |   int_cmd_*  (command channel: address, burst length)
 --        |   int_tx_*   (write-data channel: data, byte-enable, valid/ready)
 --        v
 --   [ avm_burst_bridge ]
@@ -26,44 +39,13 @@
 --        v
 --   [external DDR3]
 --
---   The cmd/tx/rx buses form a lightweight custom AXI-stream-like interface
---   chosen because Avalon burst protocol is fiddly to implement in the MCU
---   directly (waitrequest back-pressure, burst beat counting).  Isolating
---   that complexity in the bridge keeps the MCU state machine clean.
---
 -- HOW TO USE:
 --   1. Assert mem_op_valid for exactly ONE clock cycle when the processor FSM
---      is in DECODE and has a MEM instruction.  The MCU latches the address
---      and register indices on that cycle.
---   2. Hold all control inputs (base_addr, etc.) stable from the
---      cycle mem_op_valid is asserted until mem_stall deasserts.
---   3. The processor FSM waits in MEM_WAIT until mem_stall deasserts.
---      Because mem_stall is driven combinationally by the MCU (asserts on
---      the same cycle as mem_op_valid), no bubble state is required between
---      DECODE and MEM_WAIT.
---
--- PORT DESCRIPTIONS:
---   clk               : System clock.  All registers are rising-edge.
---   reset             : Synchronous active-high reset.
---   mem_op_valid      : 1-cycle pulse from FSM DECODE state that starts a
---                       block store operation.  Latched internally.
---   base_addr         : 32-bit byte address.  Bits[31:16] come from the
---                       14-bit instruction immediate zero-extended to 16 bits,
---                       then placed in the upper half (bits[29:16] effective).
---                       This gives a 1 GB word-aligned addressing window.
---   dest_src_reg_idx  : Register holding the data to store.
---   exec_mask         : 32-bit active-thread mask from the IFU.  Threads with
---                       a '0' bit are masked out via Avalon byte enables.
---   mem_stall         : Asserted by MCU while the block store is in
---                       progress.  Deasserts when all data is written.
---   avm_*             : Standard Avalon-MM burst master signals to DDR3.
---
--- TIMING / LATENCY:
---   - mem_op_valid must be a single-cycle pulse; holding it longer will
---     re-trigger the MCU.
---   - mem_stall rises combinationally on the same cycle as mem_op_valid.
---   - Total latency depends on burst length and DDR3 waitrequest timing;
---     the MCU handles all back-pressure internally.
+--      is in EXEC_WAIT and the issuer has finished all 32 threads.  The snoop
+--      buffer must already be fully populated at this point (execution unit
+--      writeback for all 32 threads has completed during EXEC_WAIT).
+--   2. mem_stall rises on the same cycle as mem_op_valid (combinational in
+--      the MCU).  The processor FSM waits in MEM_WAIT until mem_stall deasserts.
 -- ============================================================================
 
 library IEEE;
@@ -76,8 +58,7 @@ entity memory_unit is
     generic (
         WARP_SIZE  : integer := 32;
         ADDR_WIDTH : integer := 32;
-        DATA_WIDTH : integer := 128;
-        REG_WIDTH  : integer := 2
+        DATA_WIDTH : integer := 128
     );
     port (
         clk               : in  std_logic;
@@ -88,16 +69,16 @@ entity memory_unit is
         -- ==========================================
         mem_op_valid      : in  std_logic;
         base_addr         : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-        dest_src_reg_idx  : in  std_logic_vector(REG_WIDTH-1 downto 0);
         exec_mask         : in  std_logic_vector(WARP_SIZE-1 downto 0);
         mem_stall         : out std_logic;
 
+        -- Snooped store data (from execution unit writeback during EXEC_WAIT)
         mem_store_valid   : in  std_logic;
         mem_store_thread  : in  std_logic_vector(4 downto 0);
         mem_store_data    : in  vector_t;
 
         -- ==========================================
-        -- Interface 3: Avalon-MM Master (To External DDR3)
+        -- Interface 2: Avalon-MM Master (To External DDR3)
         -- ==========================================
         avm_address       : out std_logic_vector(ADDR_WIDTH-1 downto 0);
         avm_burstcount    : out std_logic_vector(7 downto 0);
@@ -114,24 +95,20 @@ end entity;
 architecture struct of memory_unit is
 
     -- ========================================================================
+    -- Pixel Snoop Buffer
+    -- ========================================================================
+    -- WHY here rather than in mcu_block_transfer: mcu_block_transfer now
+    -- accepts a pre-packed flat buffer (pixel_buf_data) to keep its interface
+    -- clean for use in warp_unit as well.  This wrapper holds the snoop
+    -- buffer on behalf of processor.vhd, which continues to expose the raw
+    -- execution-unit snoop signals to this wrapper.
+    type snoop_buf_t is array(0 to WARP_SIZE-1) of std_logic_vector(31 downto 0);
+    signal snoop_buf          : snoop_buf_t := (others => (others => '0'));
+    signal int_pixel_buf_data : std_logic_vector(1023 downto 0);
+
+    -- ========================================================================
     -- Internal Interconnect Signals (MCU <-> Bridge)
     -- ========================================================================
-    -- WHY a custom two-channel bus instead of Avalon directly in the MCU:
-    --   Avalon burst requires the master to count beat cycles, respect
-    --   waitrequest on EVERY beat, and not re-issue a new burst until the
-    --   previous one completes.  Encoding all of that into the block-transfer
-    --   state machine would couple memory-protocol concerns with pixel-packing
-    --   logic.  Instead, the MCU issues a one-shot command (addr + burst length)
-    --   on the cmd channel and streams data on tx; the bridge is solely
-    --   responsible for the Avalon handshake.
-    --
-    -- cmd channel  : command/address phase.  cmd_valid/cmd_ready handshake.
-    --                cmd_ready deasserts when bridge is busy with a prior burst.
-    -- tx channel   : write-data phase for stores.  tx_valid/tx_ready handshake
-    --                allows bridge to apply back-pressure if the DDR FIFO fills.
-    -- NOTE: The bridge also exposes an rx channel for reads, but loads are not
-    --       supported by the block-transfer MCU; int_rx_* are unused by the MCU.
-
     signal int_cmd_valid     : std_logic;
     signal int_cmd_is_store  : std_logic;
     signal int_cmd_addr      : std_logic_vector(ADDR_WIDTH-1 downto 0);
@@ -149,39 +126,51 @@ architecture struct of memory_unit is
 begin
 
     -- ========================================================================
+    -- Pixel Snoop Buffer Write Port
+    -- ========================================================================
+    -- Accumulates one packed pixel per thread as the execution unit issues
+    -- mem_store_* events during EXEC_WAIT.  Packing:
+    --   pixel = W[7:0] & Z[7:0] & Y[7:0] & X[7:0]
+    -- The buffer is not cleared between warps — old pixels are overwritten
+    -- each time the 32-thread issue sequence runs.
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            if mem_store_valid = '1' then
+                snoop_buf(to_integer(unsigned(mem_store_thread))) <=
+                    mem_store_data(3)(7 downto 0) &
+                    mem_store_data(2)(7 downto 0) &
+                    mem_store_data(1)(7 downto 0) &
+                    mem_store_data(0)(7 downto 0);
+            end if;
+        end if;
+    end process;
+
+    -- Flatten snoop_buf into a 1024-bit vector for mcu_block_transfer.
+    -- int_pixel_buf_data[i*32+31 : i*32] = snoop_buf(i) = thread i's pixel.
+    gen_flat : for i in 0 to WARP_SIZE-1 generate
+        int_pixel_buf_data(i*32+31 downto i*32) <= snoop_buf(i);
+    end generate;
+
+    -- ========================================================================
     -- INSTANTIATE: Block Transfer MCU
     -- ========================================================================
-    -- WHY mcu_block_transfer lives here rather than in the processor top level:
-    --   The MCU snoops the execution unit's mem_store_* outputs to collect one
-    --   pixel per thread as the barrel scheduler issues threads 0–31, then
-    --   autonomously emits 8 sequential 128-bit Avalon burst beats.  The
-    --   processor top level does not need to know about thread sequencing or
-    --   pixel packing — it just waits for mem_stall='0'.  Wrapping here hides
-    --   that detail behind a clean mem_op_valid / mem_stall handshake.
     u_mcu : entity work.mcu_block_transfer
         generic map (
             WARP_SIZE  => WARP_SIZE,
             ADDR_WIDTH => ADDR_WIDTH,
-            DATA_WIDTH => DATA_WIDTH,
-            REG_WIDTH  => REG_WIDTH
+            DATA_WIDTH => DATA_WIDTH
         )
         port map (
             clk               => clk,
             reset             => reset,
 
-            -- Processor Control Interfaces
-            mem_op_valid      => mem_op_valid,
+            pixel_buf_valid   => mem_op_valid,
             base_addr         => base_addr,
-            dest_src_reg_idx  => dest_src_reg_idx,
             exec_mask         => exec_mask,
             mem_stall         => mem_stall,
+            pixel_buf_data    => int_pixel_buf_data,
 
-            -- Snooped store data
-            mem_store_valid   => mem_store_valid,
-            mem_store_thread  => mem_store_thread,
-            mem_store_data    => mem_store_data,
-
-            -- Internal Bridge Interfaces
             cmd_valid         => int_cmd_valid,
             cmd_is_store      => int_cmd_is_store,
             cmd_addr          => int_cmd_addr,
@@ -197,13 +186,6 @@ begin
     -- ========================================================================
     -- INSTANTIATE: Avalon Burst Bridge
     -- ========================================================================
-    -- WHY a separate bridge entity rather than inline Avalon logic in the MCU:
-    --   The Avalon burst protocol (burstcount, waitrequest back-pressure on
-    --   every beat, address-phase vs. data-phase timing) is non-trivial.
-    --   Isolating it here means the MCU state machine only deals with its
-    --   clean cmd/tx/rx channels, and the bridge only deals with Avalon
-    --   compliance.  Either can be swapped independently (e.g., to target
-    --   AXI instead of Avalon) without touching the other.
     u_bridge : entity work.avm_burst_bridge
         generic map (
             ADDR_WIDTH => ADDR_WIDTH,
@@ -213,22 +195,20 @@ begin
             clk               => clk,
             reset             => reset,
 
-            -- Internal Bridge Interfaces
             cmd_valid         => int_cmd_valid,
             cmd_is_store      => int_cmd_is_store,
             cmd_addr          => int_cmd_addr,
             cmd_burst_len     => int_cmd_burst_len,
             cmd_ready         => int_cmd_ready,
-            
+
             tx_data           => int_tx_data,
             tx_byte_en        => int_tx_byte_en,
             tx_valid          => int_tx_valid,
             tx_ready          => int_tx_ready,
-            
+
             rx_data           => int_rx_data,
             rx_valid          => int_rx_valid,
 
-            -- External Avalon-MM Master Interfaces
             avm_address       => avm_address,
             avm_burstcount    => avm_burstcount,
             avm_write         => avm_write,

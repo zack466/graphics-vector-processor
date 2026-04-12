@@ -82,7 +82,7 @@ def main():
     subprocess.run(["make", "clean"], cwd="src", check=True, capture_output=True)
     subprocess.run(["make", "build"], cwd="src", check=True, capture_output=True)
     
-    result = subprocess.run(["make", "test-tb_processor_automated"], cwd="src", capture_output=True, text=True)
+    result = subprocess.run(["make", "test-tb_frame_processor_automated"], cwd="src", capture_output=True, text=True)
     if result.returncode != 0:
         print("Simulation failed!")
         print(result.stdout)

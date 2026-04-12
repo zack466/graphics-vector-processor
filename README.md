@@ -3,6 +3,16 @@
 ## 1. Architecture Overview
 The core processor operates on vector registers, with each 32-bit sub-unit referenced as a tuple (x, y, z, w). The architecture is designed to maximize parallel throughput for graphics workloads while strictly managing FPGA logic resources. It utilizes a Single Instruction, Multiple Thread (SIMT) execution model, grouping 32 threads into a single "Warp" that shares a common Program Counter (PC).
 
+**1.0. Top-Level Hierarchy**
+The top-level entity is `frame_processor`, a structural entity (no datapath logic) that wires together:
+* **`warp_scheduler`** — frame-level FSM that iterates `warp_offset` from 0 to `frame_width × frame_height − 1` in steps of 32, dispatching one warp block at a time.
+* **`warp_unit`** — self-contained SIMT warp: IFU, decode, issue, FPU/ALU/RED execution, VRF, PRF, and pixel snoop buffer. Accepts `warp_start`/`warp_offset`; exposes `pixel_buf_valid`, `pixel_buf_data` (1024-bit flat buffer of 32 packed RGBA pixels), and `warp_halted`.
+* **`mcu_block_transfer`** — accepts the warp's 1024-bit pixel buffer and emits 8 sequential 128-bit Avalon burst beats to DDR3.
+* **`avm_burst_bridge`** — thin Avalon-MM master protocol layer between the MCU and the DDR3 controller.
+* **`instruction_memory`** — shared M10K BRAM; all warps execute the same shader program.
+
+The host drives `frame_start` (1-cycle pulse), `frame_width`, and `frame_height` and waits for `frame_done`. There is no per-warp CSR interface.
+
 **1.1. Register File & Thread Contexts**
 * **Multithreaded Vector Register File (VRF):** Partitioned to support 32 concurrent hardware thread contexts. Implemented using natively dual-ported Altera M10K blocks. Port A is dedicated to the math pipeline, while Port B is for the Memory Controller (MCU). The VRF holds untyped 32-bit generic words, allowing it to natively store and seamlessly pass both IEEE-754 floating-point values and 32-bit two's-complement integers.
 * **Predicate Register File (PRF):** A dedicated, high-speed register file storing 4 bits per thread (one per component). These store the results of comparisons and drive conditional branching.
@@ -12,12 +22,15 @@ The core processor operates on vector registers, with each 32-bit sub-unit refer
 The processor operates as an accelerator co-processor, managed by an external host (e.g., an ARM HPS) via the Avalon Memory-Mapped (Avalon-MM) bus.
 
 **2.1. IMEM Programming Interface**
-The Instruction Memory features a dedicated write port (`prog_we`, `prog_wr_addr`, `prog_wr_data`) allowing the host processor to backdoor-load assembled machine code directly into the GPU's ROM before execution.
+The Instruction Memory features a dedicated write port (`prog_we`, `prog_wr_addr`, `prog_wr_data`) allowing the host processor to backdoor-load assembled machine code directly into the GPU's IMEM before execution begins.
 
-**2.2. Control Status Registers (CSR)**
-An Avalon-MM Slave interface exposes critical execution controls to the host:
-* **CSR[0] - Run Register:** Writing `1` unstalls the IFU and begins program execution. Writing `0` halts the processor. The processor can also clear this bit internally via a `RETURN` instruction to automatically signal completion to the host.
-* **CSR[1] - Start PC Override:** Allows the host to force the processor to boot from a specific instruction address by injecting a combinational `BR_JMP` into the fetch unit.
+**2.2. Frame Control Interface**
+`frame_processor` replaces the old per-warp CSR slave interface with a simple frame-level handshake:
+* **`frame_start`** — 1-cycle pulse from host to begin rendering. The warp_scheduler latches `frame_width × frame_height` and starts dispatching warp blocks.
+* **`frame_width` / `frame_height`** — pixel dimensions of the output frame (16-bit unsigned each). Must be stable before and during `frame_start`.
+* **`frame_done`** — 1-cycle pulse emitted by warp_scheduler after the last warp halts. The host can use this to signal a framebuffer flip.
+
+There is no longer a per-warp CSR register for `warp_offset` or a `RUN` bit; warp dispatch is fully autonomous once `frame_start` is received.
 
 ## 3. Execution Datapath & Compute Clusters
 The execution stage utilizes a parallel, multi-path topology for standard floating-point math, exact integer arithmetic, and cross-coordinate reductions.
@@ -87,19 +100,27 @@ By bounding the maximum pipeline latency to 28 cycles, the architecture intrinsi
 * **Non-Stalling Backend:** If the Instruction Fetcher stalls, the Writeback Controller continues ticking, automatically shifting `NOPs` (Write Enable = 0) into the pipe. This allows the up to 28 instructions already "in-flight" to safely complete and write to the register files without colliding.
 
 ## 7. Memory Subsystem
-The processor accesses external DDR3 memory through a fully decoupled, multi-cycle, scatter/gather memory controller. This subsystem isolates the strict 1-cycle timing constraints of the processor's internal pipeline from the unpredictable stall behavior (`waitrequest`) of the Avalon-MM master bus.
+The processor writes pixels to external DDR3 memory using a sequential block-transfer architecture. The old scatter/gather MCU (which scanned 32 thread addresses independently) has been replaced by a snoop-based design that is simpler and better suited to framebuffer output.
 
-**7.1. Decoupled Architecture & FIFOs**
-The Memory Control Unit (MCU) is split into three independent domains linked by hardware FIFOs. This allows the processor to dispatch memory commands at maximum speed and then immediately resume execution.
-* **M10K FIFO Elasticity:** The internal Command, Write Data, and Load Tracking FIFOs are mapped directly to FPGA M10K block RAM. This completely avoids the use of Logic Elements (ALMs) for buffering, while gracefully absorbing Avalon bus stalls without requiring complex pipeline skid buffers.
-* **Frontend (Coalescing State Machine):** Rapidly scans the 32 threads, calculates absolute memory addresses, and coalesces contiguous requests (stride-1) into burst commands. It blasts these commands and associated VRF write data into the FIFOs and drops the `mem_stall` signal immediately once the FIFOs are loaded.
-* **Backend (Avalon Bridge):** A thin translation layer that pops commands from the FIFOs and issues them to the Avalon-MM bus. It handles DDR3 `waitrequests` natively by simply pausing the FIFO read enables, preventing data loss without stalling the processor frontend.
+**7.1. Pixel Snoop Buffer (inside warp_unit)**
+As the barrel scheduler issues a `STORE` instruction over 32 cycles (one thread per cycle), `execution_unit` snoops the VRF read data at Stage 1 and provides three outputs: `mem_store_valid`, `mem_store_data` (4 × 32-bit XYZW components), and `mem_store_thread_id`. The warp_unit uses these to fill a 32-entry × 32-bit `pixel_snoop` buffer. Each entry packs the lower 8 bits of all four components into a single 32-bit RGBA word:
+```
+pixel_snoop[t] = W[7:0] & Z[7:0] & Y[7:0] & X[7:0]
+```
+The full 1024-bit buffer is exposed as `pixel_buf_data` on the warp_unit port boundary.
 
-**7.2. VRF Port B Arbitration & Latency Tracking**
-The MCU accesses the Vector Register File (VRF) via the dedicated Port B.
-* **Block Stores and Pixel Packing:** `STORE` operations now perform sequential 128-bit Avalon burst writes of packed pixel data. As the `execution_unit` barrel scheduler issues the `STORE` instruction over 32 cycles, the memory controller snoops the VRF read data. It extracts the lower 8 bits of each component (W, Z, Y, X) and packs them into a 32-bit RGBA pixel, accumulating exactly 32 pixels in an internal M10K-backed `warp_buffer`.
-* **Sequential Burst Output:** Upon completing the 32-cycle schedule, the MCU transitions to `MEM_WAIT` and blasts exactly eight sequential 128-bit write beats to the DDR3 controller as fast as the Avalon bus allows.
-* **Block Loads:** `LOAD` operations perform similar sequential Avalon burst reads.
+**7.2. mcu_block_transfer**
+Accepts the warp's `pixel_buf_valid` pulse, `pixel_buf_addr`, `pixel_buf_data`, and `pixel_exec_mask`. Latches the buffer and emits exactly 8 sequential 128-bit Avalon write beats (beat k carries threads 4k+3..4k+0, MSB to LSB). `mem_stall` is held high until all 8 beats have been acknowledged, keeping the warp FSM in `MEM_WAIT`.
 
-**7.3. Asynchronous Load Tracking (Non-Blocking Reads)**
-(Note: Deprecated with the block transfer architecture. `LOAD` and `STORE` now block until the burst transfer is completed over the Avalon bus, enforcing strict sequential memory ordering.)
+**7.3. avm_burst_bridge**
+Thin Avalon-MM master driver. Holds the base address constant for all 8 beats of the burst (the DDR3 controller auto-increments the address internally). Handles `waitrequest` by pausing without losing beat data.
+
+**7.4. Address Calculation**
+The physical DDR3 byte address for a warp block is:
+```
+phys_addr = (STORE.base_addr << 16) + warp_offset * 4
+```
+`warp_offset` is the pixel index of thread 0 within the warp, supplied by `warp_scheduler`. Multiplying by 4 converts from pixel index to byte address (4 bytes per 32-bit RGBA pixel). Each warp's 32-pixel block therefore occupies 128 consecutive bytes in DDR3.
+
+**7.5. Sequential Memory Ordering**
+`LOAD` and `STORE` both block the warp FSM in `MEM_WAIT` until the full burst completes, enforcing strict sequential memory ordering. There is no out-of-order or overlapping memory access.

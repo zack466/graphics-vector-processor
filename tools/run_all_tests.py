@@ -5,7 +5,7 @@ Usage (from repo root):
     python tools/run_all_tests.py [--no-rebuild] [--no-images]
 
 Workflow:
-    1. Build VHDL once (make clean && make build in src/, then elaborate tb_processor_automated)
+    1. Build VHDL once (make clean && make build in src/, then elaborate tb_frame_processor_automated)
     2. For each tools/test[0-9][0-9]_*.s (sorted):
        a. Assemble to src/program.hex
        b. Run the simulation executable directly (no rebuild)
@@ -30,7 +30,7 @@ SRC_DIR    = os.path.join(REPO_ROOT, "src")
 TOOLS_DIR  = os.path.join(REPO_ROOT, "tools")
 HEX_FILE   = os.path.join(SRC_DIR, "program.hex")
 DUMP_FILE  = os.path.join(SRC_DIR, "memory_dump.hex")
-SIM_EXE    = os.path.join(SRC_DIR, "work", "tb_processor_automated")
+SIM_EXE    = os.path.join(SRC_DIR, "work", "tb_frame_processor_automated")
 RUNFLAGS   = ["--ieee-asserts=disable", "--stop-time=10ms"]
 
 
@@ -53,7 +53,7 @@ def build_once():
 
     # Elaborate the automated testbench
     result = subprocess.run(
-        ["ghdl", "-e", "--std=08", f"--workdir=work/", "-o", SIM_EXE, "tb_processor_automated"],
+        ["ghdl", "-e", "--std=08", f"--workdir=work/", "-o", SIM_EXE, "tb_frame_processor_automated"],
         cwd=SRC_DIR, capture_output=True, text=True
     )
     if result.returncode != 0:
@@ -116,6 +116,7 @@ def generate_image(dump_file, output_png):
     img = Image.new('RGBA', (width, height))
     img.putdata(pixels[:width * height])
     img.save(output_png)
+    print(f"    Saved {os.path.basename(output_png)} ({width}x{height})")
 
 
 # ---------------------------------------------------------------------------

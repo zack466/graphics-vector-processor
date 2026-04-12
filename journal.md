@@ -13,7 +13,10 @@
     for pure shaders, reading is not necessary, only need to know thread ID and global registers like width/height, mouse position, etc.
 * create top top level that can trigger processor to draw a frame, and keeps it in sync with the VIP framebuffer.
   should probably hardcode addresses of two backbuffers for double buffering.
-* might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard)
+* might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard).
+  Or just one warp that utilizes latency hiding should be ok.
+* implement branch with link/exchange (BRA_L, BRA_X) instructions. Also PUSH_L and POP_L which push/pop the link register for arbitrary call depths.
+* fix the issue where the output images have an extra column (32 x 33) instead of (32 x 32)
 
 # Agent changes
 
@@ -322,6 +325,41 @@
 
 
 ## Date: 2026-04-11
+
+### Architectural Refactor: processor.vhd → frame_processor + warp_unit + warp_scheduler
+
+Replaced the monolithic `processor.vhd` (single-warp processor with an embedded CSR slave and MCU) with a three-level hierarchy that cleanly separates frame-level scheduling, warp execution, and memory output.
+
+**Motivation:**
+The old `processor.vhd` mixed host interface logic (CSR writes to set warp_offset, assert RUN), the IFU/decode/issue/exec pipeline, and the Avalon memory controller all into one entity. This made it impossible to schedule multiple warps or context-switch between them, and required the host to manually write 32 separate CSR sequences per frame (one per warp). The refactor removes all of that host-visible machinery and replaces it with a hardware FSM that iterates warps autonomously.
+
+**New files:**
+- `src/warp_unit.vhd` — Self-contained SIMT warp. Contains the IFU, instruction decoder, issue unit, execution unit (FPU/ALU/RED), VRF, PRF, and pixel snoop buffer. Exposes `warp_start`/`warp_halted`/`warp_break` control signals and a flat `pixel_buf_data[1023:0]` output (32 packed pixels). Has no host CSR interface and no embedded MCU.
+- `src/warp_scheduler.vhd` — Frame-level FSM. Accepts a `frame_start` pulse and `frame_width`/`frame_height` inputs. Computes `total_pixels = frame_width * frame_height`, then iterates `warp_offset` from 0 to `total_pixels-1` in steps of 32, pulsing `warp_start` for each block. Asserts `frame_done` when the last warp halts. States: IDLE → DISPATCH → WAIT_RUNNING → WAIT_HALT → DONE.
+- `src/frame_processor.vhd` — Top-level structural entity (pure wiring). Instantiates `instruction_memory`, `warp_scheduler`, `warp_unit`, `mcu_block_transfer`, and `avm_burst_bridge`. Exports `frame_start`/`frame_done`/`frame_width`/`frame_height` upward and the `avm_*` Avalon-MM master bus outward.
+- `src/tb_frame_processor_automated.vhd` — Automated testbench replacing `tb_processor_automated.vhd`. Instantiates `frame_processor` + `avm_sim_memory`. Uses generics `PROGRAM_FILE`, `MEMORY_DUMP_FILE`, `FRAME_WIDTH`, `FRAME_HEIGHT`, `DUMP_START_ADDR`, `DUMP_END_ADDR`. Drives a single `frame_start` pulse and waits for `frame_done` rather than writing CSR registers in a loop.
+- `src/tb_frame_processor.vhd`, `src/tb_warp_unit.vhd`, `src/tb_warp_scheduler.vhd` — Additional unit and interactive testbenches.
+
+**Deleted files:**
+- `src/processor.vhd` — replaced by the three-file hierarchy above.
+- `src/tb_processor.vhd` — tested the deleted entity.
+- `src/tb_processor_automated.vhd` — replaced by `tb_frame_processor_automated.vhd`.
+
+**Updated files:**
+- `src/Makefile` — removed `processor.vhd` from SOURCES; added `warp_unit.vhd`, `warp_scheduler.vhd`, `frame_processor.vhd`. Replaced old testbench targets with `tb_frame_processor_automated`.
+- `tools/runner.py` — changed elaboration target to `tb_frame_processor_automated`.
+- `tools/run_all_tests.py` — updated SIM_EXE and elaboration target; added print confirmation after PNG save.
+
+**Bug fix (VHDL case-insensitivity):**
+The initial `tb_frame_processor_automated.vhd` used signal names `frame_width`/`frame_height` which silently collided with generics `FRAME_WIDTH`/`FRAME_HEIGHT` (VHDL is case-insensitive), causing port bindings to resolve to the constant generic values rather than the driven signals. Fixed by renaming the signals to `fp_width`/`fp_height`.
+
+**Verification:** All 9 assembly tests pass (9/9) with `tb_frame_processor_automated`. PNG images are generated for all tests.
+
+**Known issues (not yet fixed):**
+- *Thread 31 snoop timing:* `pixel_snoop[31]` is updated at the same rising edge that the MCU latches `pixel_buf_data`. VHDL delta-cycle ordering causes the MCU to see the pre-update value, so thread 31's pixel is always wrong in generated images (appears as a copy of thread 30 in the checkerboard). Root cause: `pixel_buf_valid` is asserted one cycle too early, before the last snoop write commits. Fix: hold EXEC_WAIT one extra cycle after `iss_issue_valid` drops (while `exec_mem_store_valid` is still '1') before asserting `pixel_buf_valid`.
+- *LDI partial write mask:* The IMM instruction format uses a single `full_mask` bit (bit [9]). A partial register mask (e.g., `.w`) sets `full_mask=0`, which decodes to `write_mask="0000"` — nothing is written. `test01_thread_id.s` uses `LDI_LO v0.w, 0x00FF` expecting to set only the W component; the instruction silently does nothing.
+
+---
 
 ### Simplified Memory Controller (Block Transfer & Pixel Packing)
 - Deprecated `mcu_scatter_gather.vhd` in favor of a new `mcu_block_transfer.vhd` design.
