@@ -236,13 +236,13 @@ I2F v1.xyzw, v0    # v1 = float(v0)
 ```
 
 #### `PAND  dest[.mask], src1, src2`
-Bitwise AND operating on float-typed registers (treats bits as integers): `dest = src1 & src2`
+Bitwise AND operating on predicate registers: `dest = src1 & src2`
 
 #### `POR  dest[.mask], src1, src2`
-Bitwise OR on float registers: `dest = src1 | src2`
+Bitwise OR on predicate registers: `dest = src1 | src2`
 
 #### `PXOR  dest[.mask], src1, src2`
-Bitwise XOR on float registers: `dest = src1 ^ src2`
+Bitwise XOR on predicate registers: `dest = src1 ^ src2`
 
 ---
 
@@ -311,13 +311,6 @@ STORE v4, 0x0001       # mem[0x00010000...] = packed(v4)
 - It then issues 8 back-to-back 128-bit Avalon burst writes to memory.
 - **FLUSH is required before STORE** to ensure all threads' vector register values are committed before the memory controller reads the VRF.
 
-#### `LOAD  dest, imm14`
-Read 8 sequential 128-bit words (32 pixels) from memory starting at address `imm14 << 16` into vector register `dest` across all 32 threads.
-
-```asm
-LOAD v5, 0x0001        # v5 = mem[0x00010000...]
-```
-
 ---
 
 ### 4.6 Control Flow Instructions
@@ -327,6 +320,36 @@ Unconditional jump to `target` (label or 16-bit address).
 
 ```asm
 JMP loop_start
+```
+
+#### `BRA_L  target`
+Branch with link to `target` (label or 16-bit address).
+Stores the next PC into the Link status register.
+
+```asm
+BRA_L leaf_function
+```
+
+#### `BRA_X`
+Branch with exchange.
+Subsitutes the current PC with the value stored in the Link status register.
+
+```asm
+BRA_X
+```
+
+#### `PUSH_L`
+Pushes the current Link register onto the call stack.
+
+```asm
+PUSH_L
+```
+
+#### `POP_L`
+Pops the topmost element of the call stack and puts it into the link register.
+
+```asm
+POP_L
 ```
 
 #### `BRA_Z  target, pred[.mod]`
@@ -623,9 +646,10 @@ W Z Y X     ← each line is one pixel (128-bit bus: W=[127:96], Z=[95:64], Y=[6
 
 ```asm
 # Each thread stores its own ID as an integer in all components.
-THREAD_ID v0.xyzw          # v0 = global_tid
+THREAD_ID v0.xyzw       # v0.xyzw = absolute thread index
+LDI_LO v0.w, 0x00FF     # Make alpha opaque
 FLUSH
-STORE v0, 0x0000           # Output 32 pixels
+STORE v0, 0x0000        # store block of v0 at 0x0000
 FLUSH
 RETURN
 ```
@@ -633,32 +657,31 @@ RETURN
 ### Example 2: Float Gradient (R = x/32, G = y/32)
 
 ```asm
-THREAD_ID v0.xyzw
-LDI_LO v1.xyzw,  0x001F   # column mask
-LDI_LO v3.xyzw,  0x0005   # row shift
-LDI_LO v5.xyzw,  0x0004   # byte-addr shift
+THREAD_ID v0.xyzw        # v0 = global_tid
+LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (mask for lower 5 bits)
+LDI_LO v3.xyzw, 0x0005  # v3 = 5 (shift for >>5)
 LDI_LO v10.xyzw, 0x0000
-LDI_HI v10.xyzw, 0x3D00   # v10 = 0.03125 = 1/32
+LDI_HI v10.xyzw, 0x3D00 # v10 = 0x3D000000 = 0.03125f = 1/32
 LDI_LO v13.xyzw, 0x0000
-LDI_HI v13.xyzw, 0x3F80   # v13 = 1.0f (alpha)
-
-IAND v4.xyzw, v0, v1       # x = col
-ISHR v6.xyzw, v0, v3       # y = row
-ISHL v2.xyzw, v0, v5       # byte addr
-
-I2F v8.xyzw, v4            # float(x)
-I2F v9.xyzw, v6            # float(y)
-FMUL v11.xyzw, v8, v10     # R = x/32
-FMUL v12.xyzw, v9, v10     # G = y/32
-
-FMUL v14.x, v11, v13       # v14.X = R
-FMUL v14.y, v12, v13       # v14.Y = G
-                            # v14.Z stays 0 (never written)
-FMUL v14.w, v13, v13       # v14.W = 1.0f (alpha)
-F2I v15.xyzw, v14          # convert float to int (0-255)
-
-FLUSH
-STORE v15, 0x0000
+LDI_HI v13.xyzw, 0x437F # v13 = 0x437F0000 = 255.0f (alpha constant and scale factor)
+IAND v4.xyzw, v0, v1    # v4 = x (column, 0..31)
+ISHR v6.xyzw, v0, v3    # v6 = y (row, 0..31)
+I2F v8.xyzw, v4         # v8 = float(x) in all 4 components
+I2F v9.xyzw, v6         # v9 = float(y) in all 4 components
+FMUL v11.xyzw, v8, v10  # v11 = x/32 in all 4 components (R value)
+FMUL v12.xyzw, v9, v10  # v12 = y/32 in all 4 components (G value)
+# Assemble output vector v14 = {X=R*255, Y=G*255, Z=0, W=255.0f}
+# Z is left as 0 (VRF initialized to 0, never written)
+LDI_LO v15.xyzw, 0x0000
+LDI_HI v15.xyzw, 0x437F # v15 = 255.0f in all components
+LDI_LO v16.xyzw, 0x0000 # v16 = 0.0f
+FMUL v14.x, v11, v13    # v14.X = (x/32) * 255.0f = R  [write X only]
+FMUL v14.y, v12, v13    # v14.Y = (y/32) * 255.0f = G  [write Y only]
+IADD v14.z, v16, v16    # v14.Z = 0.0f
+IADD v14.w, v15, v16    # v14.W = 255.0f
+F2I v15.xyzw, v14       # Convert float RGBA to integer (0-255)
+FLUSH                    # drain pipeline before MCU reads VRF
+STORE v15, 0x0000       # store {W=255, Z=0, Y=G, X=R}
 FLUSH
 RETURN
 ```
@@ -666,36 +689,35 @@ RETURN
 ### Example 3: Checkerboard (White if x+y even, Black if odd)
 
 ```asm
-THREAD_ID v0.xyzw
-LDI_LO v1.xyzw, 0x001F
-LDI_LO v3.xyzw, 0x0005
-LDI_LO v5.xyzw, 0x0004
+THREAD_ID v0.xyzw        # v0 = global_tid = warp_offset + lane
+LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (mask for lower 5 bits)
+LDI_LO v3.xyzw, 0x0005  # v3 = 5 (shift amount for >> 5)
+LDI_LO v5.xyzw, 0x0004  # v5 = 4 (shift amount for * 16 byte addr)
+IAND v4.xyzw, v0, v1    # v4 = x = local_tid (column, 0..31)
+ISHR v6.xyzw, v0, v3    # v6 = y = warp_y (row, 0..31)
+ISHL v2.xyzw, v0, v5    # v2 = global_tid * 16 (byte address in framebuffer)
+IADD v7.xyzw, v4, v6    # v7 = x + y
+LDI_LO v8.xyzw, 0x0001  # v8 = 1 (bit mask)
+IAND v9.xyzw, v7, v8    # v9 = (x + y) & 1  (0=even=white, 1=odd=black)
+LDI_LO v10.xyzw, 0x0000 # v10 = 0 (comparison value for even check)
+ICMP_EQ p0, v9, v10     # p0 = (v9 == 0) = (x+y is even) = white
+FLUSH                    # REQUIRED: settle PRF before BRA_DIV
+SSY reconv               # save reconvergence PC
+BRA_DIV white, p0        # even (white) threads jump to white; odd fall through
 
-IAND v4.xyzw, v0, v1       # x
-ISHR v6.xyzw, v0, v3       # y
-ISHL v2.xyzw, v0, v5       # byte addr
-
-IADD v7.xyzw, v4, v6       # x + y
-LDI_LO v8.xyzw, 0x0001
-IAND v9.xyzw, v7, v8       # (x+y) & 1
-LDI_LO v10.xyzw, 0x0000
-ICMP_EQ p0, v9, v10        # p0 = (even)
-FLUSH
-SSY reconv
-BRA_DIV white, p0          # even → white; odd → black (fall-through)
-
-# Black
-LDI_LO v11.xyzw, 0x0000
+# ---- Black path (odd = black = not-taken, falls through) ----
+LDI_LO v11.xyzw, 0x0000 # v11 = 0 (black)
+STORE v11, 0x0000
 SYNC
 
-# White
+# ---- White path (even = white = taken) ----
 white:
-LDI_LO v11.xyzw, 0x0000
-LDI_HI v11.xyzw, 0x3F80   # 1.0f
+LDI_LO v11.xyzw, 0x00FF # v11 = 255 (white)
+STORE v11, 0x0000
 SYNC
 
+# ---- Reconvergence ----
 reconv:
 FLUSH
-STORE v11, 0x0000
 RETURN
 ```
