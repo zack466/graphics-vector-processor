@@ -14,7 +14,7 @@ TYPE_SYS  = 6
 FPU_OPCODES = {
     'FADD': 1, 'FSUB': 2, 'FMUL': 3, 'FMADD': 4, 'FRCP': 5, 'FSQRT': 6,
     'FLOG2': 7, 'FEXP2': 8, 'FMIN': 9, 'FMAX': 10, 'FCMP_LT': 11, 'FCMP_EQ': 12,
-    'F2I': 13, 'I2F': 14, 'SIN': 16, 'COS': 17, 'PAND': 24, 'POR': 25, 'PXOR': 26
+    'F2I': 13, 'I2F': 14, 'SIN': 16, 'COS': 17, 'MOV': 18, 'PAND': 24, 'POR': 25, 'PXOR': 26
 }
 
 # ALU Opcodes

@@ -393,8 +393,15 @@ class SemanticAnalyzer:
     def visit_LValue(self, node):
         base_type = self.get_type(node.name)
         full_name = node.name
+        
         if node.swizzle:
-            full_name += f".{node.swizzle}"
+            # If a variable is being READ (used in an expression), we must 
+            # splat single-character swizzles so the FPU/ALU routes it to the .x lane!
+            if len(node.swizzle) == 1:
+                full_name += f".{node.swizzle * 4}"  # e.g., 'y' becomes 'yyyy'
+            else:
+                full_name += f".{node.swizzle}"
+                
         return full_name, base_type
 
     def visit_BinOp(self, node):

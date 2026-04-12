@@ -118,7 +118,9 @@ Example: `FMUL v3.xyzw, v1.xxxx, v2` multiplies all 4 components of `v2` by the 
 
 ### 4.1 ALU Instructions
 
-All ALU instructions operate on 32-bit integers. Each instruction runs in **all 32 threads** simultaneously; the write mask selects which components are updated.
+All ALU instructions operate on 32-bit integers.
+Only the 0th component of the src registers are input into the ALU unit itself.
+Each instruction runs in **all 32 threads** simultaneously; the write mask selects which components the result is broadcasted into.
 
 #### `THREAD_ID  dest[.mask]`
 Load the global thread ID into all selected components of `dest`.
@@ -212,6 +214,9 @@ Float sine: `dest = sin(src1)` (radians)
 
 #### `COS  dest[.mask], src1`
 Float cosine: `dest = cos(src1)` (radians)
+
+#### `MOV  dest[.mask], src1[.swizzle]`
+Register move: `dest = src1`. Copies the (optionally swizzled) value of `src1` into `dest`, gated by the write mask. Zero-latency passthrough through the FPU pipeline — no floating-point operation is performed.
 
 #### `FMIN  dest[.mask], src1[.swizzle], src2`
 Float minimum: `dest = min(src1, src2)`

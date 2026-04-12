@@ -379,6 +379,8 @@ begin
                     -- also present RIGHT NOW", which is the correct zero-cycle match.
                     -- =================================================================
                     if 0 = i - 1 then
+                        -- MOV: zero-latency passthrough of op_a → result register
+                        if opcode = OP_MOV  then shared_res_pipe(i) <= op_a;     end if;
                         if opcode = OP_PAND then shared_cmp_pipe(i) <= raw_pand; end if;
                         if opcode = OP_POR  then shared_cmp_pipe(i) <= raw_por;  end if;
                         if opcode = OP_PXOR then shared_cmp_pipe(i) <= raw_pxor; end if;
@@ -402,7 +404,7 @@ begin
     --
     -- In practice, FPU_MAX_LATENCY is set to the longest IP latency, so these
     -- combinational override paths will fire for at least one IP (the slowest).
-    process(shared_res_pipe, shared_cmp_pipe, opcode_pipe, cmp_inv_pipe, opcode,
+    process(shared_res_pipe, shared_cmp_pipe, opcode_pipe, cmp_inv_pipe, opcode, op_a,
             raw_madd, raw_rcp, raw_sqrt, raw_log2, raw_exp2, raw_sin, raw_cos,
             raw_min, raw_max, raw_i2f, raw_f2i, raw_lt, raw_eq, raw_pand, raw_por, raw_pxor)
     begin
@@ -443,6 +445,7 @@ begin
         -- realistic case FPU_MAX_LATENCY > 0, this branch is dead code that
         -- synthesis eliminates, adding zero area.
         if 0 = FPU_MAX_LATENCY then
+            if opcode = OP_MOV  then result    <= op_a;     end if;
             if opcode = OP_PAND then comp_flag <= raw_pand; end if;
             if opcode = OP_POR  then comp_flag <= raw_por;  end if;
             if opcode = OP_PXOR then comp_flag <= raw_pxor; end if;

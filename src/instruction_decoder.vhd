@@ -208,7 +208,7 @@ begin
                 when OP_FADD | OP_FSUB | OP_FMUL | OP_FMADD |
                      OP_FRCP | OP_FSQRT | OP_FLOG2 | OP_FEXP2 |
                      OP_FMIN | OP_FMAX | OP_F2I | OP_I2F |
-                     OP_SIN  | OP_COS =>
+                     OP_SIN  | OP_COS  | OP_MOV =>
                     v_fpu.wb_mux_sel  := WB_MUX_FPU;
                     v_fpu.vrf_we      := '1';
                     v_fpu.prf_we      := '0';

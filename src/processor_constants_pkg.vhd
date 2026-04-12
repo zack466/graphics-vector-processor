@@ -156,6 +156,7 @@ package processor_constants_pkg is
     constant OP_I2F     : std_logic_vector(5 downto 0) := "001110"; -- Integer-to-float conversion
     constant OP_SIN     : std_logic_vector(5 downto 0) := "010000"; -- Sine (radians)
     constant OP_COS     : std_logic_vector(5 downto 0) := "010001"; -- Cosine (radians)
+    constant OP_MOV     : std_logic_vector(5 downto 0) := "010010"; -- Register move: rd = rs1 (with write mask)
 
     -- Predicate Logic Opcodes
     -- WHY these are FPU-type instructions (INST_TYPE_FPU) rather than ALU:

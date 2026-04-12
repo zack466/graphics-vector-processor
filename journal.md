@@ -17,7 +17,6 @@
   Or just one warp that utilizes latency hiding should be ok.
 * implement branch with link/exchange (BRA_L, BRA_X) instructions. Also PUSH_L and POP_L which push/pop the link register for arbitrary call depths.
 * implement MOV instruction for floating point registers
-  * screw it just copy the alu lanes four times so it matches the fpu lanes. Will make the designs more uniform.
 
 # Agent changes
 
@@ -429,3 +428,18 @@ Running `python tools/run_all_tests.py` produced simulation output but no PNG im
 - Updated tests to rescale floating-point color values from 0.0-1.0 to integer values from 0-255 using the `F2I` (Float-to-Integer) instruction before storing to the block memory buffer.
 - Updated `tools/runner.py` and `tools/check_pixels.py` to parse 32-bit packed integers instead of floats.
 - Updated `programming_manual.md` and `README.md` to reflect the new `STORE`/`LOAD` format and block transfer memory controller.
+
+
+## Date: 2026-04-11
+
+### Added MOV FPU instruction
+
+Added `OP_MOV` (opcode `"010010"`, decimal 18) as a new FPU-type instruction that copies one vector register into another with a write mask (`rd.mask = rs1`).
+
+**Files changed:**
+- `src/processor_constants_pkg.vhd` — Added `OP_MOV` constant.
+- `src/instruction_decoder.vhd` — Added `OP_MOV` to the standard FPU math ops case branch (sets `vrf_we='1'`, `prf_we='0'`, `wb_mux_sel=WB_MUX_FPU`).
+- `src/fpu_lane.vhd` — MOV is handled as a zero-latency passthrough: `op_a` is injected into `shared_res_pipe(1)` at pipeline stage i=1 (same pattern as PAND/POR/PXOR zero-latency predicate ops). Added `op_a` to the output process sensitivity list and the FPU_MAX_LATENCY=0 bypass guard.
+- `tools/assembler.py` — Added `'MOV': 18` to `FPU_OPCODES`.
+
+**Assembly syntax:** `MOV rd.mask, rs1[.swiz]` — identical to other two-operand FPU instructions; `rs2` is unused (assembler defaults to 0).
