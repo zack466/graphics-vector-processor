@@ -52,11 +52,12 @@
 --          [13:10]=rs2     [9:7]=swiz_a          [6:4]=reserved
 --          (no rs3, no cmp fields — integer ops are simpler than FPU)
 --
---   IMM  : [31:26]=opcode  [25:10]=imm16        [9]=full_mask [8]=reserved
+--   IMM  : [31:30]=LDI_subop  [29:26]=write_mask  [25:10]=imm16  [9:8]=reserved
 --          [7:4]=rd
+--          (LDI_subop: "00"=LDI_LO, "01"=LDI_HI; decoded by alu_lane on opcode[5:4])
+--          (write_mask: 4-bit component mask — same W/Z/Y/X convention as ALU/FPU)
 --          (rs1_addr is set equal to rd_addr so the ALU can read the current
 --           destination value; needed by LDI_HI to preserve the lower 16 bits)
---          (full_mask bit: 1 => write_mask="1111" to update all components)
 --
 --   MEM  : [31:26]=opcode  [25:12]=base_addr(14b) [11:8]=reserved
 --          [7:4]=dest_src_reg
@@ -344,16 +345,18 @@ begin
         elsif inst_type = INST_TYPE_IMM then
             -- ----------------------------------------------------------------
             -- IMMEDIATE INSTRUCTION MAP (Routes to ALU Lane)
-            -- [31:26] Opcode | [25:10] Imm16 | [9] Full Mask | [8] Rsvd
-            -- [7:4] Dest     | [3:0] Type
+            -- [31:30] LDI sub-op | [29:26] Write Mask | [25:10] Imm16
+            -- [9:8] Reserved     | [7:4] Dest          | [3:0] Type
             -- ----------------------------------------------------------------
+            -- internal_opcode = instruction[31:26]:
+            --   bits[5:4] = LDI sub-op (00=LDI_LO, 01=LDI_HI); decoded by alu_lane
+            --   bits[3:0] = write_mask (carried in opcode lower nibble; alu_lane ignores)
             v_alu.opcode         := internal_opcode;
             v_alu.imm_data       := instruction(25 downto 10);
-            -- full_mask bit: when '1', write_mask = "1111" (update all four
-            -- VRF components with the same immediate value). When '0',
-            -- write_mask = "0000" — useful if only a subset should be loaded,
-            -- though the assembler typically always sets this to '1' for LDI.
-            v_alu.write_mask     := instruction(9) & instruction(9) & instruction(9) & instruction(9);
+            -- 4-bit component write_mask extracted directly from bits [29:26].
+            -- Supports any combination of X/Y/Z/W components — same encoding
+            -- as the ALU/FPU mask field (bit0=X, bit1=Y, bit2=Z, bit3=W).
+            v_alu.write_mask     := instruction(29 downto 26);
             v_alu.rd_addr_local  := instruction(7 downto 4);
             -- WHY rs1_addr_local = rd_addr_local:
             --   LDI_HI loads the upper 16 bits of a register while preserving

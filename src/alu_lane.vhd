@@ -166,20 +166,26 @@ begin
         raw_comp <= '0';
 
         if is_load = '1' then
-            -- WHY separate is_load gate: LDI opcodes share bits with integer
-            -- opcodes in the encoding space. Using is_load as a priority
-            -- override keeps the opcode decode for LDI completely separate
-            -- and avoids an ordering dependency in the case statement.
-            case opcode is
-                when OP_LDI_LO =>
-                    -- Load immediate into the lower 16 bits, zero-extending.
+            -- WHY separate is_load gate: the IMM instruction encoding embeds the
+            -- 4-bit write-mask in opcode[3:0], so the 6-bit opcode overlaps with
+            -- integer ALU opcodes. Using is_load as a priority override ensures
+            -- LDI instructions are never misinterpreted as integer ops.
+            --
+            -- WHY only check opcode[5:4]: bits [3:0] of the opcode carry the
+            -- component write-mask (extracted from instruction[29:26] by the
+            -- decoder). Only the top 2 bits distinguish LDI_LO ("00") from
+            -- LDI_HI ("01"); the mask bits are irrelevant here and must be
+            -- masked out to avoid matching failures.
+            case opcode(5 downto 4) is
+                when "00" =>
+                    -- LDI_LO: load immediate into the lower 16 bits, zero-extending.
                     raw_res <= x"0000" & imm_data;
-                when OP_LDI_HI =>
-                    -- Load immediate into the upper 16 bits, PRESERVING the
-                    -- lower 16 bits from op_a. This is the standard 32-bit
-                    -- immediate construction idiom: LDI_LO first, then LDI_HI.
-                    -- op_a carries the current register value forwarded from
-                    -- the VRF so the lower half is not lost.
+                when "01" =>
+                    -- LDI_HI: load immediate into the upper 16 bits, PRESERVING the
+                    -- lower 16 bits from op_a. This is the standard 32-bit immediate
+                    -- construction idiom: issue LDI_LO first, then LDI_HI.
+                    -- op_a carries the current register value (rs1=rd in the decoder)
+                    -- so the lower half is not lost.
                     raw_res <= imm_data & op_a(15 downto 0);
                 when others => null;
             end case;

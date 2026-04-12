@@ -259,6 +259,21 @@ class TACInst:
         if self.src2: parts.append(self.src2)
         return " ".join(parts)
 
+
+class CallFinder:
+    def __init__(self):
+        self.has_call = False
+    def visit(self, node):
+        if isinstance(node, Call) and node.func_name not in ['thread_id', 'float', 'int', 'vec2', 'vec3', 'vec4']:
+            self.has_call = True
+        elif hasattr(node, '__dict__'):
+            for v in vars(node).values():
+                if isinstance(v, list):
+                    for item in v:
+                        if isinstance(item, ASTNode): self.visit(item)
+                elif isinstance(v, ASTNode):
+                    self.visit(v)
+
 # ==========================================
 # 5. Semantic Analyzer & TAC Generator
 # ==========================================
@@ -267,11 +282,21 @@ class CompileError(Exception):
     pass
 
 class SemanticAnalyzer:
-    def __init__(self):
+    def __init__(self, enable_inlining=True):
         self.ir: List[TACInst] = []
         self.symtab: Dict[str, str] = {}
         self.temp_count = 0
         self.current_func = None
+        
+        self.enable_inlining = enable_inlining
+        self.functions = {}
+        self.divergence_depth = 0  # >0 while inside an if/else divergent region
+        self.is_inlining = False
+        self.inline_count = 0
+        self.inline_prefix = ""
+        self.aliases = {}
+        self.inline_end_label = None
+        self.inline_ret_temp = None
 
     def emit(self, op: str, dest: str = None, src1: str = None, src2: str = None):
         inst = TACInst(op, dest, src1, src2)
@@ -292,6 +317,9 @@ class SemanticAnalyzer:
 
     def is_float_type(self, var_type: str) -> bool:
         return var_type in ['float', 'vec2', 'vec3', 'vec4']
+        
+    def _resolve_name(self, name: str) -> str:
+        return self.aliases.get(name, name)
 
     def visit(self, node: Any) -> Tuple[Optional[str], Optional[str]]:
         method_name = f'visit_{type(node).__name__}'
@@ -305,12 +333,11 @@ class SemanticAnalyzer:
         for stmt in node.statements:
             if type(stmt).__name__ == 'FuncDecl':
                 self.symtab[stmt.name] = stmt.ret_type
+                self.functions[stmt.name] = stmt
 
         funcs = sorted(node.statements, key=lambda f: 0 if getattr(f, 'name', '') == 'main' else 1)
-        
         for stmt in funcs:
             self.visit(stmt)
-            
         return None, None
 
     def visit_FuncDecl(self, node):
@@ -328,7 +355,8 @@ class SemanticAnalyzer:
             
         self.visit(node.body)
         
-        if not self.ir or self.ir[-1].op not in ['RET', 'TAIL_CALL']:
+        # Don't emit an extra RET if we ended with RET_PIXEL
+        if not self.ir or self.ir[-1].op not in ['RET', 'TAIL_CALL', 'RET_PIXEL']:
             self.emit("RET")
             
         return None, None
@@ -339,25 +367,30 @@ class SemanticAnalyzer:
         return None, None
 
     def visit_VarDecl(self, node):
-        if node.name in self.symtab and not node.name.startswith('_'):
-            pass 
-        self.symtab[node.name] = node.var_type
+        actual_name = f"{self.inline_prefix}{node.name}" if self.is_inlining else node.name
+        if self.is_inlining:
+            self.aliases[node.name] = actual_name
+            
+        self.symtab[actual_name] = node.var_type
         
         if node.init_expr:
             val_name, val_type = self.visit(node.init_expr)
-            self.emit("MOV", node.name, val_name)
+            self.emit("MOV", actual_name, val_name)
         return None, None
 
     def visit_Assign(self, node):
         if node.target.name == 'out_color':
+            if self.divergence_depth > 0:
+                raise CompileError(
+                    "'out_color' cannot be assigned inside a conditional branch: "
+                    "RETURN reg cannot execute in a divergent path. "
+                    "Compute the pixel value before any 'if' statement and assign out_color unconditionally.")
             expr_name, _ = self.visit(node.expr)
             self.emit("FLUSH")
-            self.emit("STORE", None, expr_name, "0x0000") 
-            self.emit("FLUSH")
-            self.emit("RET") 
+            self.emit("RET_PIXEL", None, expr_name)
             return None, None
 
-        target_name = node.target.name
+        target_name = self._resolve_name(node.target.name)
         if node.target.swizzle:
             target_name += f".{node.target.swizzle}"
             
@@ -366,6 +399,14 @@ class SemanticAnalyzer:
         return None, None
 
     def visit_ReturnStmt(self, node):
+        if self.is_inlining:
+            if node.expr:
+                val_name, val_type = self.visit(node.expr) 
+                if self.inline_ret_temp:
+                    self.emit("MOV", self.inline_ret_temp, val_name)
+            self.emit("JMP", self.inline_end_label)
+            return None, None
+            
         if node.expr:
             if isinstance(node.expr, Call) and node.expr.func_name not in ['thread_id', 'float', 'int', 'vec2', 'vec3', 'vec4']:
                 self._setup_call_args(node.expr)
@@ -386,8 +427,8 @@ class SemanticAnalyzer:
         return temp, var_type
 
     def visit_LValue(self, node):
-        base_type = self.get_type(node.name)
-        full_name = node.name
+        full_name = self._resolve_name(node.name)
+        base_type = self.get_type(full_name)
         
         if node.swizzle:
             if len(node.swizzle) == 1:
@@ -419,6 +460,42 @@ class SemanticAnalyzer:
         self.emit(hw_op, temp, left_val, right_val)
         return temp, res_type
 
+    def _should_inline(self, func_node):
+        if not self.enable_inlining: return False
+        if len(func_node.body.statements) > 15: return False
+        
+        finder = CallFinder()
+        finder.visit(func_node.body)
+        if finder.has_call: return False
+        
+        return True
+        
+    def _inline_call(self, func_node, args):
+        arg_vals = [self.visit(a)[0] for a in args]
+        
+        self.inline_count += 1
+        self.is_inlining = True
+        self.inline_prefix = f"_inl{self.inline_count}_"
+        self.inline_end_label = f"INLINE_END_{self.inline_count}"
+        
+        ret_type = func_node.ret_type
+        self.inline_ret_temp = self.new_temp(ret_type) if ret_type != 'void' else None
+        old_aliases = self.aliases.copy()
+        
+        for idx, (p_type, p_name) in enumerate(func_node.params):
+            actual_param = f"{self.inline_prefix}{p_name}"
+            self.symtab[actual_param] = p_type
+            self.aliases[p_name] = actual_param
+            self.emit("MOV", actual_param, arg_vals[idx])
+            
+        self.visit(func_node.body)
+        
+        self.emit("LABEL", self.inline_end_label)
+        self.aliases = old_aliases
+        self.is_inlining = False
+        
+        return self.inline_ret_temp, ret_type
+
     def visit_Call(self, node):
         if node.func_name == 'thread_id':
             temp = self.new_temp('int')
@@ -441,6 +518,10 @@ class SemanticAnalyzer:
                 comp = ['x', 'y', 'z', 'w'][i]
                 self.emit('MOV', f"{temp}.{comp}", arg_val)
             return temp, node.func_name
+            
+        func_ast = self.functions.get(node.func_name)
+        if func_ast and self._should_inline(func_ast):
+            return self._inline_call(func_ast, node.args)
             
         self._setup_call_args(node)
         self.emit("CALL", node.func_name)
@@ -467,18 +548,20 @@ class SemanticAnalyzer:
         label_if = f"IF_TRUE_{self.temp_count}"
         label_reconv = f"RECONV_{self.temp_count}"
         self.temp_count += 1
-        
+
         self.emit("SSY", label_reconv)
         self.emit("BRA_DIV", label_if, cond_val)
-        
+
+        self.divergence_depth += 1
         if node.false_block:
             self.visit(node.false_block)
         self.emit("SYNC")
-        
+
         self.emit("LABEL", label_if)
         self.visit(node.true_block)
         self.emit("SYNC")
-        
+        self.divergence_depth -= 1
+
         self.emit("LABEL", label_reconv)
         self.emit("FLUSH")
         return None, None
@@ -514,10 +597,13 @@ class InstructionSelector:
                 if not leaf_status[self.current_func] and self.current_func != 'main':
                     self.lowered_ir.append(TACInst("POP_L"))
                 self.lowered_ir.append(TACInst("JMP", inst.dest))
+            elif inst.op == 'RET_PIXEL':
+                # --- NEW LOWERING FOR RETURN REG ---
+                self.lowered_ir.append(TACInst("RETURN", None, inst.src1))
             elif inst.op == 'RET':
                 if self.current_func == 'main':
                     self.lowered_ir.append(TACInst("FLUSH"))
-                    self.lowered_ir.append(TACInst("RETURN"))
+                    self.lowered_ir.append(TACInst("RETURN")) # Bare return
                 else:
                     if not leaf_status[self.current_func]:
                         self.lowered_ir.append(TACInst("POP_L"))
@@ -527,7 +613,6 @@ class InstructionSelector:
             elif inst.op == 'FDIV':
                 self._lower_fdiv(inst)
             else:
-                # We now let MOV pass straight through to hardware without lowering
                 self.lowered_ir.append(inst)
                 
         self.sa.ir = self.lowered_ir
@@ -571,19 +656,23 @@ class RegisterAllocator:
         self.allocation = {}
 
     def _get_base_var(self, name: str) -> Optional[str]:
-        if not name or name.startswith('0x') or name.startswith('IF_TRUE') or name.startswith('RECONV'):
+        if not name or name.startswith('0x') or name.startswith('IF_TRUE') or name.startswith('RECONV') or name.startswith('INLINE'):
             return None
         return name.split('.')[0]
 
     def _get_use_def(self, inst: TACInst) -> Tuple[set, set]:
         uses, defs = set(), set()
         
-        if inst.op in ['JMP', 'SSY', 'FLUSH', 'SYNC', 'RETURN', 'LABEL', 'PUSH_L', 'POP_L', 'BRA_L', 'BRA_X']:
+        if inst.op in ['JMP', 'SSY', 'FLUSH', 'SYNC', 'LABEL', 'PUSH_L', 'POP_L', 'BRA_L', 'BRA_X']:
             pass
         elif inst.op == 'BRA_DIV':
             u = self._get_base_var(inst.dest) 
             if u: uses.add(u)
         elif inst.op == 'STORE':
+            u = self._get_base_var(inst.src1)
+            if u: uses.add(u)
+        elif inst.op == 'RETURN':
+            # --- NEW LIVENESS SUPPORT FOR RETURN REG ---
             u = self._get_base_var(inst.src1)
             if u: uses.add(u)
         else:
@@ -689,8 +778,6 @@ class RegisterAllocator:
             
             is_redundant = False
             
-            # --- PEEPHOLE OPTIMIZER ---
-            # Clean up redundant MOVs assigned to the exact same physical register
             if inst.op == 'MOV':
                 db = self._get_base_var(new_dest)
                 s1b = self._get_base_var(new_src1)
@@ -733,6 +820,10 @@ class AssemblyEmitter:
             if inst.op == 'STORE':
                 args.append(str(inst.src1))
                 args.append(str(inst.src2))
+            elif inst.op == 'RETURN':
+                # --- NEW FORMATTING SUPPORT FOR RETURN REG ---
+                if inst.src1 is not None:
+                    args.append(str(inst.src1))
             else:
                 if inst.dest is not None: args.append(str(inst.dest))
                 if inst.src1 is not None: args.append(str(inst.src1))
@@ -752,13 +843,20 @@ class AssemblyEmitter:
 # ==========================================
 if __name__ == "__main__":
     shader_code = """
-    // Recursive function with Tail Call Optimization (TCO)
     vec4 recursive_blend(int step, vec4 color) {
         if (step == 0) {
             return color;
         }
         color.y = color.y + 0.1;
-        return recursive_blend(step - 1, color); // Tail Call!
+        return recursive_blend(step - 1, color); 
+    }
+
+    vec4 adjust_brightness(vec4 color, float amount) {
+        vec4 temp = color;
+        temp.x = temp.x + amount;
+        temp.y = temp.y + amount;
+        temp.z = temp.z + amount;
+        return temp;
     }
 
     void main() {
@@ -769,8 +867,8 @@ if __name__ == "__main__":
         vec4 base_color;
         base_color.xyzw = vec4(fx / 32.0, 0.0, 0.0, 1.0);
         
-        vec4 final_color = recursive_blend(5, base_color);
-        out_color = final_color;
+        vec4 blended = recursive_blend(5, base_color);
+        out_color = adjust_brightness(blended, 0.2);
     }
     """
 
@@ -779,7 +877,7 @@ if __name__ == "__main__":
         ast = parser.parse(shader_code)
         
         print("2. Semantic Analysis...")
-        semantic = SemanticAnalyzer()
+        semantic = SemanticAnalyzer(enable_inlining=True)
         semantic.visit(ast)
         
         print("3. Instruction Selection...")

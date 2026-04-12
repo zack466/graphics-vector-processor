@@ -319,17 +319,32 @@ package processor_constants_pkg is
     constant OP_THREAD_ID : std_logic_vector(5 downto 0) := "001110"; -- rd = csr_warp_offset + thread_id (per-thread unique ID)
 
     -- ========================================================================
-    -- IMMEDIATE OPCODES [31:26] (When Type == 0100)
+    -- IMMEDIATE OPCODES (When Type == INST_TYPE_IMM = "0100")
     -- ========================================================================
     -- WHY two instructions (LDI_LO / LDI_HI) rather than one 32-bit load:
     --   The instruction word is only 32 bits wide.  After reserving 4 bits for
-    --   INST_TYPE, 6 for opcode, and 4 for the destination register, only 18
-    --   bits remain — not enough for a full 32-bit immediate.  LDI_LO loads the
-    --   lower 16 bits of a register; LDI_HI loads the upper 16 bits.  Together
-    --   they allow any 32-bit constant to be materialized in two instructions,
-    --   which is sufficient for loading addresses and wide constants.
-    constant OP_LDI_LO  : std_logic_vector(5 downto 0) := "000000"; -- Load 16-bit immediate into lower half of rd
-    constant OP_LDI_HI  : std_logic_vector(5 downto 0) := "000001"; -- Load 16-bit immediate into upper half of rd
+    --   INST_TYPE, 4 for the destination register, 16 for the immediate value,
+    --   and 4 for the component write-mask, only 4 bits remain for an opcode —
+    --   enough to encode two variants (LO / HI).  LDI_LO loads the lower 16 bits
+    --   of a register; LDI_HI loads the upper 16 bits while preserving the lower.
+    --   Together they allow any 32-bit constant in two instructions.
+    --
+    -- IMM instruction word layout:
+    --   [31:30] = LDI sub-opcode  (2 bits: "00" = LDI_LO, "01" = LDI_HI)
+    --   [29:26] = write_mask      (4 bits: W Z Y X, same convention as ALU/FPU)
+    --   [25:10] = imm16           (16-bit immediate value)
+    --   [9:8]   = reserved
+    --   [7:4]   = rd              (4-bit destination register index)
+    --   [3:0]   = inst_type       (INST_TYPE_IMM = "0100")
+    --
+    -- The 6-bit internal_opcode seen by the ALU lane equals instruction[31:26]:
+    --   opcode[5:4] = LDI sub-op   (determines LO vs HI path in alu_lane)
+    --   opcode[3:0] = write_mask   (carried along; alu_lane ignores these bits)
+    --
+    -- These canonical constants have write_mask = "0000" (all-zero nibble).
+    -- The assembler ORs the actual 4-bit mask from the destination operand.
+    constant OP_LDI_LO  : std_logic_vector(5 downto 0) := "000000"; -- LDI_LO: sub-op bits[5:4]="00"
+    constant OP_LDI_HI  : std_logic_vector(5 downto 0) := "010000"; -- LDI_HI: sub-op bits[5:4]="01"
 
     -- ========================================================================
     -- MEMORY OPCODES [31:26] (When Type == 0101)

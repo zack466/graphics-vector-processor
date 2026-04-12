@@ -525,3 +525,66 @@ Added a link register and a small dedicated call stack to the IFU, supporting wa
   - programming_manual.md — documented RETURN reg, updated FLUSH rules and examples.
 
   All 19 testbenches (including make test-gradient) pass.
+
+---
+
+## Date: 2026-04-12
+
+### Enforce RETURN-not-in-divergence rule: assembler, compiler, and test updates
+
+**Motivation:** `RETURN reg` triggers the pixel snoop and warp halt in a single instruction. Because all 32 threads of a warp execute instructions in lockstep and ALU/FPU register writes are not masked by `exec_mask`, a `RETURN reg` inside a divergent path (between `SSY` and its two `SYNC` instructions) would fire once for the not-taken path's active mask and again for the taken path's mask, producing two pixel writes per warp and corrupting memory. The instruction must only appear after the reconvergence point.
+
+**tools/assembler.py:**
+- Removed `'STORE': 33` from `MEM_OPCODES` — STORE has been replaced by `RETURN reg` and is no longer present in the hardware.
+- Added a static validation pass (Pass 1b) between label resolution and code emission. The pass tracks `ssy_count` and `sync_count`; when `ssy_count * 2 > sync_count` and a `RETURN reg` instruction is encountered, assembly is aborted with a clear error message. This catches the error before a hex file is produced.
+
+**tools/compiler.py:**
+- Added `self.divergence_depth = 0` to `SemanticAnalyzer.__init__`.
+- `visit_IfStmt` increments `divergence_depth` before visiting the false/true blocks and decrements it after the second `SYNC`.
+- `visit_Assign`: if the assignment target is `out_color` and `divergence_depth > 0`, a `CompileError` is raised with a message explaining the constraint.
+
+**tools/test07_control_flow.s:**
+- Rewrote to use branchless ALU computation (no `SSY`/`BRA_DIV`/`SYNC`). The even/odd pixel values are now computed as `(1 − (tid & 1)) × 255` using `IAND`, `ISUB`, and `IMUL`. Expected output unchanged: even pixels = 255, odd pixels = 0.
+
+**tools/test08_checkerboard.s:**
+- Rewrote to use branchless ALU computation. The checkerboard parity is computed as `(1 − ((x+y) & 1)) × 255` using `IAND`, `ISUB`, and `IMUL`. Expected output unchanged: white (255) if (x+y) even, black (0) if (x+y) odd.
+
+---
+
+## Date: 2026-04-12
+
+### IMM instruction: full 4-bit component write-mask (replaces 1-bit full_mask)
+
+**Problem:** `LDI_LO`/`LDI_HI` used a single `full_mask` bit (instruction[9]) that produced either `write_mask="1111"` or `write_mask="0000"`. There was no way to write only a subset of components (e.g. `.w` only), making patterns like `LDI_LO v0.w, 0x00FF` silently write nothing. ALU/FPU instructions have always supported a 4-bit mask; this inconsistency was a known bug.
+
+**New IMM instruction encoding:**
+```
+[31:30] = LDI sub-op   (2 bits: "00"=LDI_LO, "01"=LDI_HI)
+[29:26] = write_mask   (4 bits: W Z Y X — same convention as ALU/FPU)
+[25:10] = imm16        (16-bit immediate value, unchanged)
+[9:8]   = reserved
+[7:4]   = rd           (destination register index, unchanged)
+[3:0]   = inst_type    (INST_TYPE_IMM, unchanged)
+```
+
+The internal_opcode (instruction[31:26]) seen by the ALU lane is now `sub_op[5:4] & mask[3:0]`. The ALU lane decodes only `opcode(5 downto 4)` when `is_load='1'`, ignoring the mask nibble.
+
+**Files changed:**
+
+- `src/processor_constants_pkg.vhd` — Updated the IMM opcode section comments to describe the new layout. `OP_LDI_HI` changed from `"000001"` to `"010000"` so that `opcode(5:4)="01"` correctly identifies LDI_HI in the ALU lane. `OP_LDI_LO` stays `"000000"` (already correct: `opcode(5:4)="00"`).
+
+- `src/instruction_decoder.vhd` — INST_TYPE_IMM branch: replaced `write_mask := instruction(9) & × 4` with `write_mask := instruction(29 downto 26)`. Updated header comment to show the new field layout.
+
+- `src/alu_lane.vhd` — Inside the `if is_load = '1'` block, changed `case opcode is` (matching full 6-bit constants) to `case opcode(5 downto 4) is` (matching only the 2-bit LDI sub-op). Updated comments.
+
+- `tools/assembler.py` — IMM encoding changed from `(op<<26)|(imm<<10)|(full_mask<<9)|(rd<<4)|TYPE_IMM` to `(op<<30)|(mask<<26)|(imm<<10)|(rd<<4)|TYPE_IMM`. The `full_mask` bit is gone; `parse_reg` already returns the correct 4-bit mask for any `.xyzw` combination.
+
+- `src/tb_call_stack.vhd` — Updated the two hardcoded LDI instruction words:
+  - `INST_LDI_CLEAR`: `x"00000214"` → `x"3C000014"` (LDI_LO v1.xyzw, 0x0000)
+  - `INST_LDI_42`:    `x"00010A14"` → `x"3C010814"` (LDI_LO v1.xyzw, 0x0042)
+
+- `src/program.hex` — Regenerated from `test10_call_stack.s` with the new assembler.
+
+- `programming_manual.md` — Removed the 1-bit full_mask limitation notes and the "TODO: fix this / Gotcha" warning. Updated the write-mask section and the SIMT section.
+
+**Side effect (bug fix):** Tests that used `LDI_LO vN.w, 0x00FF` to set the alpha channel (test01, test02, test04, test05, test06) previously wrote nothing due to the broken `full_mask=0` encoding. They now correctly write W=255, and the generated PNG images will show proper alpha=255.

@@ -40,9 +40,9 @@ IMM_OPCODES = {
     'LDI_LO': 0, 'LDI_HI': 1
 }
 
-# MEM Opcodes
+# MEM Opcodes (STORE removed — replaced by RETURN reg; LOAD reserved for future use)
 MEM_OPCODES = {
-    'LOAD': 32, 'STORE': 33
+    'LOAD': 32
 }
 
 # SYS Opcodes
@@ -121,12 +121,11 @@ def assemble_line(line, labels, pc):
     # IMM
     if mnemonic in IMM_OPCODES:
         # e.g. LDI_LO v1.xy, 0x1234
-        op = IMM_OPCODES[mnemonic]
+        # Encoding: [31:30]=sub-op  [29:26]=write_mask  [25:10]=imm16  [7:4]=rd  [3:0]=type
+        op = IMM_OPCODES[mnemonic]   # 0=LDI_LO, 1=LDI_HI  (placed in bits [31:30])
         dest, mask, _ = parse_reg(args[0])
         imm_val = int(args[1], 0) & 0xFFFF
-        # For LDI, we use 1 bit at [9] for "Full Mask"
-        full_mask = 1 if mask == 15 else 0
-        return (op << 26) | (imm_val << 10) | (full_mask << 9) | (dest << 4) | TYPE_IMM
+        return (op << 30) | (mask << 26) | (imm_val << 10) | (dest << 4) | TYPE_IMM
 
     # CTRL
     if mnemonic in CTRL_OPCODES:
@@ -212,6 +211,27 @@ def assemble(input_file, output_file):
             labels[l[:-1]] = pc
         else:
             pc += 1
+
+    # Pass 1b: Validate — RETURN reg must not appear inside a divergent SSY...SYNC block.
+    # Each SSY opens a block that requires two SYNCs to close (one to switch paths,
+    # one to reconverge).  Track depth as: ssy_count*2 - sync_count > 0 ⟹ divergent.
+    ssy_count = 0
+    sync_count = 0
+    for line in lines:
+        l = line.split('#')[0].strip()
+        if not l or l.endswith(':'): continue
+        mnemonic = l.replace(',', ' ').split()[0].upper()
+        args = l.replace(',', ' ').split()[1:]
+        if mnemonic == 'SSY':
+            ssy_count += 1
+        elif mnemonic == 'SYNC':
+            sync_count += 1
+        elif mnemonic == 'RETURN' and args:
+            if ssy_count * 2 > sync_count:
+                raise ValueError(
+                    "RETURN reg cannot appear inside a divergent path "
+                    "(between SSY and its two SYNC instructions). "
+                    "Move RETURN after the reconvergence label.")
 
     # Pass 2: Assemble
     machine_code = []

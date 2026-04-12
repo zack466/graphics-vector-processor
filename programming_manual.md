@@ -10,9 +10,8 @@
    - [FPU Instructions](#42-fpu-instructions)
    - [Reduction Instructions](#43-reduction-instructions)
    - [Immediate (IMM) Instructions](#44-immediate-imm-instructions)
-   - [Memory Instructions](#45-memory-instructions)
-   - [Control Flow Instructions](#46-control-flow-instructions)
-   - [System Instructions](#47-system-instructions)
+   - [Control Flow Instructions](#45-control-flow-instructions)
+   - [System Instructions](#46-system-instructions)
 5. [Pipeline Timing and FLUSH Rules](#5-pipeline-timing-and-flush-rules)
 6. [SIMT Divergence](#6-simt-divergence)
 7. [Writing a Shader to Generate an Image](#7-writing-a-shader-to-generate-an-image)
@@ -96,7 +95,7 @@ Append a dot suffix to the destination register to select which components are w
 
 Example: `IADD v4.xy, v0, v1` writes only the X and Y components of `v4`.
 
-**Note for `LDI_LO`/`LDI_HI`:** These instructions only support a 1-bit "full mask" flag — either all components are written (`.xyzw` or no suffix) or none. Per-component masking is not available for immediate loads.
+**Note for `LDI_LO`/`LDI_HI`:** These instructions support the same 4-bit component write-mask as ALU/FPU instructions. Any subset of `.x`, `.y`, `.z`, `.w` (or `.xyzw` / no suffix for all four) is valid.
 
 ### Swizzle
 
@@ -295,31 +294,11 @@ LDI_HI v10.xyzw, 0x3F80   # upper 16 bits = 0x3F80 → v10 = 0x3F800000 = 1.0f
 
 > **Important:** Always execute `LDI_LO` before `LDI_HI` for the same destination register. `LDI_HI` reads the current lower 16 bits of `dest` to compose the final value; if `LDI_LO` has not been issued, the lower bits will be stale.
 
-**Write mask note:** `LDI_LO`/`LDI_HI` support only a 1-bit full-mask flag. Either all four components are written (`.xyzw` or no suffix) or only an explicit single-component suffix (`.x`, `.y`, etc.) is used.
+**Write mask:** `LDI_LO`/`LDI_HI` support the full 4-bit component write-mask. Any combination of `.x`, `.y`, `.z`, `.w` components can be specified, identical to ALU/FPU instructions (e.g. `LDI_LO v5.w, 0x00FF` correctly writes only the W component).
 
 ---
 
-### 4.5 Memory Instructions
-
-Memory is a flat 128-bit-wide space. Each address holds 16 bytes (four 32-bit components). The new block transfer memory controller issues memory accesses at the granularity of an entire warp (32 threads).
-
-#### `STORE  src, imm14`
-Write 32 packed pixels (one per thread in the warp) to memory sequentially starting at the byte address `imm14 << 16`.
-
-```asm
-STORE v4, 0x0001       # mem[0x00010000...] = packed(v4)
-```
-
-- `imm14` is a 14-bit unsigned immediate forming the upper half of the 32-bit base address.
-- The `STORE` instruction causes the barrel scheduler to read `src` for all 32 threads.
-- The memory controller snoops this data, extracts the lower 8 bits of the W, Z, Y, and X components of each thread's vector, and packs them into a 32-bit integer (RGBA format: Alpha=W, Blue=Z, Green=Y, Red=X).
-- It then issues 8 back-to-back 128-bit Avalon burst writes to memory.
-- **FLUSH is required before STORE** to ensure all threads' vector register values are committed before the memory controller reads the VRF.
-- After a `STORE`, execution continues at the next PC (unlike `RETURN reg`, which also halts the warp).
-
----
-
-### 4.6 Control Flow Instructions
+### 4.5 Control Flow Instructions
 
 #### `JMP  target`
 Unconditional jump to `target` (label or 16-bit address).
@@ -401,7 +380,7 @@ Place one `SYNC` at the end of each divergent path. See [Section 6](#6-simt-dive
 
 ---
 
-### 4.7 System Instructions
+### 4.6 System Instructions
 
 #### `FLUSH`
 Stall the warp until the entire pipeline has drained — all in-flight ALU, FPU, and memory operations for this warp complete and all write-backs to VRF and PRF are finished.
@@ -486,7 +465,7 @@ RETURN v_result          # write framebuffer pixels and halt
 
 ### Concept
 
-All 32 threads of a warp always execute the same instruction stream. When threads need to take different code paths, the **exec_mask** records which threads are "active" on each path. Only `STORE` respects the exec_mask — ALU/FPU/IMM instructions always run for all 32 threads.
+All 32 threads of a warp always execute the same instruction stream. When threads need to take different code paths, the **exec_mask** records which threads are "active" on each path. ALU/FPU/IMM instructions (including `LDI_LO`/`LDI_HI`) always run for all 32 threads regardless of the exec_mask — VRF register writes are not exec_mask-gated. Because `RETURN reg` is the only way to commit pixels, and it must appear after full reconvergence, shader divergence is most useful for control flow that influences convergent register values, not for producing per-thread-distinct pixel values through branching.
 
 ### Required Instruction Sequence
 
@@ -520,7 +499,7 @@ reconv:
 - `SSY` must immediately precede `BRA_DIV` (no instructions between them).
 - Each divergent path must end with exactly one `SYNC`.
 - After both `SYNC` instructions execute, control resumes at `reconv`.
-- ALU/FPU/IMM instructions in each path run for **all** threads. Write the correct value in all threads — only the `STORE` selects which threads commit to memory.
+- ALU/FPU/IMM instructions in each path run for **all** threads regardless of exec_mask. `RETURN reg` must appear after the reconvergence point, not inside a divergent path.
 - Nested divergence (divergence inside divergence) is supported by the SIMT stack but is not covered here.
 
 ---
@@ -669,85 +648,58 @@ W Z Y X     ← each line is one pixel (128-bit bus: W=[127:96], Z=[95:64], Y=[6
 ```asm
 # Each thread stores its own ID as an integer in all components.
 THREAD_ID v0.xyzw       # v0.xyzw = absolute thread index
-# NOTE: LDI_LO/LDI_HI only support a 1-bit full-mask flag.
-# A partial mask like "v0.w" sets full_mask=0, which writes NOTHING.
-# To set all components and then fix up one, use a separate register:
-LDI_LO v1.xyzw, 0x00FF  # v1 = 255 in all components (alpha = 255)
-# STORE reads only the lower 8 bits of each component.
-# v0.x = thread_id[7:0] = R, v0.y = G, v0.z = B, v1.w will be 255 but
-# we'd need to assemble the output from multiple registers — simplest is:
+LDI_LO v0.w, 0x00FF     # Make alpha opaque
 FLUSH
-STORE v0, 0x0000        # store thread_id in R, G, B, A (all = thread_id)
-FLUSH
-RETURN
+RETURN v0               # write packed pixels from v0 to framebuffer and halt
 ```
-
-> **Gotcha:** `LDI_LO v0.w, 0x00FF` silently does nothing because per-component masking is not supported by `LDI_LO`/`LDI_HI`. Use `.xyzw` (or no mask suffix) and a separate register when you need to load a constant into one component only.
 
 ### Example 2: Float Gradient (R = x/32, G = y/32)
 
 ```asm
-THREAD_ID v0.xyzw        # v0 = global_tid
-LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (mask for lower 5 bits)
-LDI_LO v3.xyzw, 0x0005  # v3 = 5 (shift for >>5)
+THREAD_ID v0.xyzw        # v0 = global_tid = warp_offset + lane (same in all 4 components)
+LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (column mask)
+LDI_LO v3.xyzw, 0x0005  # v3 = 5 (row shift amount)
 LDI_LO v10.xyzw, 0x0000
 LDI_HI v10.xyzw, 0x3D00 # v10 = 0x3D000000 = 0.03125f = 1/32
 LDI_LO v13.xyzw, 0x0000
-LDI_HI v13.xyzw, 0x437F # v13 = 0x437F0000 = 255.0f (alpha constant and scale factor)
-IAND v4.xyzw, v0, v1    # v4 = x (column, 0..31)
-ISHR v6.xyzw, v0, v3    # v6 = y (row, 0..31)
+LDI_HI v13.xyzw, 0x437F # v13 = 0x437F0000 = 255.0f
+
+IAND v4.xyzw, v0, v1    # v4 = x = tid & 0x1F  (column 0..31, same in all components)
+ISHR v6.xyzw, v0, v3    # v6 = y = tid >> 5     (row 0..31, same in all components)
 I2F v8.xyzw, v4         # v8 = float(x) in all 4 components
 I2F v9.xyzw, v6         # v9 = float(y) in all 4 components
-FMUL v11.xyzw, v8, v10  # v11 = x/32 in all 4 components (R value)
-FMUL v12.xyzw, v9, v10  # v12 = y/32 in all 4 components (G value)
-# Assemble output vector v14 = {X=R*255, Y=G*255, Z=0, W=255.0f}
-# Z is left as 0 (VRF initialized to 0, never written)
-LDI_LO v15.xyzw, 0x0000
-LDI_HI v15.xyzw, 0x437F # v15 = 255.0f in all components
-LDI_LO v16.xyzw, 0x0000 # v16 = 0.0f
-FMUL v14.x, v11, v13    # v14.X = (x/32) * 255.0f = R  [write X only]
-FMUL v14.y, v12, v13    # v14.Y = (y/32) * 255.0f = G  [write Y only]
-IADD v14.z, v16, v16    # v14.Z = 0.0f
-IADD v14.w, v15, v16    # v14.W = 255.0f
-F2I v15.xyzw, v14       # Convert float RGBA to integer (0-255)
-FLUSH                    # drain pipeline before MCU reads VRF
-STORE v15, 0x0000       # store {W=255, Z=0, Y=G, X=R}
-FLUSH
-RETURN
+FMUL v11.xyzw, v8, v10  # v11 = x/32 in all 4 components
+FMUL v12.xyzw, v9, v10  # v12 = y/32 in all 4 components
+
+# Initialize v14 = 255.0f in all components.
+# This sets the alpha channel (W). X and Y will be overwritten below; Z by FSUB.
+LDI_LO v14.xyzw, 0x0000
+LDI_HI v14.xyzw, 0x437F # v14 = {255.0f, 255.0f, 255.0f, 255.0f}
+
+FMUL v14.x, v11, v13    # v14.X = R = (x/32) * 255.0f
+FMUL v14.y, v12, v13    # v14.Y = G = (y/32) * 255.0f
+FSUB v14.z, v13, v13    # v14.Z = 255.0f - 255.0f = 0.0f  (Blue = 0)
+# v14.W stays 255.0f from LDI above (Alpha = 255)
+
+F2I v15.xyzw, v14       # convert floats to integers: {255, 0, G_int, R_int}
+FLUSH                    # drain pipeline before pixel snoop reads VRF
+RETURN v15               # write packed RGBA for all 32 threads and halt warp
 ```
 
 ### Example 3: Checkerboard (White if x+y even, Black if odd)
 
 ```asm
 THREAD_ID v0.xyzw        # v0 = global_tid = warp_offset + lane
-LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (mask for lower 5 bits)
-LDI_LO v3.xyzw, 0x0005  # v3 = 5 (shift amount for >> 5)
-LDI_LO v5.xyzw, 0x0004  # v5 = 4 (shift amount for * 16 byte addr)
-IAND v4.xyzw, v0, v1    # v4 = x = local_tid (column, 0..31)
-ISHR v6.xyzw, v0, v3    # v6 = y = warp_y (row, 0..31)
-ISHL v2.xyzw, v0, v5    # v2 = global_tid * 16 (byte address in framebuffer)
+LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (column mask)
+LDI_LO v3.xyzw, 0x0005  # v3 = 5 (row shift amount)
+IAND v4.xyzw, v0, v1    # v4 = x = global_tid & 0x1F  (column 0..31)
+ISHR v6.xyzw, v0, v3    # v6 = y = global_tid >> 5     (row 0..31)
 IADD v7.xyzw, v4, v6    # v7 = x + y
-LDI_LO v8.xyzw, 0x0001  # v8 = 1 (bit mask)
-IAND v9.xyzw, v7, v8    # v9 = (x + y) & 1  (0=even=white, 1=odd=black)
-LDI_LO v10.xyzw, 0x0000 # v10 = 0 (comparison value for even check)
-ICMP_EQ p0, v9, v10     # p0 = (v9 == 0) = (x+y is even) = white
-FLUSH                    # REQUIRED: settle PRF before BRA_DIV
-SSY reconv               # save reconvergence PC
-BRA_DIV white, p0        # even (white) threads jump to white; odd fall through
-
-# ---- Black path (odd = black = not-taken, falls through) ----
-LDI_LO v11.xyzw, 0x0000 # v11 = 0 (black)
-STORE v11, 0x0000
-SYNC
-
-# ---- White path (even = white = taken) ----
-white:
-LDI_LO v11.xyzw, 0x00FF # v11 = 255 (white)
-STORE v11, 0x0000
-SYNC
-
-# ---- Reconvergence ----
-reconv:
+LDI_LO v8.xyzw, 0x0001  # v8 = 1
+IAND v9.xyzw, v7, v8    # v9 = (x+y) & 1 = parity (0=white, 1=black)
+ISUB v10.xyzw, v8, v9   # v10 = 1 - parity (1=white, 0=black)
+LDI_LO v11.xyzw, 0x00FF # v11 = 255
+IMUL v12.xyzw, v10, v11 # v12 = pixel value (255=white, 0=black)
 FLUSH
-RETURN
+RETURN v12
 ```
