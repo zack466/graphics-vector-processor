@@ -159,7 +159,7 @@ entity execution_unit is
         mem_store_data    : out vector_t;
         mem_store_thread_id : out std_logic_vector(4 downto 0);
         
-        -- NEW: Pipeline Status Flags
+        -- Pipeline Status Flags
         flush_active_out  : out std_logic
     );
 end entity execution_unit;

@@ -1,3 +1,7 @@
+-- ============================================================================
+-- TESTBENCH: tb_full_execution_integration
+-- ============================================================================
+
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
@@ -44,23 +48,9 @@ architecture sim of tb_full_execution_integration is
     signal iss_rs2_addr      : std_logic_vector(8 downto 0);
     signal iss_rs3_addr      : std_logic_vector(8 downto 0);
     signal iss_rd_addr       : std_logic_vector(8 downto 0);
-    
-    signal iss_opcode        : std_logic_vector(5 downto 0);
-    signal iss_mask          : std_logic_vector(3 downto 0);
     signal iss_valid         : std_logic;
-    signal iss_wb_mux        : std_logic_vector(1 downto 0);
-    signal iss_cmp_invert    : std_logic;
-    signal iss_cmp_swap      : std_logic;
-    signal iss_is_logic_op   : std_logic;
-    signal iss_vrf_we        : std_logic;
-    signal iss_prf_we        : std_logic;
-    signal iss_swiz_a        : swizzle_sel_t;
-    signal iss_swiz_b        : swizzle_sel_t;
-    signal iss_swiz_c        : swizzle_sel_t;
-    signal iss_is_load       : std_logic;
-    signal iss_imm_data      : std_logic_vector(15 downto 0);
 
-    -- Re-packed record to feed into the Execution Unit
+    -- The newly refactored unified execution control record
     signal iss_exec_ctrl     : exec_ctrl_t;
 
     -- ========================================================================
@@ -126,44 +116,13 @@ begin
             exec_ctrl_in => decoder_exec_ctrl, 
             valid_in => decoder_valid_in,
             current_thread => iss_current_thread, 
-            opcode_out => iss_opcode,
             rs1_addr_global => iss_rs1_addr, 
             rs2_addr_global => iss_rs2_addr, 
             rs3_addr_global => iss_rs3_addr, 
             rd_addr_global => iss_rd_addr,
-            inst_write_mask => iss_mask, 
-            issue_valid => iss_valid,
-            swiz_sel_a => iss_swiz_a, 
-            swiz_sel_b => iss_swiz_b, 
-            swiz_sel_c => iss_swiz_c, 
-            wb_mux_sel => iss_wb_mux,
-            cmp_invert => iss_cmp_invert, 
-            cmp_swap => iss_cmp_swap, 
-            is_logic_op => iss_is_logic_op,
-            is_load => iss_is_load, 
-            imm_data => iss_imm_data,
-            vrf_we => iss_vrf_we, 
-            prf_we => iss_prf_we
+            exec_ctrl_out => iss_exec_ctrl,
+            issue_valid => iss_valid
         );
-
-    -- Repack the flattened issuer signals into the record expected by the Execution Unit
-    iss_exec_ctrl.opcode      <= iss_opcode;
-    iss_exec_ctrl.write_mask  <= iss_mask;
-    iss_exec_ctrl.wb_mux_sel  <= iss_wb_mux;
-    iss_exec_ctrl.cmp_invert  <= iss_cmp_invert;
-    iss_exec_ctrl.cmp_swap    <= iss_cmp_swap;
-    iss_exec_ctrl.is_logic_op <= iss_is_logic_op;
-    iss_exec_ctrl.is_load     <= iss_is_load;
-    iss_exec_ctrl.imm_data    <= iss_imm_data;
-    iss_exec_ctrl.vrf_we      <= iss_vrf_we;
-    iss_exec_ctrl.prf_we      <= iss_prf_we;
-    iss_exec_ctrl.swiz_sel_a  <= iss_swiz_a;
-    iss_exec_ctrl.swiz_sel_b  <= iss_swiz_b;
-    iss_exec_ctrl.swiz_sel_c  <= iss_swiz_c;
-    iss_exec_ctrl.rs1_addr_local <= "0000"; -- Local addresses ignored by exec unit
-    iss_exec_ctrl.rs2_addr_local <= "0000";
-    iss_exec_ctrl.rs3_addr_local <= "0000";
-    iss_exec_ctrl.rd_addr_local  <= "0000";
 
     uut_exec: entity work.execution_unit
         port map (

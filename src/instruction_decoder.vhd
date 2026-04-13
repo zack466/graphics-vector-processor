@@ -6,16 +6,12 @@
 -- PURPOSE:
 --   Purely combinational instruction decode. Given a 32-bit instruction word,
 --   it produces five decoded control records that fan out to different pipeline
---   units: FPU, reduction, ALU, PC (branch), and memory. There is no state and
+--   units: FPU, reduction, ALU, and PC (branch). There is no state and
 --   no registered outputs; every output changes within the same clock cycle as
 --   the input instruction word changes.
 --
---   The decoder exists as a separate entity (rather than inline logic in the
---   processor FSM) so that it can be unit-tested independently and so the
---   processor FSM sees clean, named records rather than raw bit slices.
---
 -- USAGE:
---   Instantiated once by processor.vhd. The instruction word should be stable
+--   Instantiated once by warp_unit.vhd. The instruction word should be stable
 --   before the processor FSM samples the decoded outputs on a rising edge.
 --   All outputs are combinational; the caller is responsible for registering
 --   them when pipeline stages require it.
@@ -24,12 +20,6 @@
 --   Zero cycles. All outputs are combinational functions of the input.
 --   The critical path runs from instruction[31:26] through the opcode case
 --   statement to the fpu_ctrl/alu_ctrl outputs.
---
--- LATCH PREVENTION:
---   All five output variables are fully initialized to safe defaults at the
---   start of the process body BEFORE the decode case logic. This guarantees
---   that every signal has an assignment on every path through the process,
---   which prevents VHDL synthesis tools from inferring unwanted latches.
 --
 -- INSTRUCTION WORD BIT FIELD LAYOUT (by instruction type):
 --
@@ -58,10 +48,6 @@
 --          (write_mask: 4-bit component mask — same W/Z/Y/X convention as ALU/FPU)
 --          (rs1_addr is set equal to rd_addr so the ALU can read the current
 --           destination value; needed by LDI_HI to preserve the lower 16 bits)
---
---   MEM  : [31:26]=opcode  [25:12]=base_addr(14b) [11:8]=reserved
---          [7:4]=dest_src_reg
---          (base_addr is zero-extended to 16 bits by prepending "00")
 --
 --   SYS  : [31:26]=opcode  [25:4]=reserved       [3:0]=type
 --          (FLUSH/RETURN/BREAK/INT: opcode is routed through v_fpu because

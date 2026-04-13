@@ -5,7 +5,7 @@
 --
 -- PURPOSE:
 --   The IFU is the only block that knows which threads within the warp are
---   currently active. It manages three things simultaneously:
+--   currently active. It manages four things simultaneously:
 --
 --     1. Program Counter (PC): Tracks the next instruction address and drives
 --        the instruction memory address bus. On normal sequential execution it
@@ -20,9 +20,14 @@
 --        deferred_mask, outer_mask} entries. Supports up to STACK_DEPTH nested
 --        if/else blocks. This is the core of the SIMT control-flow model.
 --
+--     4. Hardware Call Stack: A dedicated stack for storing return addresses 
+--        (link registers) to support nested function calls. It operates 
+--        independently of the divergence stack since function calls are 
+--        warp-wide and do not inherently split the active thread mask.
+--
 -- USAGE:
---   Instantiated once by processor.vhd. The stall input is driven by the
---   processor FSM. The pc_ctrl input arrives from instruction_decoder via the
+--   Instantiated once by warp_unit.vhd. The stall input is driven by the
+--   warp unit's FSM. The pc_ctrl input arrives from instruction_decoder via the
 --   processor FSM and is sampled on the cycle when stall='0' (ADVANCE_PC state).
 --   predicate_mask must be stable (read from the PRF collapse port) on the same
 --   cycle that pc_ctrl carries a branch instruction.
@@ -56,6 +61,29 @@
 --
 --   The SIMT stack stores enough state to replay both paths without OS support.
 --   STACK_DEPTH controls the maximum nesting level of if/else blocks.
+--
+-- FUNCTION CALL MODEL (ARM-Style):
+--   The IFU supports function calls using a Link Register (link_reg) and a 
+--   dedicated hardware Call Stack. This mimics ARM's branch-and-link behavior:
+--
+--     BRA_L <target>  -- Branch with Link: Saves PC+1 into link_reg, jumps to target.
+--     BRA_X           -- Branch to Link: Jumps to the address in link_reg (Return).
+--
+--   For nested functions, the caller must preserve link_reg before making 
+--   another call. This is done using the call stack:
+--
+--     PUSH_L          -- Pushes link_reg onto the call stack.
+--     POP_L           -- Pops the call stack back into link_reg.
+--
+--   Example nested call:
+--     Caller:
+--       BRA_L Outer_Func
+--
+--     Outer_Func:
+--       PUSH_L           -- Save caller's return address
+--       BRA_L Inner_Func -- Overwrites link_reg with Inner_Func return address
+--       POP_L            -- Restore caller's return address
+--       BRA_X            -- Return to Caller
 --
 -- PORTS:
 --   clk              - System clock.

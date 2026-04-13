@@ -4,9 +4,8 @@
 -- PURPOSE:
 --   Self-contained execution unit for a single SIMT warp.  Encapsulates all
 --   per-warp state: instruction fetch (IFU + PC + divergence stack), decode,
---   32-thread issue, FPU/ALU/RED execution, VRF, PRF, and the M10K pixel
---   buffer that accumulates packed RGBA pixels during a MEM instruction's
---   EXEC_WAIT phase.
+--   32-thread issue, FPU/ALU/RED execution, VRF, PRF, and the pipelined M10K
+--   pixel buffer that accumulates packed RGBA pixels during OP_RETURN.
 --
 --   warp_unit intentionally has NO host CSR interface and NO embedded Avalon
 --   memory controller.  The host-facing control (frame iteration, warp_offset
@@ -31,28 +30,132 @@
 --   warp_break  : 1-cycle registered pulse when OP_BREAK executes.
 --
 -- PIXEL BUFFER HANDSHAKE:
---   The warp_unit does NOT contain mcu_block_transfer.  Instead it exposes:
---     pixel_buf_valid : 1-cycle pulse after EXEC_WAIT completes for a MEM/RETURN
---                       instruction.
---     pixel_buf_addr  : computed DDR3 byte address: (fb_base_addr << 16) + warp_offset*4
---     pixel_exec_mask : ifu_exec_mask (for MCU byte-enable calculation).
---     pixel_rd_en     : Memory controller read enable
---     pixel_rd_addr   : Memory controller read address (0 to 7)
---     pixel_rd_data   : Output 128-bit pixel data from the internal M10K buffer
+--   The warp_unit does NOT contain an Avalon master. Instead, it exposes a
+--   synchronous read interface to the internal M10K pixel buffer for the MCU:
+--     pixel_buf_valid : 1-cycle pulse after EXEC_WAIT completes for OP_RETURN.
+--     pixel_buf_addr  : computed DDR3 byte addr: (fb_base_addr << 16) + warp_offset*4.
+--     mem_stall       : Input from MCU; holds FSM in MEM_WAIT until burst completes.
+--     pixel_rd_en     : MCU read enable to fetch from the M10K RAM.
+--     pixel_rd_addr   : MCU read address (0 to 7) to sweep through the 8 burst beats.
+--     pixel_rd_data   : Output 128-bit pixel data (4 packed pixels per beat).
 --
--- RETURN INSTRUCTION (combined store + halt):
---   RETURN reg encodes the source register index in bits[7:4] of the instruction
---   word.
---   Execution: issues through barrel scheduler → EXEC_WAIT (fills pixel buffer)
---   → HALTED.
---   The DDR3 address uses fb_base_addr from warp_scheduler (not an embedded
---   immediate), enabling double-buffering without changing the shader program.
+-- PROCESSOR FSM STATES AND RATIONALE:
+--   HALTED        : Idle state. Waits for `running='1'` (triggered by the external
+--                   warp_start pulse). If do_reset_pc is set when starting, skips
+--                   directly to ADVANCE_PC to force a jump to PC=0 before fetching.
 --
--- FSM STATES:
---   Identical to processor.vhd: HALTED, FETCH_ADDR, FETCH_DATA, DECODE,
---   EXEC_WAIT, ADVANCE_PC.  The only change is that the HALTED
---   guard uses the internal `running` register (set by warp_start, cleared
---   by OP_RETURN) instead of csr_run from a CSR slave.
+--   FETCH_ADDR    : First fetch wait cycle. instruction_memory is an M10K BRAM,
+--                   which has a 1-cycle registered-read latency. The address must
+--                   be stable for one cycle before data appears. The IFU is
+--                   STALLED here (ifu_stall='1') so the PC does not advance.
+--
+--   FETCH_DATA    : Second fetch wait cycle. The IFU pipeline has its own internal
+--                   register stage before presenting instruction_out. Two cycles
+--                   guarantee stable data at DECODE.
+--
+--   DECODE        : Instruction is stable on ifu_inst_out. The FSM inspects the
+--                   instruction type and opcode to dispatch:
+--                   SYS / OP_RETURN  → assert iss_valid_in='1' → EXEC_WAIT.
+--                                      (running='0' is cleared concurrently).
+--                   SYS / OP_BREAK   → assert warp_break, go to ADVANCE_PC.
+--                                      (PC advances so BREAK is not re-hit).
+--                   SYS / OP_FLUSH   → assert iss_valid_in='1' → EXEC_WAIT.
+--                   CTRL             → IFU handles PC update combinationally;
+--                                      go straight to ADVANCE_PC.
+--                   FPU/ALU/IMM/RED  → assert iss_valid_in='1' → EXEC_WAIT.
+--
+--   EXEC_WAIT     : Waits for the barrel scheduler to finish issuing all 32 threads
+--                   (iss_issue_valid='0'). If the instruction is OP_FLUSH, it also
+--                   waits for the execution pipelines to fully drain 
+--                   (exec_flush_active='0').
+--                   SPECIAL CASE (OP_RETURN): Waits one extra cycle for 
+--                   exec_mem_store_valid='0' to ensure the final thread's pixel
+--                   is safely written into the synchronous M10K pixel buffer.
+--                   Then pulses pixel_buf_valid='1' and proceeds to MEM_WAIT.
+--                   ALL OTHERS: Proceed to ADVANCE_PC.
+--
+--   MEM_WAIT      : Handles backpressure from the external memory controller.
+--                   Spins until mem_stall='0'. The MCU drives this combinationally,
+--                   locking the FSM here while it bursts the pixel buffer to DDR3.
+--                   Once complete, OP_RETURN transitions to HALTED.
+--
+--   ADVANCE_PC    : Deasserts ifu_stall for exactly ONE clock cycle. The IFU
+--                   samples active_pc_ctrl to compute the next PC (branch taken /
+--                   not-taken / sequential), then re-presents the updated PC.
+--                   The FSM immediately returns to FETCH_ADDR.
+--
+-- INSTRUCTION LIFECYCLE & DATAPATH FLOW:
+-- The warp_unit uses a highly decoupled, time-multiplexed SIMT pipeline. 
+-- Rather than instantiating 32 physical execution lanes, it uses 1 physical 
+-- lane and sweeps through the 32 threads sequentially over 32 clock cycles.
+--
+-- The life of a standard arithmetic instruction (FPU / ALU / IMM) looks like this:
+--
+-- 1. FETCH & DECODE (FSM controlled)
+--    The FSM wakes up, drives `imem_addr`, waits 2 cycles for the M10K read 
+--    latency, and receives `ifu_inst_out`. The combinational decoder immediately 
+--    parses the instruction type, opcode, and local register addresses (0-15).
+--
+-- 2. ISSUE (Barrel Scheduler)
+--    The FSM asserts `iss_valid_in` for exactly 1 cycle and enters `EXEC_WAIT`.
+--    The `instruction_issue` unit latches the decoded control record. Over the 
+--    next 32 clock cycles, it outputs the control record while incrementing the 
+--    `current_thread` ID from 0 to 31. 
+--    Crucially, the issuer concatenates the 5-bit thread ID with the 4-bit local 
+--    register addresses to form flat 9-bit global addresses for the register files.
+--
+-- 3. OPERAND FETCH & SWIZZLE (Execution Unit - Stage 1)
+--    The 9-bit global addresses drive the Vector (VRF) and Predicate (PRF) 
+--    register files. One cycle later, data for the current thread emerges. 
+--    The swizzle network applies broadcast/splat modifiers (e.g., .xxxx) to 
+--    the vector operands before feeding them into the math pipelines.
+--
+-- 4. EXECUTION & LATENCY PADDING (Execution Unit - Stage 2..N)
+--    The operands enter the specific functional unit (FPU lane, ALU lane, etc.).
+--    Because different IP cores have different latencies (e.g., FADD takes 14 
+--    cycles, FSQRT takes 28, ALU takes 2), every pipeline is padded with 
+--    shift registers to exactly match `FPU_MAX_LATENCY`. 
+--    This guarantees that the 32 results pop out of the execution unit in a 
+--    perfect, contiguous 32-cycle burst, exactly FPU_MAX_LATENCY cycles after 
+--    they were issued.
+--
+-- 5. WRITEBACK
+--    The synchronized results hit the `writeback_controller`, which routes them 
+--    to the VRF or PRF using the 9-bit global destination address delayed by 
+--    the same shift-register pipeline. 
+--    Once the 32nd thread's result is written, `exec_flush_active` drops to '0',
+--    allowing the FSM to exit `EXEC_WAIT` and advance the PC.
+--
+-- INSTRUCTION CLASS EXCEPTIONS:
+-- Not all instructions follow the standard 32-cycle math datapath:
+--
+-- * CTRL (Branches, Jumps, Calls):
+--     Never reach the issuer. The decoder routes them directly to the IFU 
+--     combinational logic. The FSM skips EXEC_WAIT, jumps straight to 
+--     ADVANCE_PC, and the IFU immediately updates the Program Counter and 
+--     Divergence Stack.
+--
+-- * RED (Reduction Math):
+--     Sweeps through 32 threads like standard math, but instead of writing 32 
+--     independent results, it feeds the operands into an accumulator IP core. 
+--     Only the final accumulated result is written back to the VRF.
+--
+-- * SYS / FLUSH:
+--     The issuer recognizes FLUSH and instantly fast-tracks its internal 
+--     counter to 32, finishing issuance in 1 cycle (saving 31 dead cycles). 
+--     However, the FSM remains stuck in EXEC_WAIT until `exec_flush_active` 
+--     drops to '0', ensuring the 28-stage pipeline is entirely drained of 
+--     previous instructions before continuing.
+--
+-- * SYS / RETURN:
+--     Issues all 32 threads through the pipeline. Instead of doing math, the 
+--     execution unit acts as a passthrough, snooping the source register and 
+--     synchronously writing it into the M10K `pixel_buffer_ram`. Once complete, 
+--     the FSM enters `MEM_WAIT` until the MCU flushes the buffer to DDR3, then 
+--     halts. The DDR3 address uses fb_base_addr from warp_scheduler (not an
+--     embedded immediate), enabling double-buffering without changing the
+--     shader program.
+--
 -- ============================================================================
 
 library IEEE;
@@ -96,7 +199,6 @@ entity warp_unit is
         mem_stall       : in  std_logic;                       -- MCU stall signal
         pixel_buf_valid : out std_logic;                       -- 1-cycle trigger: buffer full
         pixel_buf_addr  : out std_logic_vector(31 downto 0);   -- computed DDR3 byte address
-        pixel_exec_mask : out std_logic_vector(WARP_SIZE-1 downto 0); -- MCU needs this for byte enables
         pixel_rd_en     : in  std_logic;                       -- MCU read enable
         pixel_rd_addr   : in  std_logic_vector(2 downto 0);    -- MCU read address (0-7)
         pixel_rd_data   : out std_logic_vector(127 downto 0)   -- MCU read data from M10K (128-bit)
@@ -150,24 +252,11 @@ architecture structural of warp_unit is
     signal iss_exec_record : exec_ctrl_t;
     signal iss_valid_in    : std_logic;
     signal iss_issue_valid : std_logic;
-    signal iss_opcode      : std_logic_vector(5 downto 0);
     signal iss_thread_id   : std_logic_vector(4 downto 0);
     signal iss_rs1_global  : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
     signal iss_rs2_global  : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
     signal iss_rs3_global  : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
     signal iss_rd_global   : std_logic_vector(VRF_ADDR_WIDTH-1 downto 0);
-    signal iss_swiz_a      : swizzle_sel_t;
-    signal iss_swiz_b      : swizzle_sel_t;
-    signal iss_swiz_c      : swizzle_sel_t;
-    signal iss_mask        : std_logic_vector(3 downto 0);
-    signal iss_cmp_inv     : std_logic;
-    signal iss_cmp_swap    : std_logic;
-    signal iss_is_log      : std_logic;
-    signal iss_is_ld       : std_logic;
-    signal iss_imm         : std_logic_vector(15 downto 0);
-    signal iss_wb_mux      : std_logic_vector(1 downto 0);
-    signal iss_vrf_we      : std_logic;
-    signal iss_prf_we      : std_logic;
 
     -- VRF/PRF read data
     signal vrf_rs1_data, vrf_rs2_data, vrf_rs3_data : vector_t;
@@ -183,7 +272,7 @@ architecture structural of warp_unit is
     signal exec_wb_mask     : std_logic_vector(3 downto 0);
     signal exec_flush_active: std_logic;
 
-    -- Execution unit memory snoop outputs
+    -- Execution unit memory snoop outputs (for RETURN instruction)
     signal exec_mem_store_valid     : std_logic;
     signal exec_mem_store_data      : vector_t;
     signal exec_mem_store_thread_id : std_logic_vector(4 downto 0);
@@ -215,7 +304,6 @@ begin
     -- PIXEL BUFFER OUTPUT WIRING
     -- ========================================================================
     pixel_buf_addr  <= mem_phys_addr;
-    pixel_exec_mask <= ifu_exec_mask;
 
     -- Expose IMEM address upward (IFU drives it, frame_processor wires it to shared IMEM)
     imem_addr <= ifu_imem_addr;
@@ -226,8 +314,10 @@ begin
     -- ========================================================================
     -- PIXEL BUFFER RAM (M10K)
     -- ========================================================================
-    -- Accumulates packed RGBA pixels from execution unit writeback events.
-    -- Written synchronously during EXEC_WAIT as the barrel scheduler issues threads 0-31.
+    -- Packs the low bytes of the snooped vector register into a single RGBA
+    -- pixel. Assumes that each component of the vector is an integer from 0 to
+    -- 255. Written synchronously during EXEC_WAIT as the barrel scheduler
+    -- issues threads 0-31.
     packed_pixel_data <= exec_mem_store_data(3)(7 downto 0) &
                          exec_mem_store_data(2)(7 downto 0) &
                          exec_mem_store_data(1)(7 downto 0) &
@@ -238,7 +328,7 @@ begin
             clk      => clk,
             we       => exec_mem_store_valid,
             wr_addr  => exec_mem_store_thread_id,
-            wr_data  => packed_pixel_data, -- Casts to word_t internally if aliased
+            wr_data  => packed_pixel_data,
             rd_en    => pixel_rd_en,
             rd_addr  => pixel_rd_addr,
             rd_data  => pixel_rd_data
@@ -511,37 +601,18 @@ begin
     u_issue : entity work.instruction_issue
         generic map ( THREAD_WIDTH => THREAD_ID_WIDTH, REG_WIDTH => REG_WIDTH )
         port map (
-            clk             => clk, reset => reset, exec_ctrl_in => exec_mux_ctrl,
-            valid_in        => iss_valid_in, current_thread => iss_thread_id,
-            opcode_out      => iss_opcode, rs1_addr_global => iss_rs1_global,
-            rs2_addr_global => iss_rs2_global, rs3_addr_global => iss_rs3_global,
-            rd_addr_global  => iss_rd_global, swiz_sel_a => iss_swiz_a,
-            swiz_sel_b      => iss_swiz_b, swiz_sel_c => iss_swiz_c,
-            inst_write_mask => iss_mask, cmp_invert => iss_cmp_inv,
-            cmp_swap        => iss_cmp_swap, is_logic_op => iss_is_log,
-            is_load         => iss_is_ld, imm_data => iss_imm,
-            wb_mux_sel      => iss_wb_mux, vrf_we => iss_vrf_we,
-            prf_we          => iss_prf_we, issue_valid => iss_issue_valid
+            clk             => clk, 
+            reset           => reset, 
+            exec_ctrl_in    => exec_mux_ctrl,
+            valid_in        => iss_valid_in, 
+            current_thread  => iss_thread_id,
+            rs1_addr_global => iss_rs1_global,
+            rs2_addr_global => iss_rs2_global, 
+            rs3_addr_global => iss_rs3_global,
+            rd_addr_global  => iss_rd_global,
+            exec_ctrl_out   => iss_exec_record,
+            issue_valid     => iss_issue_valid
         );
-
-    -- Re-pack issuer flat outputs into record for execution unit
-    iss_exec_record.opcode      <= iss_opcode;
-    iss_exec_record.swiz_sel_a  <= iss_swiz_a;
-    iss_exec_record.swiz_sel_b  <= iss_swiz_b;
-    iss_exec_record.swiz_sel_c  <= iss_swiz_c;
-    iss_exec_record.write_mask  <= iss_mask;
-    iss_exec_record.cmp_invert  <= iss_cmp_inv;
-    iss_exec_record.cmp_swap    <= iss_cmp_swap;
-    iss_exec_record.is_logic_op <= iss_is_log;
-    iss_exec_record.is_load     <= iss_is_ld;
-    iss_exec_record.imm_data    <= iss_imm;
-    iss_exec_record.wb_mux_sel  <= iss_wb_mux;
-    iss_exec_record.vrf_we      <= iss_vrf_we;
-    iss_exec_record.prf_we      <= iss_prf_we;
-    iss_exec_record.rs1_addr_local <= "0000";
-    iss_exec_record.rs2_addr_local <= "0000";
-    iss_exec_record.rs3_addr_local <= "0000";
-    iss_exec_record.rd_addr_local  <= "0000";
 
     -- Execution unit: FPU/ALU/RED pipelines + writeback + mem-snoop outputs
     u_exec : entity work.execution_unit

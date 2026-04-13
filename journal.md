@@ -7,16 +7,13 @@
   * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
 * test memory controller with real DDR3 memory
 * (in progress) review documentation manually and verify that it is accurate
-* instead of triggering top-level for every warp invocation, add simple warp scheduler that just schedules the single warp to draw an entire frame.
+* (in progress) instead of triggering top-level for every warp invocation, add simple warp scheduler that just schedules the single warp to draw an entire frame.
   * could also implement latency hiding for memory operations? Would also help to simplify MCU. We definitely have enough M10K blocks.
-  * add an output pixel buffer to every single warp, those get written to memory whenever it gets a chance.
-    for pure shaders, reading is not necessary, only need to know thread ID and global registers like width/height, mouse position, etc.
 * create top top level that can trigger processor to draw a frame, and keeps it in sync with the VIP framebuffer.
   should probably hardcode addresses of two backbuffers for double buffering.
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard).
   Or just one warp that utilizes latency hiding should be ok.
 * add global constants / uniforms for resolution (x, y have width/height), and also time (roughly in seconds). Should be roughly identical to the THREAD_ID instruction.
-* refactor instruction issuer to just output an execution_ctrl record instead of having to repack everything
 
 # Agent changes
 

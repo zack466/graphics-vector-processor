@@ -80,10 +80,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- ARCHITECTURAL PARAMETERS
     -- ========================================================================
-    -- WHY named constants instead of literals: every width and size that appears
-    -- in more than one place is a single source of truth here.  Changing WARP_SIZE
-    -- from 32 to 16 (hypothetically) would require only edits in this block, not
-    -- a grep across all entities.
     constant WARP_SIZE       : integer := 32; -- Threads per warp (barrel scheduler replay count)
     constant THREAD_ID_WIDTH : integer := 5;  -- Bits to address WARP_SIZE threads (log2(32)=5)
     constant LOCAL_REG_WIDTH : integer := 4;  -- Bits to address 16 VRF/PRF registers per thread
@@ -92,14 +88,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- INSTRUCTION TYPES (Bottom 4 bits [3:0])
     -- ========================================================================
-    -- WHY place the type tag in bits[3:0] rather than bits[31:28] or alongside
-    -- the opcode: keeping the type in the LSBs allows the FSM to extract it
-    -- with a simple 4-bit slice (inst_word(3 downto 0)) without shifting.  It
-    -- also keeps the opcode field in a fixed position [31:26] regardless of type,
-    -- simplifying the decoder for all instruction classes simultaneously.
-    -- WHY 4 bits (16 possible types) when only 7 are used: leaves room for
-    -- future instruction classes (e.g. tensor ops, special function units)
-    -- without changing the instruction word format.
     constant INST_TYPE_FPU  : std_logic_vector(3 downto 0) := "0000"; -- Floating-point parallel operations
     constant INST_TYPE_CTRL : std_logic_vector(3 downto 0) := "0001"; -- Branch / control flow instructions
     constant INST_TYPE_RED  : std_logic_vector(3 downto 0) := "0010"; -- Floating-point reduction operations
@@ -116,12 +104,6 @@ package processor_constants_pkg is
     -- would need 8 bits (2 bits × 4 components); restricting to splat modes
     -- saves instruction encoding bits and covers the most common use case
     -- (broadcasting a scalar — e.g. a uniform constant — across all vector lanes).
-    -- WHY SWIZ_PASS = "000": making the identity the all-zeros encoding means
-    -- freshly-zeroed control registers (reset state) default to no swizzle,
-    -- which is the correct default for arithmetic instructions.
-    -- WHY the splat modes start at "100": bit[2]='1' acts as a "splat enable"
-    -- flag, with bits[1:0] selecting which component to broadcast.  This
-    -- encoding can be decoded with a single MSB check.
     constant SWIZ_PASS      : std_logic_vector(2 downto 0) := "000"; -- Passthrough (.xyzw) — identity
     constant SWIZ_X         : std_logic_vector(2 downto 0) := "100"; -- Splat X (.xxxx) — broadcast component 0
     constant SWIZ_Y         : std_logic_vector(2 downto 0) := "101"; -- Splat Y (.yyyy) — broadcast component 1
@@ -132,13 +114,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- FPU MATH OPCODES [31:26] (When Type == 0000)
     -- ========================================================================
-    -- WHY OP_NOP = "000000" (all zeros): an instruction word of all zeros
-    -- (e.g. uninitialized memory) decodes as FPU NOP, which is a safe no-op.
-    -- This makes accidental execution of blank program memory benign.
-    -- WHY the opcode space has gaps (e.g. no "001111"): opcodes are assigned
-    -- to match Altera IP core select-function codes where possible so the
-    -- execution unit can pass the opcode field directly to the IP core without
-    -- a translation lookup table.
     constant OP_NOP     : std_logic_vector(5 downto 0) := "000000"; -- No operation (safe default for uninitialized IMEM)
     constant OP_FADD    : std_logic_vector(5 downto 0) := "000001"; -- IEEE 754 single-precision add
     constant OP_FSUB    : std_logic_vector(5 downto 0) := "000010"; -- IEEE 754 single-precision subtract

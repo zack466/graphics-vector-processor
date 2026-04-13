@@ -13,32 +13,20 @@ architecture sim of tb_instruction_issue is
     signal clk             : std_logic := '0';
     signal reset           : std_logic := '1';
     
-    -- UPDATED: Now uses the unified execution control record
+    -- Inputs
     signal exec_ctrl_in    : exec_ctrl_t;
     signal valid_in        : std_logic := '0';
     
+    -- Outputs
     signal current_thread  : std_logic_vector(4 downto 0);
-    signal opcode_out      : std_logic_vector(5 downto 0);
     signal rs1_addr_global : std_logic_vector(8 downto 0);
     signal rs2_addr_global : std_logic_vector(8 downto 0);
     signal rs3_addr_global : std_logic_vector(8 downto 0);
     signal rd_addr_global  : std_logic_vector(8 downto 0);
-    signal swiz_sel_a      : swizzle_sel_t;
-    signal swiz_sel_b      : swizzle_sel_t;
-    signal swiz_sel_c      : swizzle_sel_t;
-    signal inst_write_mask : std_logic_vector(3 downto 0);
-    signal cmp_invert      : std_logic;
-    signal cmp_swap        : std_logic;
-    signal is_logic_op     : std_logic;
-    
-    -- NEW: Immediate Load outputs
-    signal is_load         : std_logic;
-    signal imm_data        : std_logic_vector(15 downto 0);
-    
-    signal wb_mux_sel      : std_logic_vector(1 downto 0);
-    signal vrf_we          : std_logic;
-    signal prf_we          : std_logic;
     signal issue_valid     : std_logic;
+    
+    -- The newly refactored unified execution control record output
+    signal exec_ctrl_out   : exec_ctrl_t;
 
     constant CLK_PERIOD : time := 10 ns;
 
@@ -50,14 +38,13 @@ begin
             clk => clk, reset => reset, 
             exec_ctrl_in => exec_ctrl_in,
             valid_in => valid_in,
-            current_thread => current_thread, opcode_out => opcode_out,
-            rs1_addr_global => rs1_addr_global, rs2_addr_global => rs2_addr_global,
-            rs3_addr_global => rs3_addr_global, rd_addr_global => rd_addr_global,
-            swiz_sel_a => swiz_sel_a, swiz_sel_b => swiz_sel_b, swiz_sel_c => swiz_sel_c,
-            inst_write_mask => inst_write_mask, 
-            cmp_invert => cmp_invert, cmp_swap => cmp_swap, is_logic_op => is_logic_op,
-            is_load => is_load, imm_data => imm_data, -- NEW
-            wb_mux_sel => wb_mux_sel, vrf_we => vrf_we, prf_we => prf_we, issue_valid => issue_valid
+            current_thread => current_thread, 
+            rs1_addr_global => rs1_addr_global, 
+            rs2_addr_global => rs2_addr_global,
+            rs3_addr_global => rs3_addr_global, 
+            rd_addr_global => rd_addr_global,
+            exec_ctrl_out => exec_ctrl_out,
+            issue_valid => issue_valid
         );
 
     clk_process : process
@@ -81,8 +68,8 @@ begin
         exec_ctrl_in.cmp_invert     <= '0';
         exec_ctrl_in.cmp_swap       <= '0';
         exec_ctrl_in.is_logic_op    <= '0';
-        exec_ctrl_in.is_load        <= '0';             -- NEW
-        exec_ctrl_in.imm_data       <= (others => '0'); -- NEW
+        exec_ctrl_in.is_load        <= '0';             
+        exec_ctrl_in.imm_data       <= (others => '0'); 
         exec_ctrl_in.wb_mux_sel     <= "00";
         exec_ctrl_in.vrf_we         <= '0';
         exec_ctrl_in.prf_we         <= '0';
@@ -112,13 +99,13 @@ begin
             assert issue_valid = '1' report "issue_valid dropped early!" severity error;
             assert to_integer(unsigned(current_thread)) = i report "Thread mismatch!" severity error;
             assert rs1_addr_global = std_logic_vector(to_unsigned(i, 5)) & "0001" report "Global Addr mismatch" severity error;
-            assert opcode_out = OP_FCMP_LT report "Opcode latch mismatch" severity error;
-            assert cmp_invert = '1' report "Invert flag latch mismatch" severity error;
-            assert cmp_swap = '1' report "Swap flag latch mismatch" severity error;
-            assert prf_we = '1' report "PRF WE latch mismatch" severity error;
-            assert vrf_we = '0' report "VRF WE latch mismatch" severity error;
-            assert is_load = '0' report "is_load latch mismatch" severity error;
-            assert imm_data = x"0000" report "imm_data latch mismatch" severity error;
+            assert exec_ctrl_out.opcode = OP_FCMP_LT report "Opcode latch mismatch" severity error;
+            assert exec_ctrl_out.cmp_invert = '1' report "Invert flag latch mismatch" severity error;
+            assert exec_ctrl_out.cmp_swap = '1' report "Swap flag latch mismatch" severity error;
+            assert exec_ctrl_out.prf_we = '1' report "PRF WE latch mismatch" severity error;
+            assert exec_ctrl_out.vrf_we = '0' report "VRF WE latch mismatch" severity error;
+            assert exec_ctrl_out.is_load = '0' report "is_load latch mismatch" severity error;
+            assert exec_ctrl_out.imm_data = x"0000" report "imm_data latch mismatch" severity error;
 
             -- 2. Wait for the next active edge
             wait until rising_edge(clk);
@@ -169,7 +156,7 @@ begin
         for i in 0 to 3 loop
             wait until falling_edge(clk);
             assert to_integer(unsigned(current_thread)) = i report "Restart failed!" severity error;
-            assert opcode_out = OP_FMUL report "Latched opcode failed to update!" severity error;
+            assert exec_ctrl_out.opcode = OP_FMUL report "Latched opcode failed to update!" severity error;
             wait until rising_edge(clk);
             if i = 0 then valid_in <= '0'; end if;
         end loop;
@@ -192,9 +179,9 @@ begin
         for i in 0 to 4 loop
             wait until falling_edge(clk);
             assert to_integer(unsigned(current_thread)) = i report "LDI Thread mismatch!" severity error;
-            assert opcode_out = OP_LDI_LO report "LDI opcode latch mismatch" severity error;
-            assert is_load = '1' report "is_load flag failed to latch!" severity error;
-            assert imm_data = x"BEEF" report "imm_data failed to latch!" severity error;
+            assert exec_ctrl_out.opcode = OP_LDI_LO report "LDI opcode latch mismatch" severity error;
+            assert exec_ctrl_out.is_load = '1' report "is_load flag failed to latch!" severity error;
+            assert exec_ctrl_out.imm_data = x"BEEF" report "imm_data failed to latch!" severity error;
             wait until rising_edge(clk);
             
             if i = 0 then 

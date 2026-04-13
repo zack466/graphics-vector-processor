@@ -48,22 +48,14 @@
 -- valid_in        : Pulse (one cycle wide) that signals a new instruction has
 --                   arrived.  Drives thread-0 issue immediately on the same cycle.
 -- current_thread  : 5-bit thread index being issued this cycle (0..31).
--- opcode_out      : 6-bit opcode forwarded to the execution unit.
 -- rs1_addr_global : 9-bit global address of source register 1 for current thread.
 -- rs2_addr_global : 9-bit global address of source register 2 for current thread.
 -- rs3_addr_global : 9-bit global address of source register 3 for current thread.
 -- rd_addr_global  : 9-bit global address of destination register for current thread.
--- swiz_sel_a/b/c  : Swizzle selectors forwarded verbatim to the execution unit.
--- inst_write_mask : 4-bit XYZW component write mask from the instruction encoding.
--- cmp_invert      : Invert flag for compare operations.
--- cmp_swap        : Swap flag for compare operands.
--- is_logic_op     : Distinguishes bitwise-logic operations from arithmetic.
--- is_load         : Signals a memory-load operation to the execution unit.
--- imm_data        : 16-bit immediate value encoded in the instruction.
--- wb_mux_sel      : Selects which execution unit result (FPU/reduction/ALU)
---                   the writeback controller routes to the register file.
--- vrf_we          : Vector register file write-enable for the issued thread.
--- prf_we          : Predicate register file write-enable for the issued thread.
+-- exec_ctrl_out   : Forwarded execution control record. The issuer passes this 
+--                   through directly (muxing between the live input on cycle 0 
+--                   and the latched copy on cycles 1-31) so the execution unit 
+--                   receives identical control parameters for every thread.
 -- issue_valid     : '1' while any thread of the current instruction is being
 --                   issued.  Held high for 32 cycles (1 for FLUSH).  The
 --                   processor FSM spins in EXEC_WAIT until this falls to '0'.
@@ -96,25 +88,13 @@ entity instruction_issue is
         valid_in        : in  std_logic;
         
         current_thread  : out std_logic_vector(THREAD_WIDTH-1 downto 0);
-        opcode_out      : out std_logic_vector(5 downto 0);
         rs1_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rs2_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rs3_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rd_addr_global  : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         
-        swiz_sel_a      : out swizzle_sel_t;
-        swiz_sel_b      : out swizzle_sel_t;
-        swiz_sel_c      : out swizzle_sel_t;
-        inst_write_mask : out std_logic_vector(3 downto 0);
-        cmp_invert      : out std_logic;
-        cmp_swap        : out std_logic;
-        is_logic_op     : out std_logic;
-        is_load         : out std_logic;
-        imm_data        : out std_logic_vector(15 downto 0);
-        wb_mux_sel      : out std_logic_vector(1 downto 0);
-        vrf_we          : out std_logic;
-        prf_we          : out std_logic;
-
+        exec_ctrl_out   : out exec_ctrl_t;
+        
         issue_valid     : out std_logic 
     );
 end entity;
@@ -174,25 +154,19 @@ begin
                 latched_ctrl.imm_data       <= (others => '0');
             else
                 if valid_in = '1' then
-                    -- FIX: If it's a flush token, instantly set count to 32 so it only takes 1 clock cycle to issue!
-                    -- WHY: FLUSH is a pipeline-control token, not a data instruction.
+                    -- OP_FLUSH is a pipeline-control token, not a data instruction.
                     -- It carries no per-thread register addresses, so replaying it
-                    -- 32 times would waste 31 cycles for no benefit.  Setting count=32
-                    -- here means the combinational issue_valid check (valid_in='1' OR
-                    -- count<32) is true only for this one cycle, then goes false on
-                    -- the next edge when valid_in has been deasserted.
+                    -- 32 times would waste 31 cycles. Setting count=32 here means 
+                    -- it issues in exactly 1 clock cycle.
                     if exec_ctrl_in.opcode = OP_FLUSH then
                         count <= to_unsigned(32, 6);
-                    -- Fast track memory operations to idle, since the MCU controls them now?
-                    -- WAIT! The memory controller *needs* the barrel scheduler to iterate
-                    -- through threads 0-31 so it can snoop the data via mem_store_data.
-                    -- So we MUST do the full 32 cycles!
                     else
-                        -- For all normal instructions: thread 0 is handled
-                        -- combinationally this cycle (via valid_in='1' path in
-                        -- ctrl_out/current_thread_int).  Starting count at 1 means
-                        -- the registered path picks up at thread 1 on the next edge,
-                        -- giving the full 32-thread replay with no wasted cycle.
+                        -- For all normal instructions (including OP_RETURN): 
+                        -- thread 0 is handled combinationally this cycle. Starting 
+                        -- count at 1 means the registered path picks up at thread 1 
+                        -- on the next edge, giving the full 32-thread replay.
+                        -- NOTE: OP_RETURN *must* do the full 32 cycles so the 
+                        -- execution unit can snoop the data and fill the pixel buffer.
                         count <= to_unsigned(1, 6);
                     end if;
                     -- Latch the incoming control record so it survives after the
@@ -233,21 +207,7 @@ begin
     rs3_addr_global <= current_thread_int & ctrl_out.rs3_addr_local;
     rd_addr_global  <= current_thread_int & ctrl_out.rd_addr_local;
 
-    -- All remaining control signals are forwarded verbatim from ctrl_out.
-    -- They do not need per-thread modification; the execution unit uses them
-    -- identically for every thread of the same instruction.
-    opcode_out      <= ctrl_out.opcode;
-    swiz_sel_a      <= ctrl_out.swiz_sel_a;
-    swiz_sel_b      <= ctrl_out.swiz_sel_b;
-    swiz_sel_c      <= ctrl_out.swiz_sel_c;
-    inst_write_mask <= ctrl_out.write_mask;
-    cmp_invert      <= ctrl_out.cmp_invert;
-    cmp_swap        <= ctrl_out.cmp_swap;
-    is_logic_op     <= ctrl_out.is_logic_op;
-    is_load         <= ctrl_out.is_load;
-    imm_data        <= ctrl_out.imm_data;
-    wb_mux_sel      <= ctrl_out.wb_mux_sel;
-    vrf_we          <= ctrl_out.vrf_we;
-    prf_we          <= ctrl_out.prf_we;
+    -- Directly forward the entire control record structure to the execution unit
+    exec_ctrl_out   <= ctrl_out;
 
 end architecture rtl;

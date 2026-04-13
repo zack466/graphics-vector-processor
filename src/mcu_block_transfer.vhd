@@ -99,9 +99,7 @@ begin
         end if;
     end process;
 
-    -- ========================================================================
-    -- BYTE ENABLE MULTIPLEXER
-    -- ========================================================================
+    -- enable all bytes when writing
     tx_byte_en <= (others => '1');
 
     -- Stall the warp immediately on the same cycle valid is asserted, 

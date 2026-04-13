@@ -26,7 +26,7 @@
 --       |  warp_start, warp_offset
 --       v
 --   [u_warp: warp_unit] <──> [u_imem: instruction_memory]
---       |  pixel_buf_valid, pixel_buf_addr, pixel_exec_mask
+--       |  pixel_buf_valid, pixel_buf_addr
 --       |  ── pixel_rd_data (128-bit) ──>
 --       |  <── pixel_rd_en, pixel_rd_addr, mem_stall ──
 --       v
@@ -128,7 +128,6 @@ architecture structural of frame_processor is
     -- Warp ↔ MCU Handshake and RAM interface
     signal warp_pixel_valid   : std_logic;
     signal warp_pixel_addr    : std_logic_vector(ADDR_WIDTH-1 downto 0);
-    signal warp_exec_mask     : std_logic_vector(WARP_SIZE-1 downto 0);
     signal mcu_mem_stall      : std_logic;
     signal warp_pixel_rd_en   : std_logic;
     signal warp_pixel_rd_addr : std_logic_vector(2 downto 0);
@@ -212,7 +211,6 @@ begin
             mem_stall       => mcu_mem_stall,
             pixel_buf_valid => warp_pixel_valid,
             pixel_buf_addr  => warp_pixel_addr,
-            pixel_exec_mask => warp_exec_mask,
             pixel_rd_en     => warp_pixel_rd_en,
             pixel_rd_addr   => warp_pixel_rd_addr,
             pixel_rd_data   => warp_pixel_rd_data

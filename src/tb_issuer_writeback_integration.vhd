@@ -25,27 +25,14 @@ architecture sim of tb_issuer_writeback_integration is
     signal valid_in        : std_logic := '0';
     
     signal current_thread  : std_logic_vector(4 downto 0);
-    signal iss_opcode      : std_logic_vector(5 downto 0);
     signal iss_rs1_addr    : std_logic_vector(8 downto 0);
     signal iss_rs2_addr    : std_logic_vector(8 downto 0);
     signal iss_rs3_addr    : std_logic_vector(8 downto 0);
     signal iss_rd_addr     : std_logic_vector(8 downto 0);
-    signal iss_mask        : std_logic_vector(3 downto 0);
     signal iss_valid       : std_logic;
-    signal iss_wb_mux      : std_logic_vector(1 downto 0);
     
-    signal iss_cmp_invert  : std_logic;
-    signal iss_cmp_swap    : std_logic;
-    signal iss_is_logic_op : std_logic;
-    signal iss_vrf_we      : std_logic;
-    signal iss_prf_we      : std_logic;
-    
-    signal iss_swiz_a      : swizzle_sel_t;
-    signal iss_swiz_b      : swizzle_sel_t;
-    
-    -- NEW: Immediate Load signals
-    signal iss_is_load     : std_logic;
-    signal iss_imm_data    : std_logic_vector(15 downto 0);
+    -- The new unified execution control record from the issuer
+    signal iss_exec_record : exec_ctrl_t;
 
     -- ========================================================================
     -- STAGE 1: REG FILE READS (1 Cycle Latency)
@@ -59,7 +46,7 @@ architecture sim of tb_issuer_writeback_integration is
     signal s1_cmp_swap     : std_logic;
     signal s1_is_logic_op  : std_logic;
     
-    -- NEW: Stage 1 Immediate Load signals
+    -- Stage 1 Immediate Load signals
     signal s1_is_load      : std_logic := '0';
     signal s1_imm_data     : std_logic_vector(15 downto 0) := (others => '0');
     
@@ -125,14 +112,11 @@ begin
             clk => clk, reset => reset, 
             exec_ctrl_in => exec_ctrl_in, 
             valid_in => valid_in,
-            current_thread => current_thread, opcode_out => iss_opcode,
+            current_thread => current_thread, 
             rs1_addr_global => iss_rs1_addr, rs2_addr_global => iss_rs2_addr, 
             rs3_addr_global => iss_rs3_addr, rd_addr_global => iss_rd_addr,
-            inst_write_mask => iss_mask, issue_valid => iss_valid,
-            cmp_invert => iss_cmp_invert, cmp_swap => iss_cmp_swap, is_logic_op => iss_is_logic_op,
-            is_load => iss_is_load, imm_data => iss_imm_data, -- NEW
-            vrf_we => iss_vrf_we, prf_we => iss_prf_we,
-            swiz_sel_a => iss_swiz_a, swiz_sel_b => iss_swiz_b, swiz_sel_c => open, wb_mux_sel => iss_wb_mux
+            exec_ctrl_out => iss_exec_record,
+            issue_valid => iss_valid
         );
 
     u_wb_ctrl: entity work.writeback_controller
@@ -226,25 +210,26 @@ begin
                 s1_valid   <= '0';
                 s1_is_load <= '0';
             else
-                s1_opcode      <= iss_opcode;
+                -- Unpack fields from the new unified record
+                s1_opcode      <= iss_exec_record.opcode;
                 s1_valid       <= iss_valid;
-                s1_cmp_inv     <= iss_cmp_invert;
-                s1_cmp_swap    <= iss_cmp_swap;
-                s1_is_logic_op <= iss_is_logic_op;
+                s1_cmp_inv     <= iss_exec_record.cmp_invert;
+                s1_cmp_swap    <= iss_exec_record.cmp_swap;
+                s1_is_logic_op <= iss_exec_record.is_logic_op;
                 
-                s1_is_load     <= iss_is_load;  -- NEW
-                s1_imm_data    <= iss_imm_data; -- NEW
+                s1_is_load     <= iss_exec_record.is_load;
+                s1_imm_data    <= iss_exec_record.imm_data;
                 
-                s1_swiz_a      <= iss_swiz_a;
-                s1_swiz_b      <= iss_swiz_b;
+                s1_swiz_a      <= iss_exec_record.swiz_sel_a;
+                s1_swiz_b      <= iss_exec_record.swiz_sel_b;
                 s1_prf_rs1     <= prf_rs1_data;
                 s1_prf_rs2     <= prf_rs2_data;
 
                 s1_rd_addr     <= iss_rd_addr;
-                s1_wb_mask     <= iss_mask;
-                s1_wb_mux      <= iss_wb_mux;
-                s1_vrf_we      <= iss_vrf_we and iss_valid;
-                s1_prf_we      <= iss_prf_we and iss_valid;
+                s1_wb_mask     <= iss_exec_record.write_mask;
+                s1_wb_mux      <= iss_exec_record.wb_mux_sel;
+                s1_vrf_we      <= iss_exec_record.vrf_we and iss_valid;
+                s1_prf_we      <= iss_exec_record.prf_we and iss_valid;
             end if;
         end if;
     end process;
