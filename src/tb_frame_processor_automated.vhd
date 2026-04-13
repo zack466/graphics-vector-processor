@@ -1,4 +1,5 @@
 -- ============================================================================
+-- FILE: tb_frame_processor_automated.vhd
 -- TESTBENCH: tb_frame_processor_automated
 -- ============================================================================
 -- PURPOSE:
@@ -9,10 +10,12 @@
 --   writing the result to MEMORY_DUMP_FILE.
 --
 -- USAGE (from src/ directory):
---   Pass PROGRAM_FILE via GHDL generic override:
+--   Pass PROGRAM_FILE and dimensions via GHDL generic override:
 --     ./work/tb_frame_processor_automated \
 --         -gPROGRAM_FILE=program.hex \
 --         -gMEMORY_DUMP_FILE=memory_dump.hex \
+--         -gFRAME_WIDTH=64 \
+--         -gFRAME_HEIGHT=64 \
 --         --stop-time=10ms
 --
 -- FRAME PARAMETERS:
@@ -38,7 +41,6 @@ entity tb_frame_processor_automated is
         FRAME_WIDTH      : integer := 32;   -- pixels per row
         FRAME_HEIGHT     : integer := 32;   -- rows per frame
         DUMP_START_ADDR  : integer := 0;    -- framebuffer base in DDR3
-        DUMP_END_ADDR    : integer := 4096; -- 32*32*4 bytes
         FB_BASE_ADDR     : integer := 0     -- framebuffer base (16-bit upper word of DDR3 byte address)
     );
 end entity tb_frame_processor_automated;
@@ -51,6 +53,10 @@ architecture sim of tb_frame_processor_automated is
     constant ADDR_WIDTH      : integer := 32;
     constant DATA_WIDTH      : integer := 128;
     constant CLK_PERIOD      : time    := 10 ns;
+
+    -- Automatically calculate the dump end address based on the frame size generics!
+    -- Each pixel is 4 bytes (RGBA).
+    constant DUMP_END_ADDR   : integer := DUMP_START_ADDR + (FRAME_WIDTH * FRAME_HEIGHT * 4);
 
     signal clk   : std_logic := '0';
     signal reset : std_logic := '1';
@@ -89,6 +95,7 @@ architecture sim of tb_frame_processor_automated is
     signal frame_start  : std_logic := '0';
     signal fp_width     : std_logic_vector(15 downto 0) := (others => '0');
     signal fp_height    : std_logic_vector(15 downto 0) := (others => '0');
+    signal tb_time_ms   : std_logic_vector(31 downto 0) := (others => '0');
     signal frame_done   : std_logic;
 
 begin
@@ -134,6 +141,7 @@ begin
             frame_start       => frame_start,
             frame_width       => fp_width,
             frame_height      => fp_height,
+            time_ms           => tb_time_ms,
             frame_done        => frame_done,
             fb_base_addr      => std_logic_vector(to_unsigned(FB_BASE_ADDR, 16))
         );
@@ -217,8 +225,9 @@ begin
                integer'image((FRAME_WIDTH * FRAME_HEIGHT + WARP_SIZE - 1) / WARP_SIZE) &
                " warps)...";
 
-        fp_width     <= std_logic_vector(to_unsigned(FRAME_WIDTH,  16));
-        fp_height    <= std_logic_vector(to_unsigned(FRAME_HEIGHT, 16));
+        fp_width   <= std_logic_vector(to_unsigned(FRAME_WIDTH,  16));
+        fp_height  <= std_logic_vector(to_unsigned(FRAME_HEIGHT, 16));
+        tb_time_ms <= x"000003E8"; -- Simulated 1000ms offset just for testing
         frame_start  <= '1';
         wait until rising_edge(clk);
         frame_start  <= '0';

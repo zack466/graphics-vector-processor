@@ -13,7 +13,7 @@
   should probably hardcode addresses of two backbuffers for double buffering.
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard).
   Or just one warp that utilizes latency hiding should be ok.
-* add global constants / uniforms for resolution (x, y have width/height), and also time (roughly in seconds). Should be roughly identical to the THREAD_ID instruction.
+* replace reciprocal with division operation for better float precision? Figure out why gradient is slightly wrong at midpoint
 
 # Agent changes
 

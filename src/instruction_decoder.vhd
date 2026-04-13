@@ -31,7 +31,7 @@
 --          (rs3 not encoded; reserved for future FMA extension)
 --
 --   RED  : [31:30]=mode    [29:26]=mask         [25:22]=rd    [21:18]=rs1
---          [17:14]=rs2     [13:11]=swiz_a        [10:8]=swiz_b
+--          [17:14]=rs2     [13:11]=swiz_a       [10:8]=swiz_b
 --          (mode overlaps the top 2 bits of opcode because RED only needs
 --           2 mode bits and has no further opcode variation)
 --
@@ -39,7 +39,7 @@
 --          [7:6]=pred_sel   [5:4]=pred_mod
 --
 --   ALU  : [31:26]=opcode  [25:22]=write_mask   [21:18]=rd    [17:14]=rs1
---          [13:10]=rs2     [9:7]=swiz_a          [6:4]=reserved
+--          [13:10]=rs2     [9:7]=swiz_a         [6:4]=reserved
 --          (no rs3, no cmp fields — integer ops are simpler than FPU)
 --
 --   IMM  : [31:30]=LDI_subop  [29:26]=write_mask  [25:10]=imm16  [9:8]=reserved
@@ -51,7 +51,7 @@
 --
 --   SYS  : [31:26]=opcode  [25:4]=reserved       [3:0]=type
 --          (FLUSH/RETURN/BREAK/INT: opcode is routed through v_fpu because
---           processor.vhd's exec_mux uses dec_fpu.opcode as the default path;
+--           warp_unit.vhd's exec_mux uses dec_fpu.opcode as the default path;
 --           no register reads or writes are needed for these tokens)
 --
 -- PORTS:
@@ -312,7 +312,8 @@ begin
 
             -- ICMP instructions write to the PRF (1-bit comparison flag per
             -- component), not the VRF. This mirrors the FPU FCMP design.
-            -- All other integer ALU ops produce a 32-bit integer result → VRF.
+            -- All other integer ALU ops (including THREAD_ID, RESOLUTION, TIME) 
+            -- produce a 32-bit integer result routed to the VRF.
             if internal_opcode = OP_ICMP_EQ or internal_opcode = OP_ICMP_SLT or internal_opcode = OP_ICMP_ULT then
                 v_alu.vrf_we := '0';
                 v_alu.prf_we := '1';
@@ -357,7 +358,7 @@ begin
             -- [31:26] Opcode | [25:4] Reserved | [3:0] Type
             -- ----------------------------------------------------------------
             -- WHY route through v_fpu rather than a dedicated SYS record:
-            --   processor.vhd's exec_mux uses dec_fpu.opcode as the default
+            --   warp_unit.vhd's exec_mux uses dec_fpu.opcode as the default
             --   control path. By placing the SYS opcode (FLUSH, RETURN, BREAK,
             --   INT) into v_fpu.opcode, the processor FSM sees it at the
             --   expected location without needing a separate mux input for

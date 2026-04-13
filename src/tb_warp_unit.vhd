@@ -126,6 +126,11 @@ begin
             fb_base_addr    => fb_base_addr,
             warp_halted     => warp_halted,
             warp_break      => warp_break,
+
+            -- Shader Uniforms
+            frame_width     => (others => '0'),
+            frame_height    => (others => '0'),
+            time_ms         => (others => '0'),
             
             -- Pixel Buffer output handshake
             mem_stall       => '0',

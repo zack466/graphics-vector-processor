@@ -1,4 +1,5 @@
 -- ============================================================================
+-- FILE: warp_unit.vhd
 -- COMPONENT: warp_unit
 -- ============================================================================
 -- PURPOSE:
@@ -192,6 +193,11 @@ entity warp_unit is
         fb_base_addr    : in  std_logic_vector(15 downto 0); -- framebuffer base (upper 16 bits of DDR3 byte addr)
         warp_halted     : out std_logic;   -- '1' while FSM is in HALTED state
         warp_break      : out std_logic;   -- 1-cycle pulse when OP_BREAK executes
+        
+        -- Shader Uniforms
+        frame_width     : in  std_logic_vector(15 downto 0);
+        frame_height    : in  std_logic_vector(15 downto 0);
+        time_ms         : in  std_logic_vector(31 downto 0);
 
         -- ==========================================
         -- Pixel Buffer Output (to mcu_block_transfer)
@@ -496,9 +502,36 @@ begin
     -- ========================================================================
     -- DECODER RECORD MULTIPLEXER
     -- ========================================================================
-    -- Identical logic to processor.vhd: picks the right exec_ctrl_t fields
-    -- from dec_fpu / dec_alu / dec_red based on the current instruction type.
-    -- WHY dec_fpu is the default: see processor.vhd for full rationale.
+    -- WHY this mux exists here rather than inside the issuer or decoder:
+    --   The instruction_decoder produces parallel, incompatible record types
+    --   (fpu_ctrl_t, alu_ctrl_t, red_ctrl_t) because each instruction class
+    --   packs its bits differently. The issuer and execution unit consume a
+    --   single unified exec_ctrl_t. Merging here (at the top level) keeps
+    --   the decoder and the issuer completely orthogonal.
+    --
+    -- WHY dec_fpu is the default (not an "unknown" value):
+    --   SYS instructions (like FLUSH) go through the issuer. Their opcode
+    --   field is in bits[31:26], which dec_fpu correctly exposes. All WE
+    --   fields in dec_fpu are '0' for SYS instructions, so using dec_fpu as
+    --   the default causes no accidental writebacks.
+    --
+    -- WHY ALU and IMM share the same branch:
+    --   Both use dec_alu fields. The IMM class differs only in that
+    --   dec_alu.is_load='1' and imm_data carries the payload. Note that
+    --   shader uniforms (WIDTH, HEIGHT, TIME) also flow through the ALU
+    --   branch because they are executed as integer scalar operations.
+    --
+    -- WHY RED does not override rs3_addr_local:
+    --   The reduction unit only reads rs1 and rs2; rs3 is unused (left as
+    --   the dec_fpu default, which is '0').
+    --
+    -- WHY SYS has a special override for OP_RETURN:
+    --   OP_RETURN encodes the pixel buffer source register in bits [7:4]
+    --   of the instruction word. The default FPU decoder would incorrectly
+    --   extract rs1 from bits [17:14]. This block explicitly intercepts
+    --   OP_RETURN, maps bits [7:4] to rs1_addr_local, and forces all write
+    --   enables to '0' so the execution unit safely snoops the register
+    --   for the M10K pixel buffer without corrupting the VRF.
     process(ifu_inst_out, dec_fpu, dec_alu, dec_red)
         variable v_type : std_logic_vector(3 downto 0);
     begin
@@ -624,6 +657,9 @@ begin
             vrf_rs2_data      => vrf_rs2_data, vrf_rs3_data => vrf_rs3_data,
             prf_rs1_data      => prf_rs1_data, prf_rs2_data => prf_rs2_data,
             warp_offset_in    => reg_warp_offset, thread_id_in => iss_thread_id,
+            frame_width_in    => frame_width,
+            frame_height_in   => frame_height,
+            time_ms_in        => time_ms,
             wb_rd_addr_out    => exec_wb_rd_addr, wb_vrf_data_out => exec_wb_vrf_data,
             wb_prf_data_out   => exec_wb_prf_data, wb_vrf_we_out => exec_wb_vrf_we,
             wb_prf_we_out     => exec_wb_prf_we, wb_mask_out => exec_wb_mask,

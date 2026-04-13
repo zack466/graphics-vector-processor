@@ -1,4 +1,5 @@
 -- ============================================================================
+-- FILE: frame_processor.vhd
 -- COMPONENT: frame_processor
 -- ============================================================================
 -- PURPOSE:
@@ -20,7 +21,7 @@
 --
 -- TOPOLOGY:
 --
---   [frame_start / frame_width / frame_height]
+--   [frame_start / frame_width / frame_height / time_ms]
 --       |
 --   [u_sched: warp_scheduler]
 --       |  warp_start, warp_offset
@@ -52,6 +53,7 @@
 --   frame_start       : 1-cycle pulse from host to begin rendering a frame.
 --   frame_width       : Frame width in pixels (16-bit unsigned).
 --   frame_height      : Frame height in pixels (16-bit unsigned).
+--   time_ms           : Elapsed time in milliseconds (shader uniform).
 --   frame_done        : 1-cycle pulse when all warps have completed.
 -- ============================================================================
 
@@ -94,11 +96,12 @@ entity frame_processor is
         prog_wr_data      : in  std_logic_vector(31 downto 0);
 
         -- ==========================================
-        -- Frame Control Interface
+        -- Frame Control & Uniform Interface
         -- ==========================================
         frame_start       : in  std_logic;
         frame_width       : in  std_logic_vector(15 downto 0);
         frame_height      : in  std_logic_vector(15 downto 0);
+        time_ms           : in  std_logic_vector(31 downto 0) := (others => '0');
         frame_done        : out std_logic;
 
         -- Framebuffer base address: upper 16 bits of the DDR3 byte address used
@@ -208,6 +211,12 @@ begin
             fb_base_addr    => sched_fb_base,
             warp_halted     => warp_halted_sig,
             warp_break      => open,
+            
+            -- Route Shader Uniforms into the Warp Unit
+            frame_width     => frame_width,
+            frame_height    => frame_height,
+            time_ms         => time_ms,
+            
             mem_stall       => mcu_mem_stall,
             pixel_buf_valid => warp_pixel_valid,
             pixel_buf_addr  => warp_pixel_addr,

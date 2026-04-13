@@ -1,12 +1,13 @@
 -- =============================================================================
--- alu_lane.vhd — Integer ALU Lane (Latency-Padded to Match FPU)
+-- FILE: alu_lane.vhd
+-- COMPONENT: Integer ALU Lane (Latency-Padded to Match FPU)
 -- =============================================================================
 --
 -- WHY THIS COMPONENT EXISTS:
 --   In a SIMT processor, each thread lane needs both integer and floating-point
 --   execution capability. The ALU lane handles all integer opcodes (IADD, ISUB,
---   IMUL, bitwise, shifts, ICMP comparisons, THREAD_ID) and the immediate-load
---   pseudo-instructions (LDI_LO, LDI_HI).
+--   IMUL, bitwise, shifts, ICMP comparisons, THREAD_ID, WIDTH, HEIGHT, TIME) and 
+--   the immediate-load pseudo-instructions (LDI_LO, LDI_HI).
 --
 --   The central design constraint is that the writeback controller uses a SINGLE
 --   uniform pipeline for every instruction type — integer and floating-point
@@ -21,8 +22,9 @@
 --   arrives on the same beat and the controller just commits it.
 --
 -- HOW TO USE:
---   - Drive opcode, valid_in, op_a, op_b, imm_data, thread_id, warp_offset
---     on the same cycle the instruction is issued to the lane.
+--   - Drive opcode, valid_in, op_a, op_b, imm_data, thread_id, warp_offset,
+--     frame_width, frame_height, and time_ms on the same cycle the instruction 
+--     is issued to the lane.
 --   - Assert is_load='1' for LDI_LO / LDI_HI instructions; this gates the
 --     immediate path and suppresses the integer opcode decode.
 --   - Outputs result, comp_flag, valid_out appear exactly FPU_MAX_LATENCY
@@ -56,6 +58,9 @@
 --                  by THREAD_ID to compute the absolute thread number.
 --   warp_offset  : 32-bit warp base address from the CSR. Added to thread_id
 --                  to produce the absolute thread ID visible to the shader.
+--   frame_width  : 16-bit frame width uniform for WIDTH instruction.
+--   frame_height : 16-bit frame height uniform for HEIGHT instruction.
+--   time_ms      : 32-bit time uniform for TIME instruction.
 --
 --   result       : 32-bit integer result, valid FPU_MAX_LATENCY cycles after
 --                  valid_in. For ICMP instructions this field is undefined;
@@ -96,9 +101,12 @@ entity alu_lane is
         op_a         : in  word_t;
         op_b         : in  word_t;
 
-        -- Thread ID computation inputs
-        thread_id    : in  std_logic_vector(4 downto 0); -- Current thread index (0-31)
+        -- Shader Uniforms & Thread ID computation inputs
+        thread_id    : in  std_logic_vector(4 downto 0);  -- Current thread index (0-31)
         warp_offset  : in  std_logic_vector(31 downto 0); -- Warp base offset from CSR
+        frame_width  : in  std_logic_vector(15 downto 0);
+        frame_height : in  std_logic_vector(15 downto 0);
+        time_ms      : in  std_logic_vector(31 downto 0);
         
         -- Synchronized Outputs (Arrives exactly FPU_MAX_LATENCY cycles later)
         result       : out word_t;
@@ -135,7 +143,7 @@ begin
     -- Making this a pure process (no clock) means synthesis can optimise the
     -- logic freely and report timing on the combinational path rather than
     -- hiding it behind a pipeline register that would cost area for no benefit.
-    process(opcode, op_a, op_b, imm_data, thread_id, warp_offset)
+    process(opcode, op_a, op_b, imm_data, thread_id, warp_offset, frame_width, frame_height, time_ms)
         variable a_uns : unsigned(31 downto 0);
         variable b_uns : unsigned(31 downto 0);
         variable a_sgn : signed(31 downto 0);
@@ -228,6 +236,22 @@ begin
                     raw_res <= std_logic_vector(
                         unsigned(warp_offset) + resize(unsigned(thread_id), 32)
                     );
+
+                -- Shader Uniform: WIDTH
+                -- Zero-padded to 32 bits to match the datapath width.
+                when OP_WIDTH =>
+                    raw_res <= x"0000" & frame_width;
+                    
+                -- Shader Uniform: HEIGHT
+                -- Zero-padded to 32 bits to match the datapath width.
+                when OP_HEIGHT =>
+                    raw_res <= x"0000" & frame_height;
+
+                -- Shader Uniform: TIME
+                -- Returns the elapsed time in milliseconds. Useful for animating
+                -- shader effects.
+                when OP_TIME =>
+                    raw_res <= time_ms;
 
                 when others => null;
             end case;

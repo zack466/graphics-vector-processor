@@ -192,6 +192,9 @@ begin
             op_b        => swiz_b_out(0),
             thread_id   => (others => '0'),
             warp_offset => (others => '0'),
+            frame_width => (others => '0'),
+            frame_height=> (others => '0'),
+            time_ms     => (others => '0'),
             result      => alu_res,
             comp_flag   => open,
             valid_out   => alu_valid

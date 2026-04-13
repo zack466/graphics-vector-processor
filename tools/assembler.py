@@ -20,7 +20,7 @@ FPU_OPCODES = {
 ALU_OPCODES = {
     'IADD': 0, 'ISUB': 1, 'IAND': 2, 'IOR': 3, 'IXOR': 4, 'ISHL': 5, 'ISHR': 6,
     'IMUL': 7, 'IINC': 8, 'IDEC': 9, 'ISAR': 10, 'ICMP_EQ': 11, 'ICMP_SLT': 12,
-    'ICMP_ULT': 13, 'THREAD_ID': 14
+    'ICMP_ULT': 13, 'THREAD_ID': 14, 'WIDTH': 15, 'HEIGHT': 16, 'TIME': 17
 }
 
 # CTRL Opcodes

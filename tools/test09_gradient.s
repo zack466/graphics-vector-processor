@@ -1,40 +1,71 @@
 # test09_gradient.s
-# Draw a 32x32 RGB gradient image.
-#   R (X component) = floor((x / 32) * 255)   (increases left to right, 0..247)
-#   G (Y component) = floor((y / 32) * 255)   (increases top to bottom, 0..247)
-#   B (Z component) = 0
-#   A (W component) = 255 (fully opaque)
+# WIDTH: 64
+# HEIGHT: 16
+# Draw an RGB gradient image using dynamic WIDTH and HEIGHT uniforms.
+#   R (X) = floor((x / WIDTH) * 255)
+#   G (Y) = floor((y / HEIGHT) * 255)
+#   B (Z) = 0
+#   A (W) = 255 (fully opaque)
 #
-# Architecture note: ALU instructions (IAND, ISHR) are scalar — they compute
-# on the X component only and broadcast the result to all four components.
-# This is fine here because THREAD_ID and LDI both produce the same value in
-# all four components, so the broadcast result is identical to a full-vector op.
+# Architecture note: Because there is no IDIV instruction, this shader uses
+# the FPU to compute `y = floor(tid / width)`. This is a fantastic integration
+# test, proving that the ALU and FPU pipelines are perfectly latency-matched 
+# and can trade data back and forth without stalling!
 
-THREAD_ID v0.xyzw        # v0 = global_tid = warp_offset + lane (same in all 4 components)
-LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (column mask)
-LDI_LO v3.xyzw, 0x0005  # v3 = 5 (row shift amount)
-LDI_LO v10.xyzw, 0x0000
-LDI_HI v10.xyzw, 0x3D00 # v10 = 0x3D000000 = 0.03125f = 1/32
-LDI_LO v13.xyzw, 0x0000
-LDI_HI v13.xyzw, 0x437F # v13 = 0x437F0000 = 255.0f
+THREAD_ID v0.xyzw        # v0 = global_tid
+WIDTH v1.xyzw            # v1 = width
+HEIGHT v2.xyzw           # v2 = height
 
-IAND v4.xyzw, v0, v1    # v4 = x = tid & 0x1F  (column 0..31, same in all components)
-ISHR v6.xyzw, v0, v3    # v6 = y = tid >> 5     (row 0..31, same in all components)
-I2F v8.xyzw, v4         # v8 = float(x) in all 4 components
-I2F v9.xyzw, v6         # v9 = float(y) in all 4 components
-FMUL v11.xyzw, v8, v10  # v11 = x/32 in all 4 components
-FMUL v12.xyzw, v9, v10  # v12 = y/32 in all 4 components
+# -------------------------------------------------------------------------
+# 1. Convert integers to floats to prepare for division
+# -------------------------------------------------------------------------
+I2F v3.xyzw, v0          # v3 = float(tid)
+I2F v4.xyzw, v1          # v4 = float(width)
+I2F v2.xyzw, v2          # v2 = float(height) (Overwrites int height!)
 
-# Initialize v14 = 255.0f in all components.
-# This sets the alpha channel (W). X and Y will be overwritten below; Z by FSUB.
-LDI_LO v14.xyzw, 0x0000
-LDI_HI v14.xyzw, 0x437F # v14 = {255.0f, 255.0f, 255.0f, 255.0f}
+# -------------------------------------------------------------------------
+# 2. Compute y_int = floor(tid / width)
+# Note: 1.0/width is perfectly exact for power-of-2 widths in IEEE 754.
+# -------------------------------------------------------------------------
+FRCP v5.xyzw, v4         # v5 = 1.0f / width
+FMUL v3.xyzw, v3, v5     # v3 = float(tid) * (1.0f / width) (Overwrites float tid)
+F2I  v6.xyzw, v3         # v6 = y_int 
 
-FMUL v14.x, v11, v13    # v14.X = R = (x/32) * 255.0f
-FMUL v14.y, v12, v13    # v14.Y = G = (y/32) * 255.0f
-FSUB v14.z, v13, v13    # v14.Z = 255.0f - 255.0f = 0.0f  (Blue = 0)
-# v14.W stays 255.0f from LDI above (Alpha = 255)
+# -------------------------------------------------------------------------
+# 3. Compute x_int = tid - (y_int * width)
+# -------------------------------------------------------------------------
+IMUL v7.xyzw, v6, v1     # v7 = y_int * width
+ISUB v0.xyzw, v0, v7     # v0 = x_int (Overwrites tid!)
 
-F2I v15.xyzw, v14       # convert floats to integers: {255, 0, G_int, R_int}
-FLUSH                    # drain pipeline before pixel snoop reads VRF
-RETURN v15               # write packed RGBA for all 32 threads and halt warp
+# -------------------------------------------------------------------------
+# 4. Normalize x and y to [0.0, 1.0] ranges
+# -------------------------------------------------------------------------
+I2F  v0.xyzw, v0         # v0 = float(x_int) (Overwrites x_int)
+I2F  v6.xyzw, v6         # v6 = float(y_int) (Overwrites y_int)
+FRCP v2.xyzw, v2         # v2 = 1.0f / height (Overwrites float height)
+
+FMUL v0.xyzw, v0, v5     # v0 = x_norm = float(x) * (1.0f / width)
+FMUL v6.xyzw, v6, v2     # v6 = y_norm = float(y) * (1.0f / height)
+
+# -------------------------------------------------------------------------
+# 5. Scale to [0, 255] and pack into final RGBA vector
+# -------------------------------------------------------------------------
+# Re-use v1 for the 255.0f constant (width is no longer needed)
+LDI_LO v1.xyzw, 0x0000
+LDI_HI v1.xyzw, 0x437F   # v1 = 255.0f
+
+# Re-use v2 for the output vector (1.0f / height is no longer needed)
+# Initialize output vector with Alpha=255.0 (W component)
+LDI_LO v2.xyzw, 0x0000
+LDI_HI v2.xyzw, 0x437F   # v2 = {255.0f, 255.0f, 255.0f, 255.0f}
+
+FMUL v2.x, v0, v1        # v2.X (Red)   = x_norm * 255.0f
+FMUL v2.y, v6, v1        # v2.Y (Green) = y_norm * 255.0f
+FSUB v2.z, v1, v1        # v2.Z (Blue)  = 255.0f - 255.0f = 0.0f
+
+# -------------------------------------------------------------------------
+# 6. Writeback to Pixel Buffer
+# -------------------------------------------------------------------------
+F2I v2.xyzw, v2          # Convert RGBA floats to integers: {255, 0, G, R} (Overwrites float vector)
+FLUSH                    # Drain pipeline before pixel snoop reads VRF
+RETURN v2                # End shader, write pixel buffer

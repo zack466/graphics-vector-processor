@@ -51,8 +51,9 @@ WAVEFORM = waveform.ghw
 WORKDIR = work/
 
 # Note: VHDL-2008 flag (-std=08) is critical for float_pkg support
-BUILDFLAGS = --std=08 --workdir=$(WORKDIR)
-RUNFLAGS = --ieee-asserts=disable --wave=$(WAVEFORM) --stop-time=10ms
+BUILDFLAGS = --std=08 --workdir=$(WORKDIR) -O3
+RUNFLAGS = --ieee-asserts=disable --stop-time=10ms
+# --wave=$(WAVEFORM) 
 
 # Add work directory prefix to testbench executables
 TESTBENCH_EXECS = $(addprefix $(WORKDIR), $(TESTBENCHES))

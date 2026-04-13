@@ -1,4 +1,5 @@
 -- ============================================================================
+-- FILE: processor_constants_pkg.vhd
 -- PACKAGE: processor_constants_pkg
 -- ============================================================================
 -- PURPOSE:
@@ -277,21 +278,25 @@ package processor_constants_pkg is
     -- result (warp_offset + thread_id) that belongs in the VRF as an integer,
     -- not a float.  Routing it through the ALU pipeline (not FPU) avoids an
     -- unnecessary int-to-float conversion.
-    constant OP_IADD    : std_logic_vector(5 downto 0) := "000000"; -- Integer add: rd = rs1 + rs2
-    constant OP_ISUB    : std_logic_vector(5 downto 0) := "000001"; -- Integer subtract: rd = rs1 - rs2
-    constant OP_IAND    : std_logic_vector(5 downto 0) := "000010"; -- Bitwise AND
-    constant OP_IOR     : std_logic_vector(5 downto 0) := "000011"; -- Bitwise OR
-    constant OP_IXOR    : std_logic_vector(5 downto 0) := "000100"; -- Bitwise XOR
-    constant OP_ISHL    : std_logic_vector(5 downto 0) := "000101"; -- Logical shift left
-    constant OP_ISHR    : std_logic_vector(5 downto 0) := "000110"; -- Logical shift right (zero-fill)
-    constant OP_IMUL    : std_logic_vector(5 downto 0) := "000111"; -- Integer multiply (lower 32 bits)
-    constant OP_IINC    : std_logic_vector(5 downto 0) := "001000"; -- Increment: rd = rs1 + 1
-    constant OP_IDEC    : std_logic_vector(5 downto 0) := "001001"; -- Decrement: rd = rs1 - 1
-    constant OP_ISAR    : std_logic_vector(5 downto 0) := "001010"; -- Arithmetic shift right (sign-extend)
+    constant OP_IADD      : std_logic_vector(5 downto 0) := "000000"; -- Integer add: rd = rs1 + rs2
+    constant OP_ISUB      : std_logic_vector(5 downto 0) := "000001"; -- Integer subtract: rd = rs1 - rs2
+    constant OP_IAND      : std_logic_vector(5 downto 0) := "000010"; -- Bitwise AND
+    constant OP_IOR       : std_logic_vector(5 downto 0) := "000011"; -- Bitwise OR
+    constant OP_IXOR      : std_logic_vector(5 downto 0) := "000100"; -- Bitwise XOR
+    constant OP_ISHL      : std_logic_vector(5 downto 0) := "000101"; -- Logical shift left
+    constant OP_ISHR      : std_logic_vector(5 downto 0) := "000110"; -- Logical shift right (zero-fill)
+    constant OP_IMUL      : std_logic_vector(5 downto 0) := "000111"; -- Integer multiply (lower 32 bits)
+    constant OP_IINC      : std_logic_vector(5 downto 0) := "001000"; -- Increment: rd = rs1 + 1
+    constant OP_IDEC      : std_logic_vector(5 downto 0) := "001001"; -- Decrement: rd = rs1 - 1
+    constant OP_ISAR      : std_logic_vector(5 downto 0) := "001010"; -- Arithmetic shift right (sign-extend)
     constant OP_ICMP_EQ   : std_logic_vector(5 downto 0) := "001011"; -- Compare equal → predicate register
     constant OP_ICMP_SLT  : std_logic_vector(5 downto 0) := "001100"; -- Compare signed less-than → predicate
     constant OP_ICMP_ULT  : std_logic_vector(5 downto 0) := "001101"; -- Compare unsigned less-than → predicate
+
     constant OP_THREAD_ID : std_logic_vector(5 downto 0) := "001110"; -- rd = csr_warp_offset + thread_id (per-thread unique ID)
+    constant OP_WIDTH     : std_logic_vector(5 downto 0) := "001111"; -- rd.x = frame_width
+    constant OP_HEIGHT    : std_logic_vector(5 downto 0) := "010000"; -- rd.x = frame_height
+    constant OP_TIME      : std_logic_vector(5 downto 0) := "010001"; -- rd.x = elapsed_time_ms
 
     -- ========================================================================
     -- IMMEDIATE OPCODES (When Type == INST_TYPE_IMM = "0100")

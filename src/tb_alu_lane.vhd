@@ -24,6 +24,10 @@ architecture sim of tb_alu_lane is
     signal thread_id   : std_logic_vector(4 downto 0) := (others => '0');
     signal warp_offset : std_logic_vector(31 downto 0) := (others => '0');
 
+    signal frame_width  : std_logic_vector(15 downto 0) := (others => '0');
+    signal frame_height : std_logic_vector(15 downto 0) := (others => '0');
+    signal time_ms      : std_logic_vector(31 downto 0) := (others => '0');
+
     signal result    : word_t;
     signal comp_flag : std_logic;
     signal valid_out : std_logic;
@@ -42,6 +46,9 @@ begin
             op_b        => op_b,
             thread_id   => thread_id,
             warp_offset => warp_offset,
+            frame_width => frame_width,
+            frame_height => frame_height,
+            time_ms     => time_ms,
             result      => result,
             comp_flag   => comp_flag,
             valid_out   => valid_out
