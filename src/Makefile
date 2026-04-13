@@ -2,6 +2,7 @@
 SOURCES = vector_types.vhd \
 		  processor_constants_pkg.vhd \
 		  sync_fifo.vhd \
+		  pixel_buffer_ram.vhd \
 		  fp_sim_entities.vhd fp_sim_arch.vhd \
 		  vector_reg_file.vhd swizzle_network.vhd \
 		  fpu_lane.vhd alu_lane.vhd instruction_issue.vhd \
@@ -15,7 +16,6 @@ SOURCES = vector_types.vhd \
 		  avm_burst_bridge.vhd \
 		  avm_sim_memory.vhd \
 		  instruction_decoder.vhd \
-		  memory_unit.vhd \
 		  warp_unit.vhd \
 		  warp_scheduler.vhd \
 		  frame_processor.vhd

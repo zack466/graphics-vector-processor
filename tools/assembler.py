@@ -7,7 +7,6 @@ TYPE_CTRL = 1
 TYPE_RED  = 2
 TYPE_ALU  = 3
 TYPE_IMM  = 4
-TYPE_MEM  = 5
 TYPE_SYS  = 6
 
 # FPU Opcodes
@@ -38,11 +37,6 @@ RED_MODES = {
 # IMM Opcodes
 IMM_OPCODES = {
     'LDI_LO': 0, 'LDI_HI': 1
-}
-
-# MEM Opcodes (STORE removed — replaced by RETURN reg; LOAD reserved for future use)
-MEM_OPCODES = {
-    'LOAD': 32
 }
 
 # SYS Opcodes
@@ -100,23 +94,6 @@ def assemble_line(line, labels, pc):
             reg, _, _ = parse_reg(args[0])
             return (op << 26) | (reg << 4) | TYPE_SYS
         return (op << 26) | TYPE_SYS
-        
-    # MEM
-    if mnemonic in MEM_OPCODES:
-        # e.g., STORE v1, 0x4000(v0) or LOAD v2, 0x4000(v0)
-        op = MEM_OPCODES[mnemonic]
-        dest_src, _, _ = parse_reg(args[0])
-        # parse immediate(offset_reg)
-        mem_arg = args[1]
-        m = re.match(r'(.+)\((.+)\)', mem_arg)
-        if m:
-            imm_val = int(m.group(1), 0) & 0x3FFF
-            offset_reg, _, _ = parse_reg(m.group(2))
-        else:
-            imm_val = int(mem_arg, 0) & 0x3FFF
-            offset_reg = 0
-            
-        return (op << 26) | (imm_val << 12) | (offset_reg << 8) | (dest_src << 4) | TYPE_MEM
 
     # IMM
     if mnemonic in IMM_OPCODES:

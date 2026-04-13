@@ -74,7 +74,6 @@
 --   red_ctrl    - Decoded reduction control record.
 --   alu_ctrl    - Decoded integer ALU control record. Also carries IMM ops.
 --   pc_ctrl     - Decoded branch/jump control record.
---   mem_ctrl    - Decoded memory control record.
 -- =============================================================================
 
 library IEEE;
@@ -89,8 +88,7 @@ entity instruction_decoder is
         fpu_ctrl    : out fpu_ctrl_t;
         red_ctrl    : out red_ctrl_t;
         alu_ctrl    : out alu_ctrl_t;
-        pc_ctrl     : out pc_ctrl_t;
-        mem_ctrl    : out mem_ctrl_t -- NEW
+        pc_ctrl     : out pc_ctrl_t
     );
 end entity;
 
@@ -116,7 +114,6 @@ begin
         variable v_red : red_ctrl_t;
         variable v_pc  : pc_ctrl_t;
         variable v_alu : alu_ctrl_t;
-        variable v_mem : mem_ctrl_t;
     begin
         -- ====================================================================
         -- 1. INITIALIZE VARIABLES WITH SAFE DEFAULTS (Prevents latches)
@@ -169,10 +166,6 @@ begin
         v_alu.prf_we         := '0';
         v_alu.is_load        := '0';
         v_alu.imm_data       := (others => '0');
-
-        v_mem.is_valid         := '0';
-        v_mem.base_addr        := (others => '0');
-        v_mem.dest_src_reg_idx := "0000";
 
         -- ====================================================================
         -- 2. DECODE BASED ON INSTRUCTION TYPE
@@ -372,21 +365,6 @@ begin
             -- than interpreting op_a/op_b as two register operands.
             v_alu.is_load        := '1';
 
-        elsif inst_type = INST_TYPE_MEM then
-            -- ----------------------------------------------------------------
-            -- MEMORY INSTRUCTION MAP (Routes to Block Transfer Unit)
-            -- [31:26] Opcode | [25:12] Base Addr Imm (14b) | [11:8] Rsvd
-            -- [7:4] Src Reg      | [3:0] Type
-            -- ----------------------------------------------------------------
-            v_mem.is_valid         := '1';
-            -- base_addr is 14 bits in the instruction, zero-extended to 16 bits
-            -- ("00" prepended) to match the address bus width of the memory
-            -- controller. The 2 MSBs of the immediate are effectively reserved.
-            -- Bits [11:8] of the instruction word are reserved and ignored.
-            v_mem.base_addr        := "00" & instruction(25 downto 12);
-            -- dest_src_reg is the VRF register whose data all 32 threads store.
-            v_mem.dest_src_reg_idx := instruction(7 downto 4);
-
         elsif inst_type = INST_TYPE_SYS then
             -- ----------------------------------------------------------------
             -- SYSTEM INSTRUCTION MAP
@@ -420,7 +398,6 @@ begin
         red_ctrl <= v_red;
         pc_ctrl  <= v_pc;
         alu_ctrl <= v_alu;
-        mem_ctrl <= v_mem;
 
     end process;
 

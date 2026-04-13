@@ -12,38 +12,40 @@
 --   u_sched  : warp_scheduler      — frame-level FSM; iterates warp_offset from
 --                                    0 to frame_width*frame_height in steps of 32.
 --   u_warp   : warp_unit           — single SIMT warp (IFU, decode, issue, exec,
---                                    VRF, PRF, pixel snoop buffer).
---   u_mcu    : mcu_block_transfer  — accepts warp_unit's 1024-bit pixel buffer and
---                                    emits 8 sequential 128-bit Avalon burst beats.
+--                                    VRF, PRF, mixed-width M10K pixel buffer).
+--   u_mcu    : mcu_block_transfer  — fetches from warp_unit's pipelined M10K 
+--                                    pixel buffer and emits 8 sequential 128-bit 
+--                                    Avalon burst beats.
 --   u_bridge : avm_burst_bridge    — Avalon-MM burst protocol driver to DDR3.
 --
 -- TOPOLOGY:
 --
 --   [frame_start / frame_width / frame_height]
---        |
+--       |
 --   [u_sched: warp_scheduler]
---        |  warp_start, warp_offset
---        v
+--       |  warp_start, warp_offset
+--       v
 --   [u_warp: warp_unit] <──> [u_imem: instruction_memory]
---        |  pixel_buf_valid, pixel_buf_addr, pixel_buf_data, pixel_exec_mask
---        |  <── mem_stall ──
---        v
+--       |  pixel_buf_valid, pixel_buf_addr, pixel_exec_mask
+--       |  ── pixel_rd_data (128-bit) ──>
+--       |  <── pixel_rd_en, pixel_rd_addr, mem_stall ──
+--       v
 --   [u_mcu: mcu_block_transfer]
---        |  cmd/tx channels
---        v
+--       |  cmd/tx channels
+--       v
 --   [u_bridge: avm_burst_bridge]
---        |  avm_* (Avalon-MM master)
---        v
+--       |  avm_* (Avalon-MM master)
+--       v
 --   [DDR3 SDRAM]
 --
 -- EXTENSION TO MULTIPLE WARPS:
 --   Instantiate N warp_unit entities and extend warp_scheduler to NUM_WARPS=N.
---   The MCU will need an arbiter to accept pixel buffers from multiple warps;
---   see todo.md (Change 3) for the full extension path.
+--   The MCU will need an arbiter to multiplex the pixel buffer read interfaces 
+--   from multiple warps.
 --
 -- PORT DESCRIPTIONS:
 --   clk, reset        : System clock and synchronous active-high reset.
---   avm_*             : Avalon-MM master port to DDR3 controller.
+--   avm_* : Avalon-MM master port to DDR3 controller.
 --   prog_we           : Write-enable for instruction memory programming.
 --   prog_wr_addr      : IMEM word address (IMEM_ADDR_WIDTH bits).
 --   prog_wr_data      : 32-bit instruction word to write.
@@ -123,31 +125,31 @@ architecture structural of frame_processor is
     signal sched_fb_base     : std_logic_vector(15 downto 0); -- fb_base forwarded by scheduler
     signal warp_halted_sig   : std_logic;
 
-    -- Warp → MCU
-    signal warp_pixel_valid : std_logic;
-    signal warp_pixel_addr  : std_logic_vector(ADDR_WIDTH-1 downto 0);
-    signal warp_pixel_data  : std_logic_vector(1023 downto 0);
-    signal warp_exec_mask   : std_logic_vector(WARP_SIZE-1 downto 0);
-
-    -- MCU → Warp (back-pressure)
-    signal mcu_mem_stall    : std_logic;
+    -- Warp ↔ MCU Handshake and RAM interface
+    signal warp_pixel_valid   : std_logic;
+    signal warp_pixel_addr    : std_logic_vector(ADDR_WIDTH-1 downto 0);
+    signal warp_exec_mask     : std_logic_vector(WARP_SIZE-1 downto 0);
+    signal mcu_mem_stall      : std_logic;
+    signal warp_pixel_rd_en   : std_logic;
+    signal warp_pixel_rd_addr : std_logic_vector(2 downto 0);
+    signal warp_pixel_rd_data : std_logic_vector(DATA_WIDTH-1 downto 0);
 
     -- MCU → Bridge (command channel)
-    signal int_cmd_valid    : std_logic;
-    signal int_cmd_is_store : std_logic;
-    signal int_cmd_addr     : std_logic_vector(ADDR_WIDTH-1 downto 0);
-    signal int_cmd_burst_len: std_logic_vector(7 downto 0);
-    signal int_cmd_ready    : std_logic;
+    signal int_cmd_valid     : std_logic;
+    signal int_cmd_is_store  : std_logic;
+    signal int_cmd_addr      : std_logic_vector(ADDR_WIDTH-1 downto 0);
+    signal int_cmd_burst_len : std_logic_vector(7 downto 0);
+    signal int_cmd_ready     : std_logic;
 
     -- MCU → Bridge (TX write-data channel)
-    signal int_tx_data      : std_logic_vector(DATA_WIDTH-1 downto 0);
-    signal int_tx_byte_en   : std_logic_vector((DATA_WIDTH/8)-1 downto 0);
-    signal int_tx_valid     : std_logic;
-    signal int_tx_ready     : std_logic;
+    signal int_tx_data       : std_logic_vector(DATA_WIDTH-1 downto 0);
+    signal int_tx_byte_en    : std_logic_vector((DATA_WIDTH/8)-1 downto 0);
+    signal int_tx_valid      : std_logic;
+    signal int_tx_ready      : std_logic;
 
     -- Bridge → MCU (RX read-data; unused since MCU only stores)
-    signal int_rx_data      : std_logic_vector(DATA_WIDTH-1 downto 0);
-    signal int_rx_valid     : std_logic;
+    signal int_rx_data       : std_logic_vector(DATA_WIDTH-1 downto 0);
+    signal int_rx_valid      : std_logic;
 
 begin
 
@@ -207,11 +209,13 @@ begin
             fb_base_addr    => sched_fb_base,
             warp_halted     => warp_halted_sig,
             warp_break      => open,
+            mem_stall       => mcu_mem_stall,
             pixel_buf_valid => warp_pixel_valid,
             pixel_buf_addr  => warp_pixel_addr,
-            pixel_buf_data  => warp_pixel_data,
             pixel_exec_mask => warp_exec_mask,
-            mem_stall       => mcu_mem_stall
+            pixel_rd_en     => warp_pixel_rd_en,
+            pixel_rd_addr   => warp_pixel_rd_addr,
+            pixel_rd_data   => warp_pixel_rd_data
         );
 
     -- ========================================================================
@@ -227,9 +231,10 @@ begin
             clk             => clk, reset => reset,
             pixel_buf_valid => warp_pixel_valid,
             base_addr       => warp_pixel_addr,
-            exec_mask       => warp_exec_mask,
             mem_stall       => mcu_mem_stall,
-            pixel_buf_data  => warp_pixel_data,
+            pixel_rd_en     => warp_pixel_rd_en,
+            pixel_rd_addr   => warp_pixel_rd_addr,
+            pixel_rd_data   => warp_pixel_rd_data,
             cmd_valid       => int_cmd_valid,
             cmd_is_store    => int_cmd_is_store,
             cmd_addr        => int_cmd_addr,

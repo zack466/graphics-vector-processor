@@ -450,15 +450,6 @@ FLUSH                    # drain pipeline before pixel read
 RETURN v_result          # write packed pixels from v_result and halt warp
 ```
 
-For shaders that use intermediate `STORE` to memory (not the final pixel write):
-
-```asm
-FLUSH                    # drain before intermediate store
-STORE v_tmp, 0x0001      # write to auxiliary buffer at 0x00010000
-FLUSH                    # drain after store, before RETURN
-RETURN v_result          # write framebuffer pixels and halt
-```
-
 ---
 
 ## 6. SIMT Divergence

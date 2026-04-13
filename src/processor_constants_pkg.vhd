@@ -347,15 +347,6 @@ package processor_constants_pkg is
     constant OP_LDI_HI  : std_logic_vector(5 downto 0) := "010000"; -- LDI_HI: sub-op bits[5:4]="01"
 
     -- ========================================================================
-    -- MEMORY OPCODES [31:26] (When Type == 0101)
-    -- ========================================================================
-    -- WHY bits[31:30] = "10" for memory opcodes: mirrors the SYS opcode
-    -- convention ("11xxxx") by placing memory ops in the upper quarter of
-    -- the opcode space, making them visually distinguishable from arithmetic
-    -- ops (which start at "00xxxx").
-    constant OP_STORE   : std_logic_vector(5 downto 0) := "100001"; -- Block transfer store: DDR3[base] ← VRF[src]
-
-    -- ========================================================================
     -- CSR (CONTROL STATUS REGISTER) ADDRESS MAP (3-Bit)
     -- ========================================================================
     -- WHY a 3-bit address space (8 registers): this maps directly to Quartus
@@ -472,22 +463,6 @@ package processor_constants_pkg is
         prf_we          : std_logic;   -- '1' for ICMP_EQ, ICMP_SLT, ICMP_ULT
         is_load         : std_logic;   -- '1' for INST_TYPE_IMM: use imm_data as rs2
         imm_data        : std_logic_vector(15 downto 0); -- 16-bit literal for IMM instructions
-    end record;
-
-    -- mem_ctrl_t: decoded fields for INST_TYPE_MEM instructions.
-    -- WHY this record is NOT merged into exec_ctrl_t: memory operations bypass
-    --   the execution pipeline entirely (they go to memory_unit, not u_exec).
-    --   Including memory fields in exec_ctrl_t would bloat the record carried
-    --   through FPU_MAX_LATENCY pipeline stages for every instruction, even
-    --   though those fields are never used by the execution unit.  Keeping mem
-    --   separate allows exec_ctrl_t to remain minimal.
-    -- base_addr: 16-bit field from instruction encoding.  Zero-extended to 32
-    --   bits at the instantiation site: dec_mem.base_addr & x"0000" places the
-    --   immediate in bits[31:16] of the Avalon address.
-    type mem_ctrl_t is record
-        is_valid         : std_logic;                    -- Mirrors mem_op_valid; available for the MCU
-        base_addr        : std_logic_vector(15 downto 0); -- 16-bit instruction immediate; upper half of byte address
-        dest_src_reg_idx : std_logic_vector(3 downto 0); -- Local register index of store source
     end record;
 
     -- ========================================================================

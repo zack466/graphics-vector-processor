@@ -668,9 +668,6 @@ class RegisterAllocator:
         elif inst.op == 'BRA_DIV':
             u = self._get_base_var(inst.dest) 
             if u: uses.add(u)
-        elif inst.op == 'STORE':
-            u = self._get_base_var(inst.src1)
-            if u: uses.add(u)
         elif inst.op == 'RETURN':
             # --- NEW LIVENESS SUPPORT FOR RETURN REG ---
             u = self._get_base_var(inst.src1)
@@ -817,10 +814,7 @@ class AssemblyEmitter:
                 continue
 
             args = []
-            if inst.op == 'STORE':
-                args.append(str(inst.src1))
-                args.append(str(inst.src2))
-            elif inst.op == 'RETURN':
+            if inst.op == 'RETURN':
                 # --- NEW FORMATTING SUPPORT FOR RETURN REG ---
                 if inst.src1 is not None:
                     args.append(str(inst.src1))

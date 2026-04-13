@@ -4,7 +4,7 @@
 -- PURPOSE:
 --   Self-contained execution unit for a single SIMT warp.  Encapsulates all
 --   per-warp state: instruction fetch (IFU + PC + divergence stack), decode,
---   32-thread issue, FPU/ALU/RED execution, VRF, PRF, and the pixel snoop
+--   32-thread issue, FPU/ALU/RED execution, VRF, PRF, and the M10K pixel
 --   buffer that accumulates packed RGBA pixels during a MEM instruction's
 --   EXEC_WAIT phase.
 --
@@ -34,24 +34,23 @@
 --   The warp_unit does NOT contain mcu_block_transfer.  Instead it exposes:
 --     pixel_buf_valid : 1-cycle pulse after EXEC_WAIT completes for a MEM/RETURN
 --                       instruction.
---     pixel_buf_addr  : computed DDR3 byte address:
---                         STORE — (embedded base_addr << 16) + warp_offset*4
---                         RETURN — (fb_base_addr << 16) + warp_offset*4
---     pixel_buf_data  : flat 1024-bit snoop buffer.
+--     pixel_buf_addr  : computed DDR3 byte address: (fb_base_addr << 16) + warp_offset*4
 --     pixel_exec_mask : ifu_exec_mask (for MCU byte-enable calculation).
---     mem_stall       : input from external MCU; FSM holds MEM_WAIT until '0'.
+--     pixel_rd_en     : Memory controller read enable
+--     pixel_rd_addr   : Memory controller read address (0 to 7)
+--     pixel_rd_data   : Output 128-bit pixel data from the internal M10K buffer
 --
 -- RETURN INSTRUCTION (combined store + halt):
 --   RETURN reg encodes the source register index in bits[7:4] of the instruction
---   word (same position as STORE's dest_src_reg_idx, but in the SYS type field).
---   Execution: issues through barrel scheduler → EXEC_WAIT (fills pixel_snoop) →
---   MEM_WAIT (holds until mem_stall='0') → HALTED.
+--   word.
+--   Execution: issues through barrel scheduler → EXEC_WAIT (fills pixel buffer)
+--   → HALTED.
 --   The DDR3 address uses fb_base_addr from warp_scheduler (not an embedded
 --   immediate), enabling double-buffering without changing the shader program.
 --
 -- FSM STATES:
 --   Identical to processor.vhd: HALTED, FETCH_ADDR, FETCH_DATA, DECODE,
---   EXEC_WAIT, MEM_WAIT, ADVANCE_PC.  The only change is that the HALTED
+--   EXEC_WAIT, ADVANCE_PC.  The only change is that the HALTED
 --   guard uses the internal `running` register (set by warp_start, cleared
 --   by OP_RETURN) instead of csr_run from a CSR slave.
 -- ============================================================================
@@ -94,11 +93,13 @@ entity warp_unit is
         -- ==========================================
         -- Pixel Buffer Output (to mcu_block_transfer)
         -- ==========================================
+        mem_stall       : in  std_logic;                       -- MCU stall signal
         pixel_buf_valid : out std_logic;                       -- 1-cycle trigger: buffer full
-        pixel_buf_addr  : out std_logic_vector(31 downto 0);  -- computed DDR3 byte address
-        pixel_buf_data  : out std_logic_vector(1023 downto 0);-- 32 packed pixels (flat)
-        pixel_exec_mask : out std_logic_vector(WARP_SIZE-1 downto 0); -- per-thread enable mask
-        mem_stall       : in  std_logic    -- MCU busy; hold FSM in MEM_WAIT
+        pixel_buf_addr  : out std_logic_vector(31 downto 0);   -- computed DDR3 byte address
+        pixel_exec_mask : out std_logic_vector(WARP_SIZE-1 downto 0); -- MCU needs this for byte enables
+        pixel_rd_en     : in  std_logic;                       -- MCU read enable
+        pixel_rd_addr   : in  std_logic_vector(2 downto 0);    -- MCU read address (0-7)
+        pixel_rd_data   : out std_logic_vector(127 downto 0)   -- MCU read data from M10K (128-bit)
     );
 end entity warp_unit;
 
@@ -138,7 +139,6 @@ architecture structural of warp_unit is
     signal dec_red  : red_ctrl_t;
     signal dec_alu  : alu_ctrl_t;
     signal dec_pc   : pc_ctrl_t;
-    signal dec_mem  : mem_ctrl_t;
 
     -- PC control mux (no do_force_pc in warp_unit — PC always resets to 0)
     signal active_pc_ctrl : pc_ctrl_t;
@@ -188,13 +188,11 @@ architecture structural of warp_unit is
     signal exec_mem_store_data      : vector_t;
     signal exec_mem_store_thread_id : std_logic_vector(4 downto 0);
 
-    -- Pixel snoop buffer (32 entries × 32-bit packed RGBA)
-    type snoop_buf_t is array(0 to WARP_SIZE-1) of std_logic_vector(31 downto 0);
-    signal pixel_snoop : snoop_buf_t := (others => (others => '0'));
+    -- Intermediate packing signal for pixel_buffer_ram
+    signal packed_pixel_data        : std_logic_vector(31 downto 0);
 
     -- Computed physical DDR3 address:
     -- base_addr << 16 + reg_warp_offset * 4 (bytes per pixel).
-    -- For OP_STORE: base_addr comes from the instruction's embedded immediate.
     -- For OP_RETURN: base_addr comes from fb_base_addr (set by warp_scheduler,
     --   enables double-buffering by toggling between two framebuffer addresses).
     signal mem_phys_base : std_logic_vector(15 downto 0);
@@ -206,9 +204,8 @@ begin
     -- DDR3 ADDRESS CALCULATION
     -- ========================================================================
     -- Select base: RETURN uses fb_base_addr from the scheduler (supports double-
-    -- buffering); STORE uses the embedded instruction immediate.
-    mem_phys_base <= fb_base_addr when ifu_inst_out(31 downto 26) = OP_RETURN
-                     else dec_mem.base_addr;
+    -- buffering)
+    mem_phys_base <= fb_base_addr;
     mem_phys_addr <= std_logic_vector(
         unsigned(std_logic_vector'(mem_phys_base & x"0000")) +
         unsigned(std_logic_vector'(reg_warp_offset(29 downto 0) & "00"))
@@ -227,29 +224,26 @@ begin
     warp_halted <= '1' when state = HALTED else '0';
 
     -- ========================================================================
-    -- PIXEL SNOOP BUFFER
+    -- PIXEL BUFFER RAM (M10K)
     -- ========================================================================
     -- Accumulates packed RGBA pixels from execution unit writeback events.
-    -- Written during EXEC_WAIT as the barrel scheduler issues threads 0-31.
-    -- Not cleared between warps — overwritten each time.
-    process(clk)
-    begin
-        if rising_edge(clk) then
-            if exec_mem_store_valid = '1' then
-                pixel_snoop(to_integer(unsigned(exec_mem_store_thread_id))) <=
-                    exec_mem_store_data(3)(7 downto 0) &
-                    exec_mem_store_data(2)(7 downto 0) &
-                    exec_mem_store_data(1)(7 downto 0) &
-                    exec_mem_store_data(0)(7 downto 0);
-            end if;
-        end if;
-    end process;
+    -- Written synchronously during EXEC_WAIT as the barrel scheduler issues threads 0-31.
+    packed_pixel_data <= exec_mem_store_data(3)(7 downto 0) &
+                         exec_mem_store_data(2)(7 downto 0) &
+                         exec_mem_store_data(1)(7 downto 0) &
+                         exec_mem_store_data(0)(7 downto 0);
 
-    -- Flatten snoop buffer into pixel_buf_data output.
-    -- pixel_buf_data[i*32+31 : i*32] = pixel_snoop(i) = thread i's packed pixel.
-    gen_pixel_buf : for i in 0 to WARP_SIZE-1 generate
-        pixel_buf_data(i*32+31 downto i*32) <= pixel_snoop(i);
-    end generate;
+    u_pixel_buffer : entity work.pixel_buffer_ram
+        port map (
+            clk      => clk,
+            we       => exec_mem_store_valid,
+            wr_addr  => exec_mem_store_thread_id,
+            wr_data  => packed_pixel_data, -- Casts to word_t internally if aliased
+            rd_en    => pixel_rd_en,
+            rd_addr  => pixel_rd_addr,
+            rd_data  => pixel_rd_data
+        );
+
 
     -- ========================================================================
     -- WARP CONTROL REGISTERS
@@ -314,8 +308,8 @@ begin
     -- ========================================================================
     -- FSM — Process B: Combinational Next-State & Output Routing
     -- ========================================================================
-    process(state, running, ifu_inst_out, iss_issue_valid, mem_stall, exec_flush_active,
-            exec_mem_store_valid)
+    process(state, running, ifu_inst_out, iss_issue_valid, exec_flush_active,
+            exec_mem_store_valid, mem_stall)
         variable v_inst_type : std_logic_vector(3 downto 0);
     begin
         -- Defaults
@@ -346,16 +340,11 @@ begin
                 if running = '0' then
                     next_state <= HALTED;
 
-                elsif v_inst_type = INST_TYPE_MEM then
-                    iss_valid_in <= '1';
-                    next_state   <= EXEC_WAIT;
-
                 elsif v_inst_type = INST_TYPE_SYS then
                     if ifu_inst_out(31 downto 26) = OP_RETURN then
                         -- Issue through barrel scheduler so execution_unit snoops the
-                        -- source register and fills pixel_snoop for all 32 threads.
-                        -- After EXEC_WAIT the FSM goes to MEM_WAIT (stall until the
-                        -- MCU accepts the pixel buffer), then HALTED.
+                        -- source register and fills pixel_buffer_ram for all 32 threads.
+                        -- After EXEC_WAIT the FSM goes to HALTED.
                         -- running is cleared synchronously this cycle (control process).
                         iss_valid_in <= '1';
                         next_state   <= EXEC_WAIT;
@@ -386,19 +375,8 @@ begin
             when EXEC_WAIT =>
                 if iss_issue_valid = '0' and
                    (ifu_inst_out(31 downto 26) /= OP_FLUSH or exec_flush_active = '0') then
-                    if ifu_inst_out(3 downto 0) = INST_TYPE_MEM or
-                       ifu_inst_out(31 downto 26) = OP_RETURN then
-                        -- WHY wait for exec_mem_store_valid='0':
-                        -- When iss_issue_valid drops (thread 31 has been issued),
-                        -- the S1 stage still holds thread 31's snoop data for one
-                        -- more cycle (exec_mem_store_valid='1').  pixel_snoop[31]
-                        -- is not written until the rising edge of that cycle.
-                        -- If we assert pixel_buf_valid immediately, the MCU latches
-                        -- pixel_buf_data before pixel_snoop[31] is updated, producing
-                        -- a stale (wrong) value for thread 31.  Waiting one extra
-                        -- cycle (until exec_mem_store_valid='0') ensures all 32
-                        -- snoop entries are committed before the MCU reads the buffer.
-                        -- This logic applies equally to OP_RETURN (combined store+halt).
+                    if ifu_inst_out(31 downto 26) = OP_RETURN then
+                        -- Wait for exec_mem_store_valid='0' before signaling completion.
                         if exec_mem_store_valid = '0' then
                             pixel_buf_valid <= '1';
                             next_state      <= MEM_WAIT;
@@ -411,7 +389,6 @@ begin
             when MEM_WAIT =>
                 if mem_stall = '0' then
                     -- RETURN reg: MCU has accepted the pixel buffer; warp halts.
-                    -- STORE: continue to ADVANCE_PC (RETURN is a separate instruction).
                     if ifu_inst_out(31 downto 26) = OP_RETURN then
                         next_state <= HALTED;
                     else
@@ -479,31 +456,10 @@ begin
             exec_mux_ctrl.wb_mux_sel     <= dec_red.wb_mux_sel;
             exec_mux_ctrl.vrf_we         <= dec_red.vrf_we;
 
-        elsif v_type = INST_TYPE_MEM then
-            -- For MEM instructions, route the source register through the issuer
-            -- so the execution unit snoops its writeback and fills pixel_snoop.
-            exec_mux_ctrl.opcode         <= ifu_inst_out(31 downto 26);
-            exec_mux_ctrl.rs1_addr_local <= dec_mem.dest_src_reg_idx;
-            exec_mux_ctrl.rd_addr_local  <= dec_mem.dest_src_reg_idx;
-            exec_mux_ctrl.rs2_addr_local <= dec_fpu.rs2_addr_local;
-            exec_mux_ctrl.rs3_addr_local <= dec_fpu.rs3_addr_local;
-            exec_mux_ctrl.swiz_sel_a     <= dec_fpu.swiz_sel_a;
-            exec_mux_ctrl.swiz_sel_b     <= dec_fpu.swiz_sel_b;
-            exec_mux_ctrl.swiz_sel_c     <= dec_fpu.swiz_sel_c;
-            exec_mux_ctrl.write_mask     <= dec_fpu.write_mask;
-            exec_mux_ctrl.wb_mux_sel     <= dec_fpu.wb_mux_sel;
-            exec_mux_ctrl.cmp_invert     <= dec_fpu.cmp_invert;
-            exec_mux_ctrl.cmp_swap       <= dec_fpu.cmp_swap;
-            exec_mux_ctrl.vrf_we         <= '0';
-            exec_mux_ctrl.prf_we         <= '0';
-            exec_mux_ctrl.is_logic_op    <= dec_fpu.is_logic_op;
-            exec_mux_ctrl.is_load        <= '0';
-            exec_mux_ctrl.imm_data       <= (others => '0');
-
         elsif v_type = INST_TYPE_SYS then
             if ifu_inst_out(31 downto 26) = OP_RETURN then
                 -- RETURN reg: route the register index from bits[7:4] so the barrel
-                -- scheduler reads the correct source register for the pixel snoop buffer.
+                -- scheduler reads the correct source register for the pixel buffer.
                 -- The FPU decoder would extract rs1 from bits[17:14] (wrong for SYS),
                 -- so we explicitly override here.  WE fields stay '0' (no writeback).
                 exec_mux_ctrl.rs1_addr_local <= ifu_inst_out(7 downto 4);
@@ -548,7 +504,7 @@ begin
     u_decode : entity work.instruction_decoder
         port map (
             instruction => ifu_inst_out, fpu_ctrl => dec_fpu, red_ctrl => dec_red,
-            alu_ctrl => dec_alu, pc_ctrl => dec_pc, mem_ctrl => dec_mem
+            alu_ctrl => dec_alu, pc_ctrl => dec_pc
         );
 
     -- Issuer: sequences through threads 0-31 one per cycle

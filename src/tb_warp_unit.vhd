@@ -4,12 +4,12 @@
 -- PURPOSE:
 --   Verifies that warp_unit correctly sequences through a minimal shader
 --   program, fires pixel_buf_valid after all 32 threads are issued for a MEM
---   instruction, waits in MEM_WAIT until mem_stall deasserts, and finally
---   asserts warp_halted after OP_RETURN.
+--   instruction, and successfully serves the 128-bit interleaved pixels via
+--   the new M10K read interface before asserting warp_halted.
 --
 -- TEST PROGRAM (loaded into instruction_memory):
---   Addr 0: OP_FLUSH              (drain pipeline)        0xF8000006
---   Addr 1: RETURN v1             (store reg1 + halt)     0xFC000016
+--   Addr 0: OP_FLUSH               (drain pipeline)        0xF8000006
+--   Addr 1: RETURN v1              (store reg1 + halt)     0xFC000016
 --
 -- INSTRUCTION ENCODING:
 --   [3:0]   = inst_type
@@ -28,9 +28,10 @@
 --   2. Pulse warp_start with warp_offset=0; fb_base_addr=0x0001.
 --   3. Warp runs: FETCH×2 → DECODE(OP_FLUSH) → EXEC_WAIT(28+32 cycles) →
 --      ADVANCE_PC → FETCH×2 → DECODE(RETURN v1) → EXEC_WAIT(32 cycles) →
---      pixel_buf_valid pulse → MEM_WAIT.
---   4. TB asserts mem_stall='0' to release MEM_WAIT.
---   5. MEM_WAIT → HALTED (RETURN goes directly to HALTED, no ADVANCE_PC).
+--      pixel_buf_valid pulse.
+--   4. Testbench simulates the MCU by asserting pixel_rd_en and sweeping 
+--      pixel_rd_addr from 0 to 7 to extract the pixel data.
+--   5. FSM transitions to HALTED (RETURN goes directly to HALTED).
 -- ============================================================================
 
 library IEEE;
@@ -47,6 +48,7 @@ architecture sim of tb_warp_unit is
     constant PC_WIDTH        : integer := 16;
     constant IMEM_ADDR_WIDTH : integer := 8;
     constant WARP_SIZE       : integer := 32;
+    constant DATA_WIDTH      : integer := 128;
     constant CLK_PERIOD      : time    := 10 ns;
 
     signal clk   : std_logic := '0';
@@ -68,12 +70,13 @@ architecture sim of tb_warp_unit is
     signal warp_halted  : std_logic;
     signal warp_break   : std_logic;
 
-    -- Pixel buffer interface
+    -- Pixel buffer interface (New M10K implementation)
     signal pixel_buf_valid : std_logic;
     signal pixel_buf_addr  : std_logic_vector(31 downto 0);
-    signal pixel_buf_data  : std_logic_vector(1023 downto 0);
     signal pixel_exec_mask : std_logic_vector(WARP_SIZE-1 downto 0);
-    signal mem_stall       : std_logic := '0';  -- TB controls this (simulates MCU)
+    signal pixel_rd_en     : std_logic := '0';
+    signal pixel_rd_addr   : std_logic_vector(2 downto 0) := "000";
+    signal pixel_rd_data   : std_logic_vector(DATA_WIDTH-1 downto 0);
 
     -- Helper procedure to write one instruction into IMEM
     procedure write_imem(
@@ -115,7 +118,8 @@ begin
             WARP_SIZE       => WARP_SIZE
         )
         port map (
-            clk             => clk, reset => reset,
+            clk             => clk, 
+            reset           => reset,
             imem_addr       => imem_addr,
             imem_data       => imem_data,
             warp_start      => warp_start,
@@ -123,11 +127,17 @@ begin
             fb_base_addr    => fb_base_addr,
             warp_halted     => warp_halted,
             warp_break      => warp_break,
+            
+            -- Pixel Buffer output handshake
+            mem_stall       => '0',
             pixel_buf_valid => pixel_buf_valid,
             pixel_buf_addr  => pixel_buf_addr,
-            pixel_buf_data  => pixel_buf_data,
             pixel_exec_mask => pixel_exec_mask,
-            mem_stall       => mem_stall
+            
+            -- Pixel Buffer M10K Read Port
+            pixel_rd_en     => pixel_rd_en,
+            pixel_rd_addr   => pixel_rd_addr,
+            pixel_rd_data   => pixel_rd_data
         );
 
     process
@@ -172,20 +182,25 @@ begin
             severity failure;
 
         -- ----------------------------------------------------------------
-        -- 5. Release MEM_WAIT by deasserting mem_stall
-        --    (In real design, mem_stall comes from mcu_block_transfer;
-        --     here we drive it from the TB to simulate instant completion.)
+        -- 5. Simulate MCU reading the buffer via M10K pipeline
         -- ----------------------------------------------------------------
-        -- pixel_buf_valid is a 1-cycle pulse; mem_stall is already '0'
-        -- so MEM_WAIT exits immediately on the next rising edge.
-        wait until rising_edge(clk);
-        report "MEM_WAIT released";
+        report "Simulating MCU burst read of 8 beats...";
+        pixel_rd_en <= '1';
+        for i in 0 to 7 loop
+            pixel_rd_addr <= std_logic_vector(to_unsigned(i, 3));
+            wait until rising_edge(clk);
+            -- Data is available on the NEXT clock edge.
+        end loop;
+        pixel_rd_en <= '0';
+        report "MCU burst read completed.";
 
         -- ----------------------------------------------------------------
         -- 6. Wait for warp_halted (fires after OP_RETURN)
         -- ----------------------------------------------------------------
         report "Waiting for warp_halted...";
-        wait until warp_halted = '1';
+        if warp_halted = '0' then
+            wait until warp_halted = '1';
+        end if;
         report "warp_halted asserted - warp completed successfully";
 
         assert warp_break = '0'
