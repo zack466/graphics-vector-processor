@@ -56,7 +56,8 @@ architecture behavioral of tb_fpu_lane is
         ("OP_FSUB   ", OP_FSUB,  x"40800000", x"40000000", x"00000000", '0', '0', 2.0,     '0', true,  false),
         ("OP_FMUL   ", OP_FMUL,  x"40000000", x"40400000", x"00000000", '0', '0', 6.0,     '0', true,  false),
         ("OP_FMADD  ", OP_FMADD, x"40000000", x"40400000", x"3F800000", '0', '0', 7.0,     '0', true,  false),
-        ("OP_FRCP   ", OP_FRCP,  x"40000000", x"00000000", x"00000000", '0', '0', 0.5,     '0', true,  false),
+        -- TODO: replace FRCP with FDIV
+        -- ("OP_FRCP   ", OP_FRCP,  x"40000000", x"00000000", x"00000000", '0', '0', 0.5,     '0', true,  false),
         ("OP_FSQRT  ", OP_FSQRT, x"40800000", x"00000000", x"00000000", '0', '0', 2.0,     '0', true,  false),
         ("OP_FLOG2  ", OP_FLOG2, x"40000000", x"00000000", x"00000000", '0', '0', 1.0,     '0', true,  false),
         ("OP_FEXP2  ", OP_FEXP2, x"40000000", x"00000000", x"00000000", '0', '0', 4.0,     '0', true,  false),

@@ -186,7 +186,7 @@ begin
                 -- Standard math ops: result goes to VRF (floating-point data).
                 -- prf_we='0' because math results are not comparison predicates.
                 when OP_FADD | OP_FSUB | OP_FMUL | OP_FMADD |
-                     OP_FRCP | OP_FSQRT | OP_FLOG2 | OP_FEXP2 |
+                     OP_FDIV | OP_FSQRT | OP_FLOG2 | OP_FEXP2 |
                      OP_FMIN | OP_FMAX | OP_F2I | OP_I2F |
                      OP_SIN  | OP_COS  | OP_MOV =>
                     v_fpu.wb_mux_sel  := WB_MUX_FPU;

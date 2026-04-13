@@ -153,7 +153,7 @@ def run_test(asm_file, gen_images):
 
     # Simulate with dynamic dimensions
     t0 = time.time()
-    sim_cmd = [SIM_EXE] + RUNFLAGS + [f"-gFRAME_WIDTH={width}", f"-gFRAME_HEIGHT={height}"]
+    sim_cmd = [SIM_EXE] + RUNFLAGS + [f"-gFRAME_WIDTH={width}", f"-gFRAME_HEIGHT={height}", "--max-stack-alloc=0"]
     
     sim_result = subprocess.run(
         sim_cmd,

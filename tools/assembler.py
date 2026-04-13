@@ -1,5 +1,6 @@
 import sys
 import re
+import struct  # Added for IEEE 754 float conversion
 
 # Types (must match INST_TYPE_* constants in processor_constants_pkg.vhd)
 TYPE_FPU  = 0
@@ -11,7 +12,7 @@ TYPE_SYS  = 6
 
 # FPU Opcodes
 FPU_OPCODES = {
-    'FADD': 1, 'FSUB': 2, 'FMUL': 3, 'FMADD': 4, 'FRCP': 5, 'FSQRT': 6,
+    'FADD': 1, 'FSUB': 2, 'FMUL': 3, 'FMADD': 4, 'FDIV': 5, 'FSQRT': 6,
     'FLOG2': 7, 'FEXP2': 8, 'FMIN': 9, 'FMAX': 10, 'FCMP_LT': 11, 'FCMP_EQ': 12,
     'F2I': 13, 'I2F': 14, 'SIN': 16, 'COS': 17, 'MOV': 18, 'PAND': 24, 'POR': 25, 'PXOR': 26
 }
@@ -76,6 +77,30 @@ def parse_reg(token):
     
     return reg, mask, swiz
 
+# --- NEW: Helper function to parse immediates with low()/high() macros ---
+def parse_imm_value(token):
+    match = re.match(r'(?i)^(low|high)\((.+)\)$', token)
+    if match:
+        func = match.group(1).lower()
+        val_str = match.group(2)
+        
+        # Determine if it's a float or int
+        is_hex = val_str.lower().startswith('0x')
+        if not is_hex and ('.' in val_str or 'e' in val_str.lower()):
+            # Pack as big-endian float, unpack as big-endian unsigned int to get raw bits
+            num32 = struct.unpack('>I', struct.pack('>f', float(val_str)))[0]
+        else:
+            # Mask to 32 bits to properly handle two's complement for negative integers
+            num32 = int(val_str, 0) & 0xFFFFFFFF
+            
+        if func == 'low':
+            return num32 & 0xFFFF
+        else: # high
+            return (num32 >> 16) & 0xFFFF
+    else:
+        # Standard raw value fallback
+        return int(token, 0) & 0xFFFF
+
 def assemble_line(line, labels, pc):
     # Remove comments
     line = line.split('#')[0].strip()
@@ -97,11 +122,16 @@ def assemble_line(line, labels, pc):
 
     # IMM
     if mnemonic in IMM_OPCODES:
-        # e.g. LDI_LO v1.xy, 0x1234
+        # e.g. LDI_LO v1.xy, low(3.14)
         # Encoding: [31:30]=sub-op  [29:26]=write_mask  [25:10]=imm16  [7:4]=rd  [3:0]=type
         op = IMM_OPCODES[mnemonic]   # 0=LDI_LO, 1=LDI_HI  (placed in bits [31:30])
         dest, mask, _ = parse_reg(args[0])
-        imm_val = int(args[1], 0) & 0xFFFF
+        
+        # We rejoin the remaining args to easily bypass spaces the initial `.split()` stripped out. 
+        # (e.g. ['low(', '-3.14', ')'] becomes 'low(-3.14)')
+        imm_str = "".join(args[1:])
+        imm_val = parse_imm_value(imm_str)
+        
         return (op << 30) | (mask << 26) | (imm_val << 10) | (dest << 4) | TYPE_IMM
 
     # CTRL
@@ -190,8 +220,6 @@ def assemble(input_file, output_file):
             pc += 1
 
     # Pass 1b: Validate — RETURN reg must not appear inside a divergent SSY...SYNC block.
-    # Each SSY opens a block that requires two SYNCs to close (one to switch paths,
-    # one to reconverge).  Track depth as: ssy_count*2 - sync_count > 0 ⟹ divergent.
     ssy_count = 0
     sync_count = 0
     for line in lines:

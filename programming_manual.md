@@ -196,8 +196,8 @@ Float multiplication: `dest = src1 * src2`
 #### `FMADD  dest[.mask], src1[.swizzle], src2`
 Fused multiply-add: `dest = src1 * src2 + dest` (accumulates into dest)
 
-#### `FRCP  dest[.mask], src1`
-Float reciprocal: `dest = 1.0 / src1`
+#### `FDIV  dest[.mask], src1[.swizzle], src2`
+Float division: `dest = src1 / src2`
 
 #### `FSQRT  dest[.mask], src1`
 Float square root: `dest = sqrt(src1)`

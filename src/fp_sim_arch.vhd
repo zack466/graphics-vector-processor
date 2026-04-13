@@ -109,7 +109,7 @@ use ieee.float_pkg.all;
 architecture sim of fp_div is
     signal math_res, pipelined_res : real;
 begin
-    math_res <= to_real(to_float(a)) / to_real(to_float(b));
+    math_res <= to_real(to_float(a)) / to_real(to_float(b)) when to_real(to_float(b)) /= 0.0 else 0.0;
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
@@ -331,7 +331,8 @@ begin
         generic map(latency => latency)
         port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
 
-    q <= std_logic_vector(to_signed(integer(pipelined_res), 32));
+    -- WHY DOES VHDL NOT TRUNCATE FLOATS BY DEFAULT BRUHHH
+    q <= std_logic_vector(to_signed(integer(trunc(pipelined_res)), 32));
 end architecture;
 
 library ieee;

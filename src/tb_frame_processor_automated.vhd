@@ -58,6 +58,11 @@ architecture sim of tb_frame_processor_automated is
     -- Each pixel is 4 bytes (RGBA).
     constant DUMP_END_ADDR   : integer := DUMP_START_ADDR + (FRAME_WIDTH * FRAME_HEIGHT * 4);
 
+    -- Size the simulated DDR3 so it always fits the full framebuffer.
+    -- Each memory word is DATA_WIDTH/8 = 16 bytes; each pixel is 4 bytes,
+    -- so we need FRAME_WIDTH * FRAME_HEIGHT / 4 words.
+    constant SIM_MEM_WORDS   : integer := FRAME_WIDTH * FRAME_HEIGHT / 4;
+
     signal clk   : std_logic := '0';
     signal reset : std_logic := '1';
 
@@ -150,7 +155,7 @@ begin
     -- Simulated DDR3 SDRAM
     -- ========================================================================
     u_memory : entity work.avm_sim_memory
-        generic map ( ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH )
+        generic map ( ADDR_WIDTH => ADDR_WIDTH, DATA_WIDTH => DATA_WIDTH, MEM_WORDS => SIM_MEM_WORDS )
         port map (
             clk               => clk, reset => reset,
             avs_address       => mem_avm_address,

@@ -16,12 +16,10 @@ def main():
         lines = f.readlines()
         
     print(f"Total lines: {len(lines)}")
-    if len(lines) > 0:
-        for i in range(10):
-            if i < len(lines):
-                parts = lines[i].strip().split()
-                if len(parts) == 4:
-                    print(f"Line {i}: {lines[i].strip()}")
+    for i in range(len(lines)):
+        parts = lines[i].strip().split()
+        if len(parts) == 4:
+            print(f"Line {i}: {lines[i].strip()}")
 
 if __name__ == '__main__':
     main()

@@ -120,7 +120,7 @@ package processor_constants_pkg is
     constant OP_FSUB    : std_logic_vector(5 downto 0) := "000010"; -- IEEE 754 single-precision subtract
     constant OP_FMUL    : std_logic_vector(5 downto 0) := "000011"; -- IEEE 754 single-precision multiply
     constant OP_FMADD   : std_logic_vector(5 downto 0) := "000100"; -- Fused multiply-add: rs1*rs2+rs3
-    constant OP_FRCP    : std_logic_vector(5 downto 0) := "000101"; -- Reciprocal: 1/rs1
+    constant OP_FDIV    : std_logic_vector(5 downto 0) := "000101"; -- Division: rs1 / rs2
     constant OP_FSQRT   : std_logic_vector(5 downto 0) := "000110"; -- Square root
     constant OP_FLOG2   : std_logic_vector(5 downto 0) := "000111"; -- Base-2 logarithm
     constant OP_FEXP2   : std_logic_vector(5 downto 0) := "001000"; -- Base-2 exponent (2^rs1)
@@ -497,7 +497,7 @@ package processor_constants_pkg is
     -- LAT_* values are in clock cycles from the cycle input data is presented
     -- to the cycle the result appears at the IP core output.
     constant LAT_FMADD      : integer := 22; -- Fused multiply-add (ALTFP_MULT + ALTFP_ADD pipeline)
-    constant LAT_FRCP       : integer := 14; -- Reciprocal (ALTFP_INV)
+    constant LAT_FDIV       : integer := 14; -- Division (ALTFP_DIV)
     constant LAT_FSQRT      : integer := 9;  -- Square root (ALTFP_SQRT)
     constant LAT_FRSQRT     : integer := 28; -- Reciprocal square root — equals FPU_MAX_LATENCY (bottleneck op)
     constant LAT_FMIN       : integer := 3;  -- Component-wise minimum (comparator + mux)

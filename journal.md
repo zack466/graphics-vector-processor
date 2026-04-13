@@ -13,7 +13,7 @@
   should probably hardcode addresses of two backbuffers for double buffering.
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard).
   Or just one warp that utilizes latency hiding should be ok.
-* replace reciprocal with division operation for better float precision? Figure out why gradient is slightly wrong at midpoint
+* (in progress) replace reciprocal with division operation for better float precision? Figure out why gradient is slightly wrong at midpoint
 
 # Agent changes
 
