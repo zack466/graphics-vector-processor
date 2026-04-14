@@ -19,8 +19,8 @@ architecture sim of tb_vector_reg_file is
             rs1_data     : out vector_t;
             rs2_data     : out vector_t;
             rs3_data     : out vector_t;
-            rd_addr_A    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-            rd_data_A    : in  vector_t;
+            wr_addr_A    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+            wr_data_A    : in  vector_t;
             write_mask_A : in  std_logic_vector(3 downto 0);
             we_A         : in  std_logic;
             rd_addr_B    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
@@ -38,8 +38,8 @@ architecture sim of tb_vector_reg_file is
     signal rs1_addr, rs2_addr, rs3_addr : std_logic_vector(6 downto 0) := (others => '0');
     signal rs1_data, rs2_data, rs3_data : vector_t;
     
-    signal rd_addr_A    : std_logic_vector(6 downto 0) := (others => '0');
-    signal rd_data_A    : vector_t := (others => (others => '0'));
+    signal wr_addr_A    : std_logic_vector(6 downto 0) := (others => '0');
+    signal wr_data_A    : vector_t := (others => (others => '0'));
     signal write_mask_A : std_logic_vector(3 downto 0) := "0000";
     signal we_A         : std_logic := '0';
     
@@ -60,7 +60,7 @@ begin
             clk => clk, reset => reset,
             rs1_addr => rs1_addr, rs2_addr => rs2_addr, rs3_addr => rs3_addr,
             rs1_data => rs1_data, rs2_data => rs2_data, rs3_data => rs3_data,
-            rd_addr_A => rd_addr_A, rd_data_A => rd_data_A, write_mask_A => write_mask_A, we_A => we_A,
+            wr_addr_A => wr_addr_A, wr_data_A => wr_data_A, write_mask_A => write_mask_A, we_A => we_A,
             rd_addr_B => rd_addr_B, rd_data_B => rd_data_B, wr_addr_B => wr_addr_B, wr_data_B => wr_data_B,
             write_mask_B => write_mask_B, we_B => we_B
         );
@@ -82,14 +82,14 @@ begin
         -- TEST 1: PORT A MASK TESTING
         -- ====================================================================
         report ">> TEST 1A: Initialize Reg 1 (Port A) with Background Data";
-        rd_addr_A <= "0000001";
-        rd_data_A <= (x"99999999", x"99999999", x"99999999", x"99999999");
+        wr_addr_A <= "0000001";
+        wr_data_A <= (x"99999999", x"99999999", x"99999999", x"99999999");
         write_mask_A <= "1111";
         we_A <= '1';
         wait until rising_edge(clk); -- Clock 1: Write is sampled by M10K
         
         report ">> TEST 1B: FPU Write (Port A) with Partial Mask";
-        rd_data_A <= (x"11111111", x"22222222", x"33333333", x"44444444");
+        wr_data_A <= (x"11111111", x"22222222", x"33333333", x"44444444");
         -- "0101" maps to -> bit 3(w)=0, bit 2(z)=1, bit 1(y)=0, bit 0(x)=1
         write_mask_A <= "0101"; 
         wait until rising_edge(clk); -- Clock 2: Partial Write is sampled
@@ -145,8 +145,8 @@ begin
         -- TEST 3: SIMULTANEOUS MULTI-PORT STRESS TEST
         -- ====================================================================
         report ">> TEST 3A: Simultaneous Port A and Port B Write";
-        rd_addr_A <= "0000011";
-        rd_data_A <= (x"12345678", x"12345678", x"12345678", x"12345678");
+        wr_addr_A <= "0000011";
+        wr_data_A <= (x"12345678", x"12345678", x"12345678", x"12345678");
         write_mask_A <= "1111";
         we_A <= '1';
         

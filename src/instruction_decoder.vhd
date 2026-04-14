@@ -35,8 +35,8 @@
 --          (mode overlaps the top 2 bits of opcode because RED only needs
 --           2 mode bits and has no further opcode variation)
 --
---   CTRL : [31:26]=opcode  [25:24]=reserved     [23:8]=target_addr(16b)
---          [7:6]=pred_sel   [5:4]=pred_mod
+--   CTRL : [31:26]=opcode  [25:10]=target_addr(16b) [9:6]=pred_sel
+--          [5:4]=pred_mod
 --
 --   ALU  : [31:26]=opcode  [25:22]=write_mask   [21:18]=rd    [17:14]=rs1
 --          [13:10]=rs2     [9:7]=swiz_a         [6:4]=reserved
@@ -137,7 +137,7 @@ begin
 
         v_pc.branch_type     := BR_NONE; -- 4-bit; "0000" = no branch
         v_pc.target_addr     := (others => '0');
-        v_pc.predicate_sel   := "00";
+        v_pc.predicate_sel   := "0000";
         v_pc.predicate_mod   := PRED_MOD_ANY;
 
         v_alu.opcode         := OP_NOP;
@@ -254,17 +254,17 @@ begin
         elsif inst_type = INST_TYPE_CTRL then
             -- ----------------------------------------------------------------
             -- SIMT CONTROL INSTRUCTION MAP
-            -- [31:26] Opcode | [25:24] Reserved | [23:8] Target (16b)
-            -- [7:6] P_Sel | [5:4] P_Mod | [3:0] Type
+            -- [31:26] Opcode | [25:10] Target (16b) | [9:6] P_Sel
+            -- [5:4] P_Mod | [3:0] Type
             -- ----------------------------------------------------------------
             -- target_addr is a 16-bit absolute PC value (matching PC_WIDTH in
             -- the IFU generic). It is the branch destination for JMP/BRA, the
             -- reconvergence point for SSY, or the not-taken fallthrough for SYNC.
-            v_pc.target_addr   := instruction(23 downto 8);
+            v_pc.target_addr   := instruction(25 downto 10);
             -- predicate_sel chooses which PRF register to evaluate for conditional
             -- branches (BRA_Z, BRA_NZ). predicate_mod controls whether ANY or ALL
             -- active threads must satisfy the predicate to take the branch.
-            v_pc.predicate_sel := instruction(7 downto 6);
+            v_pc.predicate_sel := instruction(9 downto 6);
             v_pc.predicate_mod := instruction(5 downto 4);
 
             case internal_opcode is
@@ -364,6 +364,7 @@ begin
             --   expected location without needing a separate mux input for
             --   system tokens.
             v_fpu.opcode := internal_opcode;
+            v_fpu.rs1_addr_local := instruction(17 downto 14);
 
             -- No register reads or writes are necessary for FLUSH or RETURN:
             -- FLUSH is a pipeline token that carries no data.

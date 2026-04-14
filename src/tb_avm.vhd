@@ -230,16 +230,13 @@ begin
                 timeout := timeout + 1;
                 assert timeout < 5000 report "FATAL: Timeout waiting for all reads to finish!" severity failure;
             end loop;
-            wait for 20 ns;
-            wait until rising_edge(clk);
+            for i in 1 to 2 loop wait until rising_edge(clk); end loop;
         end procedure;
 
     begin
-        wait for 50 ns;
-        wait until rising_edge(clk);
+        for i in 1 to 5 loop wait until rising_edge(clk); end loop;
         reset <= '0';
-        wait for 50 ns;
-        wait until rising_edge(clk);
+        for i in 1 to 5 loop wait until rising_edge(clk); end loop;
 
         report "--- STARTING AVALON-MM BRIDGE TESTS ---";
 
@@ -287,10 +284,10 @@ begin
 
         report "Test 8: Master-Side Idle Delays";
         exec_write_burst(x"00008000", 1, to_unsigned(8001, DATA_WIDTH));
-        wait for 130 ns; wait until rising_edge(clk);
+        for i in 1 to 13 loop wait until rising_edge(clk); end loop;
         exec_write_burst(x"00008010", 1, to_unsigned(8002, DATA_WIDTH));
         exec_read_req(x"00008000", 1, to_unsigned(8001, DATA_WIDTH));
-        wait for 75 ns; wait until rising_edge(clk);
+        for i in 1 to 7 loop wait until rising_edge(clk); end loop;
         exec_read_req(x"00008010", 1, to_unsigned(8002, DATA_WIDTH));
         wait_for_reads;
 

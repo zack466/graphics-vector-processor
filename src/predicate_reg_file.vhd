@@ -118,7 +118,7 @@ entity predicate_reg_file is
         -- ==========================================
         -- IFU PORT (Warp-Wide 32-bit collapse)
         -- ==========================================
-        ifu_pred_sel : in  std_logic_vector(1 downto 0); -- Select p0, p1, p2, or p3
+        ifu_pred_sel : in  std_logic_vector(3 downto 0); -- Select p0 to p15
         ifu_pred_mod : in  std_logic_vector(1 downto 0); -- ANY, ALL, X, A modifiers
         ifu_mask_out : out std_logic_vector(31 downto 0)
     );
@@ -155,9 +155,7 @@ begin
         variable w_idx : integer;
     begin
         if rising_edge(clk) then
-            if reset = '1' then
-                prf <= (others => "0000");
-            elsif we = '1' then
+            if we = '1' then
                 w_idx := to_integer(unsigned(wr_addr));
                 if wr_mask(0) = '1' then prf(w_idx)(0) <= wr_data(0); end if;
                 if wr_mask(1) = '1' then prf(w_idx)(1) <= wr_data(1); end if;

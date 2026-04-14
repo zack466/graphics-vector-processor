@@ -52,8 +52,8 @@ entity vector_reg_file is
     rs2_data     : out vector_t;
     rs3_data     : out vector_t;
     
-    rd_addr_A    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-    rd_data_A    : in  vector_t;
+    wr_addr_A    : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
+    wr_data_A    : in  vector_t;
     write_mask_A : in  std_logic_vector(3 downto 0);
     we_A         : in  std_logic;
 
@@ -149,7 +149,7 @@ begin
                 unified_we <= '0';
             else
                 -- Port B pushes to the FIFO automatically whenever it asserts WE
-                v_push := (we_B = '1');
+                v_push := (we_B = '1' and fifo_count < 64);
                 
                 -- We pop from the FIFO ONLY if there is data waiting AND Port A is inactive
                 v_pop  := (we_A = '0' and fifo_count > 0);
@@ -166,8 +166,8 @@ begin
                 if we_A = '1' then
                     -- Priority 1: Port A active. Route A to the Unified Bus directly.
                     unified_we   <= '1';
-                    unified_addr <= rd_addr_A;
-                    unified_data <= rd_data_A;
+                    unified_addr <= wr_addr_A;
+                    unified_data <= wr_data_A;
                     unified_mask <= write_mask_A;
                 
                 elsif v_pop then

@@ -244,6 +244,9 @@ architecture rtl of instruction_fetch_unit is
     signal call_stack : call_stack_t := (others => (others => '0'));
     signal csp        : integer range 0 to CALL_STACK_DEPTH := 0; -- call stack pointer
 
+    -- Constant for all-zeros mask
+    constant ZERO_MASK : std_logic_vector(WARP_SIZE-1 downto 0) := (others => '0');
+
 begin
 
     -- Drive instruction memory address directly from PC (combinational).
@@ -295,13 +298,13 @@ begin
                 -- ---------------------------------------------------------------
                 taken_mask     := active_mask and predicate_mask;
                 not_taken_mask := active_mask and (not predicate_mask);
-                all_taken      := (active_mask /= x"00000000") and (not_taken_mask = x"00000000");
-                none_taken     := (active_mask /= x"00000000") and (taken_mask = x"00000000");
-                is_divergent   := (not_taken_mask /= x"00000000") and (taken_mask /= x"00000000");
+                all_taken      := (active_mask /= ZERO_MASK) and (not_taken_mask = ZERO_MASK);
+                none_taken     := (active_mask /= ZERO_MASK) and (taken_mask = ZERO_MASK);
+                is_divergent   := (not_taken_mask /= ZERO_MASK) and (taken_mask /= ZERO_MASK);
 
                 -- Edge case: if active_mask is entirely zero (all threads masked),
                 -- treat as none_taken to prevent the PC from jumping erroneously.
-                if active_mask = x"00000000" then
+                if active_mask = ZERO_MASK then
                     all_taken := false; none_taken := true; is_divergent := false;
                 end if;
 
@@ -317,7 +320,7 @@ begin
 
                 if pc_ctrl.branch_type = BR_SYNC then
                     if sp > 0 then
-                        if stack(sp-1).deferred_mask /= x"00000000" then
+                        if stack(sp-1).deferred_mask /= ZERO_MASK then
                             -- SYNC first encounter (end of IF body): next instruction
                             -- is the start of the ELSE path → use deferred_mask.
                             next_mask := stack(sp-1).deferred_mask;
@@ -354,7 +357,7 @@ begin
                 -- =======================================================
                 if pc_ctrl.branch_type = BR_SYNC then
                     if sp > 0 then
-                        if stack(sp-1).deferred_mask /= x"00000000" then
+                        if stack(sp-1).deferred_mask /= ZERO_MASK then
                             -- Phase 1: End of IF body. deferred_mask is non-zero,
                             -- meaning the ELSE path hasn't run yet. Switch to the
                             -- ELSE path's start address and make those threads active.

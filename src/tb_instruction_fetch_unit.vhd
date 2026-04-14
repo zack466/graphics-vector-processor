@@ -32,7 +32,7 @@ architecture sim of tb_instruction_fetch_unit is
     begin
         ctrl.branch_type   <= BR_NONE;
         ctrl.target_addr   <= (others => '0');
-        ctrl.predicate_sel <= "00";
+        ctrl.predicate_sel <= "0000";
         ctrl.predicate_mod <= PRED_MOD_ANY;
     end procedure;
 

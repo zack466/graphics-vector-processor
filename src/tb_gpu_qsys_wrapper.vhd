@@ -233,8 +233,8 @@ begin
         -- file_name removed: use inline string expressions to avoid fixed-width string issues
 
     begin
-        wait for 100 ns; wait until rising_edge(clk); reset <= '0';
-        wait for 100 ns; wait until rising_edge(clk);
+        for i in 1 to 10 loop wait until rising_edge(clk); end loop; reset <= '0';
+        for i in 1 to 10 loop wait until rising_edge(clk); end loop;
         report "--- STARTING QSYS WRAPPER TEST ---";
 
         -- ====================================================================

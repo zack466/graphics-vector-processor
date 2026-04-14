@@ -585,12 +585,8 @@ begin
 
         elsif v_type = INST_TYPE_SYS then
             if ifu_inst_out(31 downto 26) = OP_RETURN then
-                -- RETURN reg: route the register index from bits[7:4] so the barrel
-                -- scheduler reads the correct source register for the pixel buffer.
-                -- The FPU decoder would extract rs1 from bits[17:14] (wrong for SYS),
-                -- so we explicitly override here.  WE fields stay '0' (no writeback).
-                exec_mux_ctrl.rs1_addr_local <= ifu_inst_out(7 downto 4);
-                exec_mux_ctrl.rd_addr_local  <= ifu_inst_out(7 downto 4);
+                -- RETURN reg: Uses standard FPU decoder extraction for rs1 from bits[17:14].
+                -- WE fields stay '0' (no writeback).
                 exec_mux_ctrl.vrf_we         <= '0';
                 exec_mux_ctrl.prf_we         <= '0';
             end if;
@@ -609,7 +605,7 @@ begin
     -- When do_reset_pc='0', pass dec_pc through normally for branches.
     active_pc_ctrl <= (
         branch_type   => BR_JMP, target_addr => (others => '0'),
-        predicate_sel => "00", predicate_mod => PRED_MOD_ANY
+        predicate_sel => "0000", predicate_mod => PRED_MOD_ANY
     ) when do_reset_pc = '1' else dec_pc;
 
     u_ifu : entity work.instruction_fetch_unit
@@ -681,7 +677,7 @@ begin
             rs1_addr => iss_rs1_global, rs2_addr => iss_rs2_global,
             rs3_addr => iss_rs3_global, rs1_data => vrf_rs1_data,
             rs2_data => vrf_rs2_data, rs3_data => vrf_rs3_data,
-            rd_addr_A => exec_wb_rd_addr, rd_data_A => exec_wb_vrf_data,
+            wr_addr_A => exec_wb_rd_addr, wr_data_A => exec_wb_vrf_data,
             write_mask_A => exec_wb_mask, we_A => exec_wb_vrf_we,
             rd_addr_B => (others => '0'), rd_data_B => open,
             wr_addr_B => (others => '0'), wr_data_B => (others => (others => '0')),

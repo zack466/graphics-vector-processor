@@ -404,7 +404,7 @@ RETURN v15      # write packed pixels from v15 and halt warp
 - The destination address is `fb_base_addr << 16 + warp_offset * 4`, where `fb_base_addr` is supplied by the `frame_processor` host interface and `warp_offset` is set by the warp scheduler for each warp.
 - Pixel packing is identical to `STORE`: lower 8 bits of W, Z, Y, X per thread → Alpha, Blue, Green, Red.
 - **`FLUSH` is required immediately before `RETURN reg`** to ensure all thread register writes are committed before the pixel snoop reads the VRF.
-- Encoding: `(63 << 26) | (reg_idx << 4) | TYPE_SYS`. Examples: `RETURN v2` = `0xFC000026`, `RETURN v15` = `0xFC0000F6`.
+- Encoding: `(63 << 26) | (reg_idx << 14) | TYPE_SYS`. Examples: `RETURN v2` = `0xFC008006`, `RETURN v15` = `0xFC03C006`.
 
 #### `BREAK`
 Software breakpoint (halts simulation for debugging).

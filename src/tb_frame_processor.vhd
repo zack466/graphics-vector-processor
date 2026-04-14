@@ -177,9 +177,9 @@ begin
         -- ----------------------------------------------------------------
         -- 1. Reset
         -- ----------------------------------------------------------------
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
         reset <= '0';
-        wait for CLK_PERIOD;
+        wait until rising_edge(clk);
 
         -- ----------------------------------------------------------------
         -- 2. Program IMEM (2 instructions: FLUSH + RETURN v1)
@@ -209,7 +209,7 @@ begin
                    integer'image(write_beats_seen - prev_beats)
             severity failure;
         report "Test 1: Write beat count correct (8 beats for 1 warp)";
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         -- ----------------------------------------------------------------
         -- Test 2: 8×8 = 64 pixels → 2 warps
@@ -232,7 +232,7 @@ begin
                    integer'image(write_beats_seen - prev_beats)
             severity failure;
         report "Test 2: Write beat count correct (16 beats for 2 warps)";
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         -- ----------------------------------------------------------------
         -- Test 3: Verify frame_done is a 1-cycle pulse (same technique as

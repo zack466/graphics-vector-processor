@@ -23,8 +23,9 @@
 --
 --   swizzle_sel_t -- 3-bit selector code that picks one source component for a
 --                    single destination lane during a swizzle operation.
---                    3 bits gives 8 encodings; the top 4 are reserved, leaving
---                    codes 0-3 for X/Y/Z/W selection.  Kept as a raw
+--                    3 bits gives 8 encodings. Code 0 is SWIZ_PASS (identity),
+--                    and codes 4-7 are for X/Y/Z/W broadcast (splat) selection.
+--                    Kept as a raw
 --                    std_logic_vector so it can be sliced directly from the
 --                    instruction word without a numeric conversion.
 --

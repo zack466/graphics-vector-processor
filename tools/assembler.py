@@ -99,7 +99,10 @@ def parse_imm_value(token):
             return (num32 >> 16) & 0xFFFF
     else:
         # Standard raw value fallback
-        return int(token, 0) & 0xFFFF
+        val = int(token, 0)
+        if val < 0:
+            val = (val & 0xFFFFFFFF)
+        return val & 0xFFFF
 
 def assemble_line(line, labels, pc):
     # Remove comments
@@ -115,9 +118,9 @@ def assemble_line(line, labels, pc):
     if mnemonic in SYS_OPCODES:
         op = SYS_OPCODES[mnemonic]
         if mnemonic == 'RETURN' and args:
-            # RETURN reg: encodes register index in bits[7:4] (combined store+halt)
+            # RETURN reg: encodes register index in bits[17:14] (standard rs1 field)
             reg, _, _ = parse_reg(args[0])
-            return (op << 26) | (reg << 4) | TYPE_SYS
+            return (op << 26) | (reg << 14) | TYPE_SYS
         return (op << 26) | TYPE_SYS
 
     # IMM
@@ -160,7 +163,7 @@ def assemble_line(line, labels, pc):
             elif mod_str == 'X': p_mod = 2
             elif mod_str == 'A': p_mod = 3
             
-        return (op << 26) | (target_addr << 8) | (p_sel << 6) | (p_mod << 4) | TYPE_CTRL
+        return (op << 26) | (target_addr << 10) | (p_sel << 6) | (p_mod << 4) | TYPE_CTRL
 
     # RED
     if mnemonic in RED_MODES:

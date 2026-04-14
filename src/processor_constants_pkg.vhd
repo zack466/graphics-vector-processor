@@ -418,7 +418,7 @@ package processor_constants_pkg is
     type pc_ctrl_t is record
         branch_type     : std_logic_vector(3 downto 0);  -- BR_* constant (4-bit; supports 11 branch types)
         target_addr     : std_logic_vector(15 downto 0); -- Instruction-word-encoded branch target (PC-relative or absolute)
-        predicate_sel   : std_logic_vector(1 downto 0);  -- Local predicate register index for conditional branches
+        predicate_sel   : std_logic_vector(3 downto 0);  -- Local predicate register index for conditional branches
         predicate_mod   : std_logic_vector(1 downto 0);  -- PRED_MOD_* collapse mode
     end record;
 

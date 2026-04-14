@@ -59,7 +59,7 @@ The ISA uses a 32-bit word where the bottom 4 bits (`Type`) determine the decodi
     * **X_ONLY / A_ONLY:** True based on a single specific component (e.g., Alpha Test).
 
 **4.2. System Instructions (INST_TYPE_SYS)**
-System instructions (`FLUSH`, `RETURN`) are completely decoupled from the branch evaluator (`INST_TYPE_CTRL`). This cleanly separates pipeline state management from Program Counter mathematics, keeping the Control Branch Type mux optimized at 3 bits (000-110).
+System instructions (`FLUSH`, `RETURN`) are completely decoupled from the branch evaluator (`INST_TYPE_CTRL`). This cleanly separates pipeline state management from Program Counter mathematics, keeping the Control Branch Type mux optimized at 4 bits.
 
 ## 5. SIMT Control Flow & Divergence
 Conditional logic is managed via execution masking and a hardware stack to handle "Warp Divergence."

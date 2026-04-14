@@ -45,7 +45,7 @@ begin
     stimulus: process
     begin
         -- Wait for initial stabilization
-        wait for clk_period * 2;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         ---------------------------------------------------------
         -- Test 1: Multiply Add ( 2.5 * 4.0 + 10.0 = 20.0 )

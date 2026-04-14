@@ -162,16 +162,13 @@ begin
                 timeout := timeout + 1;
                 assert timeout < 2000 report "FATAL: Timeout waiting for all reads to finish!" severity failure;
             end loop;
-            wait for 20 ns;
-            wait until rising_edge(clk);
+            for i in 1 to 2 loop wait until rising_edge(clk); end loop;
         end procedure;
 
     begin
-        wait for 20 ns;
-        wait until rising_edge(clk);
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
         reset <= '0';
-        wait for 20 ns;
-        wait until rising_edge(clk);
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         report "--- STARTING DDR3 AVALON-MM SIMULATION ---";
 
@@ -269,14 +266,12 @@ begin
         do_write(x"00008000", 1, to_unsigned(8001, DATA_WIDTH));
         
         -- Insert a synthetic delay where the master drops the bus
-        wait for 130 ns; 
-        wait until rising_edge(clk);
+        for i in 1 to 13 loop wait until rising_edge(clk); end loop;
         
         do_write(x"00008010", 1, to_unsigned(8002, DATA_WIDTH));
         do_read_req(x"00008000", 1, to_unsigned(8001, DATA_WIDTH));
         
-        wait for 75 ns;
-        wait until rising_edge(clk);
+        for i in 1 to 7 loop wait until rising_edge(clk); end loop;
         
         do_read_req(x"00008010", 1, to_unsigned(8002, DATA_WIDTH));
         wait_for_reads;

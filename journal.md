@@ -663,3 +663,27 @@ Three new shaders added to `tools/`, all passing in both isolated and Qsys wrapp
 - **`tools/test16_mandelbrot.s`** (249 instructions): Mandelbrot fractal with animated zoom into seahorse valley (-0.7453, 0.1127). Uses FEXP2 (new instruction in shaders): `exp(x) = exp2(x * log2(e))`. 16 iterations unrolled (IMEM limit = 256 words). zx/zy clamped to ±1000 each step to prevent IEEE 754 overflow. Coloring by final `|z|^2 / 200`, clamped [0,1]: orange for escaped, blue for in-set.
 
 **Verified:** All three tests PASS.
+
+## 2026-04-14 - VHDL Design Audit
+- Completed a comprehensive file-by-file audit of all VHDL files in `src/`.
+- Documented findings in `audit.md`.
+- Identified several minor efficiency issues (e.g., synchronous reset on `predicate_reg_file.vhd` forcing it into MLAB/ALMs instead of M10K block RAM).
+- Discovered hardcoded bounds/mask issues in `instruction_fetch_unit.vhd` which assume `WARP_SIZE=32`.
+- Found a latent bug in `vector_reduction_unit.vhd` where the pipeline shift logic would fail to capture the IP core result if `LAT_REDUCT` was configured to equal `FPU_MAX_LATENCY`, due to a missing combinational output bypass (unlike `fpu_lane.vhd`).
+- Noted that `LAT_FRSQRT` is used as the `FPU_MAX_LATENCY` baseline but the actual `fp_rsqrt` core is missing from `fpu_lane.vhd`.
+
+## 2026-04-14 - Testbench & Tooling Audit
+- Audited the `tools/` directory (excluding `compiler.py`). Found the assembler (`assembler.py`) mostly complete but noted potential precision edge-cases with Python's IEEE 754 conversion from `float()` via struct packing, though it functions correctly for normal shader values. Also noted the custom mapping workaround for `RETURN reg`. 
+- `runner.py` functions efficiently with robust support for image generation and multiple `make` modes.
+- Audited all VHDL testbenches in `src/`. Noted widespread violations of the "Always obey strict synchronous design principles" guideline due to the usage of `wait for X ns;` alongside `wait until rising_edge(clk);`.
+- Wrote full findings to `audit.md`.
+
+## 2026-04-14 - Testbench & Tooling Fixes
+- Renamed confusing registers in `vector_reg_file.vhd` to clearly distinguish `wr_addr_A` vs `rd_addr_B`.
+- Integrated bounds checking for all `FIFO` implementations and stack structures within `instruction_fetch_unit.vhd`.
+- Added the combinational output override to `vector_reduction_unit.vhd` to defensively guard against equivalent length latency matching delays causing outputs to drop.
+- Repaired the `CTRL` instruction target mappings in the Python automated assembler to route `p_sel` logic properly to its new 4-bit width.
+- Refactored `wait for X ns;` loops across the entire VHDL testbench suite to replace them with `wait until rising_edge(clk)` loops as per the strict synchronous design guidelines.
+- Modified `Makefile` to allow `ghdl` to allocate maximum stack sizes to execute `Qsys` environment tests without segfaults.
+- Updated `programming_manual.md` with the new instruction decoding logic for `RETURN`.
+- All `make test-all` assertions and simulations pass successfully!

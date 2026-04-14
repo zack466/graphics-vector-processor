@@ -59,7 +59,7 @@ begin
 
     -- Purely combinational multiplexing and routing process
     -- Every output is defined for every input combination, ensuring no latches.
-    process(vec_a_in, vec_b_in, prf_a_in, prf_b_in, is_logic_op, swiz_sel_a, swiz_sel_b, mux_a, mux_b)
+    process(all)
     begin
         -- ====================================================================
         -- 1. Pre-Swizzle Multiplexer (Inject Predicates if Logic Op)

@@ -91,7 +91,7 @@ architecture sim of tb_issuer_writeback_integration is
     signal mcu_we                   : std_logic := '0';
     signal mcu_mask                 : std_logic_vector(3 downto 0) := "0000";
     
-    signal ifu_pred_sel : std_logic_vector(1 downto 0) := "00";
+    signal ifu_pred_sel : std_logic_vector(3 downto 0) := "0000";
     signal ifu_pred_mod : std_logic_vector(1 downto 0) := "00";
     signal ifu_mask_out : std_logic_vector(31 downto 0);
 
@@ -140,7 +140,7 @@ begin
             clk => clk, reset => reset,
             rs1_addr => iss_rs1_addr, rs2_addr => iss_rs2_addr, rs3_addr => iss_rs3_addr,
             rs1_data => vrf_rs1_data, rs2_data => vrf_rs2_data, rs3_data => vrf_rs3_data,
-            rd_addr_A => wb_rd_addr, rd_data_A => vrf_wb_data,
+            wr_addr_A => wb_rd_addr, wr_data_A => vrf_wb_data,
             write_mask_A => wb_mask, we_A => wb_vrf_we,
             rd_addr_B => mcu_rd_addr, rd_data_B => mcu_rd_data,
             wr_addr_B => mcu_wr_addr, wr_data_B => mcu_wr_data,
@@ -349,7 +349,7 @@ begin
         -- PHASE 5: Verify Predicate Reg File & IFU Collapsing
         -- ====================================================================
         report ">> PHASE 5: Verifying PRF and IFU Collapse Logic";
-        ifu_pred_sel <= "00"; -- Read p0
+        ifu_pred_sel <= "0000"; -- Read p0
 
         ifu_pred_mod <= PRED_MOD_ALL;
         wait until rising_edge(clk); wait until falling_edge(clk);

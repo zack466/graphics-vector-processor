@@ -161,14 +161,14 @@ begin
     process
         -- Instruction word constants (pre-assembled from test10_call_stack.s)
         constant INST_LDI_CLEAR   : std_logic_vector(31 downto 0) := x"3C000014"; -- LDI_LO v1.xyzw, 0x0000
-        -- BRA_L leaf targets PC 6: (54<<26)|(6<<8)|1 = 0xD8000601
-        constant INST_BRA_L_LEAF  : std_logic_vector(31 downto 0) := x"D8000601"; -- BRA_L leaf (PC 6)
+        -- BRA_L leaf targets PC 6: (54<<26)|(6<<10)|1 = 0xD8001801
+        constant INST_BRA_L_LEAF  : std_logic_vector(31 downto 0) := x"D8001801"; -- BRA_L leaf (PC 6)
         constant INST_MOV_V2_V1   : std_logic_vector(31 downto 0) := x"4BC84000"; -- MOV v2.xyzw, v1
-        -- BRA_L outer targets PC 8: (54<<26)|(8<<8)|1 = 0xD8000801
-        constant INST_BRA_L_OUTER : std_logic_vector(31 downto 0) := x"D8000801"; -- BRA_L outer (PC 8)
+        -- BRA_L outer targets PC 8: (54<<26)|(8<<10)|1 = 0xD8002001
+        constant INST_BRA_L_OUTER : std_logic_vector(31 downto 0) := x"D8002001"; -- BRA_L outer (PC 8)
         constant INST_FLUSH       : std_logic_vector(31 downto 0) := x"F8000006"; -- FLUSH
-        -- RETURN v2: (63<<26)|(2<<4)|6 = 0xFC000026
-        constant INST_RETURN_V2   : std_logic_vector(31 downto 0) := x"FC000026"; -- RETURN v2
+        -- RETURN v2: (63<<26)|(2<<14)|6 = 0xFC008006
+        constant INST_RETURN_V2   : std_logic_vector(31 downto 0) := x"FC008006"; -- RETURN v2
         constant INST_LDI_42      : std_logic_vector(31 downto 0) := x"3C010814"; -- LDI_LO v1.xyzw, 0x0042
         constant INST_BRA_X       : std_logic_vector(31 downto 0) := x"DC000001"; -- BRA_X
         constant INST_PUSH_L      : std_logic_vector(31 downto 0) := x"E0000001"; -- PUSH_L
@@ -184,9 +184,9 @@ begin
         -- ----------------------------------------------------------------
         -- 1. Reset
         -- ----------------------------------------------------------------
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
         reset <= '0';
-        wait for CLK_PERIOD;
+        wait until rising_edge(clk);
 
         -- ----------------------------------------------------------------
         -- 2. Program instruction memory (12 instructions)

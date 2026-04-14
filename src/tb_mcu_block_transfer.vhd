@@ -101,9 +101,9 @@ begin
     process
     begin
         -- Reset
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
         reset <= '0';
-        wait for CLK_PERIOD;
+        wait until rising_edge(clk);
 
         -- ====================================================================
         -- 1. Fill the M10K Pixel Buffer

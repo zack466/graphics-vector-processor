@@ -317,9 +317,20 @@ begin
         end if;
     end process;
 
-    -- The scalar result is broadcast: the caller should replicate this value
-    -- to all four component lanes of the destination VRF entry.
-    result    <= res_pipe(FPU_MAX_LATENCY);
+    -- ========================================================================
+    -- 4. COMBINATIONAL OUTPUT ROUTING
+    -- ========================================================================
+    -- BUG FIX: If LAT_REDUCT == FPU_MAX_LATENCY, the pipeline shift logic would 
+    -- require an extra cycle (because i-1 = FPU_MAX_LATENCY is out of bounds).
+    -- The combinational bypass extracts raw_result directly in this case.
+    process(res_pipe, raw_result)
+    begin
+        if LAT_REDUCT = FPU_MAX_LATENCY then
+            result <= raw_result;
+        else
+            result <= res_pipe(FPU_MAX_LATENCY);
+        end if;
+    end process;
 
     -- valid_out is in phase with result — both are FPU_MAX_LATENCY cycles
     -- behind valid_in, providing a uniform timing interface to the writeback

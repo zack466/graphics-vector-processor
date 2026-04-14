@@ -148,33 +148,33 @@ begin
         -- ----------------------------------------------------------------
         -- Reset
         -- ----------------------------------------------------------------
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
         reset <= '0';
-        wait for CLK_PERIOD;
+        wait until rising_edge(clk);
 
         -- ----------------------------------------------------------------
         -- Test 1: 4×8 = 32 pixels → 1 warp
         -- ----------------------------------------------------------------
         run_frame(4, 8, 1);
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         -- ----------------------------------------------------------------
         -- Test 2: 8×8 = 64 pixels → 2 warps
         -- ----------------------------------------------------------------
         run_frame(8, 8, 2);
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         -- ----------------------------------------------------------------
         -- Test 3: 64×4 = 256 pixels → 8 warps
         -- ----------------------------------------------------------------
         run_frame(64, 4, 8);
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         -- ----------------------------------------------------------------
         -- Test 4: Re-trigger with same frame size (scheduler returns to IDLE)
         -- ----------------------------------------------------------------
         run_frame(8, 8, 2);
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         -- ----------------------------------------------------------------
         -- Test 5: Verify frame_done is only a 1-cycle pulse
@@ -189,7 +189,7 @@ begin
         -- Wait for the very next event on frame_done (must be '0' to be a pulse)
         wait until frame_done = '0';
         report "Test 5 (frame_done pulse): PASS";
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
 
         report "tb_warp_scheduler: ALL TESTS PASSED" severity note;
         std.env.stop;

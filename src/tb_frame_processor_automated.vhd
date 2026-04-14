@@ -197,8 +197,8 @@ begin
         variable dump_addr : integer;
 
     begin
-        wait for 50 ns; wait until rising_edge(clk); reset <= '0';
-        wait for 50 ns; wait until rising_edge(clk);
+        for j in 1 to 5 loop wait until rising_edge(clk); end loop; reset <= '0';
+        for j in 1 to 5 loop wait until rising_edge(clk); end loop;
         report "--- STARTING FRAME PROCESSOR TEST ---";
 
         -- ====================================================================
@@ -220,7 +220,7 @@ begin
         end loop;
         file_close(prog_file);
         prog_we <= '0';
-        wait for 50 ns; wait until rising_edge(clk);
+        for j in 1 to 5 loop wait until rising_edge(clk); end loop;
 
         -- ====================================================================
         -- 2. RENDER FRAME (single pulse; scheduler dispatches all warps)
@@ -239,7 +239,7 @@ begin
 
         wait until frame_done = '1';
         report "Frame render complete.";
-        wait for 50 ns; wait until rising_edge(clk);
+        for j in 1 to 5 loop wait until rising_edge(clk); end loop;
 
         -- ====================================================================
         -- 3. DUMP FRAMEBUFFER

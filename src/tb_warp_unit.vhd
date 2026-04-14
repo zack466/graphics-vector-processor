@@ -147,14 +147,14 @@ begin
         -- Instruction encodings
         constant INST_FLUSH     : std_logic_vector(31 downto 0) := x"F8000006"; -- OP_FLUSH | SYS
         -- RETURN v1: (63<<26)|(1<<4)|6 = 0xFC000016; address = fb_base_addr<<16 + warp_offset*4
-        constant INST_RETURN_V1 : std_logic_vector(31 downto 0) := x"FC000016"; -- RETURN v1 | SYS
+        constant INST_RETURN_V1 : std_logic_vector(31 downto 0) := x"FC004006"; -- RETURN v1 | SYS
     begin
         -- ----------------------------------------------------------------
         -- 1. Reset
         -- ----------------------------------------------------------------
-        wait for 2 * CLK_PERIOD;
+        for i in 1 to 2 loop wait until rising_edge(clk); end loop;
         reset <= '0';
-        wait for CLK_PERIOD;
+        wait until rising_edge(clk);
 
         -- ----------------------------------------------------------------
         -- 2. Program instruction memory (2 instructions)
