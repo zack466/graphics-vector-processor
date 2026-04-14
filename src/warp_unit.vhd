@@ -578,6 +578,10 @@ begin
             exec_mux_ctrl.swiz_sel_b     <= dec_red.swiz_sel_b;
             exec_mux_ctrl.wb_mux_sel     <= dec_red.wb_mux_sel;
             exec_mux_ctrl.vrf_we         <= dec_red.vrf_we;
+            -- Must explicitly set write_mask from dec_red.red_mask (bits[29:26]).
+            -- Without this, write_mask falls through to dec_fpu.write_mask which
+            -- reads bits[25:22] = rd_addr, producing the wrong component mask.
+            exec_mux_ctrl.write_mask     <= dec_red.red_mask;
 
         elsif v_type = INST_TYPE_SYS then
             if ifu_inst_out(31 downto 26) = OP_RETURN then

@@ -2,20 +2,21 @@
 runner.py — Run automated processor tests.
 
 Usage (from repo root):
-    python tools/runner.py [test_names...] [--no-rebuild] [--no-images]
+    python tools/runner.py [test_names...] [--qsys] [--num-frames N] [--no-rebuild] [--no-images]
 
 Examples:
-    python tools/runner.py                        # Runs all tests
+    python tools/runner.py                        # Runs all tests (Base FP wrapper)
     python tools/runner.py test09                 # Runs any test matching 'test09'
     python tools/runner.py tools/test01_basic.s   # Runs a specific file
+    python tools/runner.py --qsys --num-frames 3  # Runs full Qsys system for 3 frames
 
 Workflow:
-    1. Build VHDL once (make clean && make build in src/, then elaborate tb_frame_processor_automated)
+    1. Build VHDL once (make clean && make build in src/, then elaborate the chosen testbench)
     2. For each matched tools/test[0-9][0-9]_*.s (sorted):
        a. Parse assembly file for # WIDTH: X and # HEIGHT: Y comments
        b. Assemble to src/program.hex
        c. Run the simulation executable with -gFRAME_WIDTH=X -gFRAME_HEIGHT=Y
-       d. Optionally generate a PNG image of size X by Y from src/memory_dump.hex
+       d. Optionally generate a PNG image(s) from the resulting .hex dumps
        e. Report PASS / FAIL
     3. Print a summary table
 
@@ -36,18 +37,21 @@ REPO_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR    = os.path.join(REPO_ROOT, "src")
 TOOLS_DIR  = os.path.join(REPO_ROOT, "tools")
 HEX_FILE   = os.path.join(SRC_DIR, "program.hex")
-DUMP_FILE  = os.path.join(SRC_DIR, "memory_dump.hex")
-SIM_EXE    = os.path.join(SRC_DIR, "work", "tb_frame_processor_automated")
-RUNFLAGS   = ["--ieee-asserts=disable", "--stop-time=10ms"]
 
+# Increased stop time to 100ms to allow multi-frame Qsys simulations to finish.
+# Both testbenches use std.env.stop; so they will terminate early automatically.
+RUNFLAGS   = ["--ieee-asserts=disable", "--stop-time=100ms"]
 
 # ---------------------------------------------------------------------------
 # Build
 # ---------------------------------------------------------------------------
 
-def build_once():
+def build_once(qsys_mode):
+    target_tb = "tb_gpu_qsys_wrapper" if qsys_mode else "tb_frame_processor_automated"
+    sim_exe = os.path.join(SRC_DIR, "work", target_tb)
+
     print("=" * 60)
-    print("Building VHDL (make clean && make build && ghdl -e) ...")
+    print(f"Building VHDL for {target_tb} ...")
     print("=" * 60)
 
     subprocess.run(["make", "clean"], cwd=SRC_DIR, check=True, capture_output=True)
@@ -58,9 +62,9 @@ def build_once():
         print(result.stderr[-4000:])
         sys.exit(1)
 
-    # Elaborate the automated testbench
+    # Elaborate the targeted automated testbench
     result = subprocess.run(
-        ["ghdl", "-e", "--std=08", f"--workdir=work/", "-o", SIM_EXE, "tb_frame_processor_automated"],
+        ["ghdl", "-e", "--std=08", f"--workdir=work/", "-o", sim_exe, target_tb],
         cwd=SRC_DIR, capture_output=True, text=True
     )
     if result.returncode != 0:
@@ -70,6 +74,7 @@ def build_once():
         sys.exit(1)
 
     print("Build OK.\n")
+    return sim_exe
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +130,7 @@ def generate_image(dump_file, output_png, width, height):
 # Run one test
 # ---------------------------------------------------------------------------
 
-def run_test(asm_file, gen_images):
+def run_test(asm_file, sim_exe, gen_images, qsys_mode, num_frames):
     name = os.path.splitext(os.path.basename(asm_file))[0]
 
     # Parse assembly file for dimensions
@@ -151,10 +156,15 @@ def run_test(asm_file, gen_images):
     if asm_result.returncode != 0:
         return "FAIL (assembler error)", asm_result.stderr.strip()
 
-    # Simulate with dynamic dimensions
-    t0 = time.time()
-    sim_cmd = [SIM_EXE] + RUNFLAGS + [f"-gFRAME_WIDTH={width}", f"-gFRAME_HEIGHT={height}", "--max-stack-alloc=0"]
+    # Base simulation command
+    sim_cmd = [sim_exe] + RUNFLAGS + [f"-gFRAME_WIDTH={width}", f"-gFRAME_HEIGHT={height}", "--max-stack-alloc=0"]
     
+    # Append Qsys specific generics
+    if qsys_mode:
+        sim_cmd.append(f"-gNUM_FRAMES={num_frames}")
+
+    # Simulate
+    t0 = time.time()
     sim_result = subprocess.run(
         sim_cmd,
         cwd=SRC_DIR, capture_output=True, text=True
@@ -173,10 +183,24 @@ def run_test(asm_file, gen_images):
         if error_lines:
             return "FAIL (sim error)", "\n".join(error_lines[:5])
 
-    # Generate image
-    if gen_images and os.path.exists(DUMP_FILE):
-        png_path = os.path.join(TOOLS_DIR, name + ".png")
-        generate_image(DUMP_FILE, png_path, width, height)
+    # Generate images
+    if gen_images:
+        if qsys_mode:
+            # Qsys mode produces multiple files: frame_0.hex, frame_1.hex, etc.
+            for i in range(num_frames):
+                dump_file = os.path.join(SRC_DIR, f"frame_{i}.hex")
+                if os.path.exists(dump_file):
+                    png_path = os.path.join(TOOLS_DIR, f"{name}_f{i}.png")
+                    generate_image(dump_file, png_path, width, height)
+                    # Clean up the .hex dump after rendering
+                    os.remove(dump_file)
+        else:
+            # Standard single frame block processor
+            dump_file = os.path.join(SRC_DIR, "memory_dump.hex")
+            if os.path.exists(dump_file):
+                png_path = os.path.join(TOOLS_DIR, name + ".png")
+                generate_image(dump_file, png_path, width, height)
+                os.remove(dump_file)
 
     return f"PASS ({elapsed:.1f}s)", ""
 
@@ -188,7 +212,14 @@ def run_test(asm_file, gen_images):
 def main():
     parser = argparse.ArgumentParser(description="Run automated processor tests")
     parser.add_argument("tests", nargs="*", 
-                        help="Optional: Specific test files or names to run (e.g. 'test09' or 'tools/test01_basic.s'). If omitted, runs all tests.")
+                        help="Optional: Specific test files or names to run (e.g. 'test09'). If omitted, runs all tests.")
+    
+    # Qsys Toggle Flags
+    parser.add_argument("--qsys", action="store_true",
+                        help="Run using the full Qsys Wrapper testbench instead of the isolated frame processor.")
+    parser.add_argument("--num-frames", type=int, default=2,
+                        help="Number of frames to simulate when running in --qsys mode (Default: 2).")
+    
     parser.add_argument("--no-rebuild", action="store_true",
                         help="Skip VHDL rebuild (use existing simulation binary)")
     parser.add_argument("--no-images", action="store_true",
@@ -227,20 +258,28 @@ def main():
     else:
         test_files = all_test_files
 
+    # Target executable path resolution
+    target_tb = "tb_gpu_qsys_wrapper" if args.qsys else "tb_frame_processor_automated"
+    sim_exe = os.path.join(SRC_DIR, "work", target_tb)
+
     # Build phase
     if not args.no_rebuild:
-        build_once()
-    elif not os.path.exists(SIM_EXE):
-        print(f"Simulation binary not found: {SIM_EXE}")
+        sim_exe = build_once(args.qsys)
+    elif not os.path.exists(sim_exe):
+        print(f"Simulation binary not found: {sim_exe}")
         print("Run without --no-rebuild first.")
         sys.exit(1)
 
     # Run phase
     results = []
+    print("=" * 60)
+    print(f"RUNNING TESTS ({'QSYS MODE' if args.qsys else 'ISOLATED MODE'})")
+    print("=" * 60)
+    
     for asm_file in test_files:
         name = os.path.splitext(os.path.basename(asm_file))[0]
         print(f"  {name:<30} ... ", end="", flush=True)
-        status, detail = run_test(asm_file, not args.no_images)
+        status, detail = run_test(asm_file, sim_exe, not args.no_images, args.qsys, args.num_frames)
         print(status)
         if detail:
             for line in detail.splitlines()[:5]:
@@ -264,7 +303,6 @@ def main():
 
     if passed < len(results):
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

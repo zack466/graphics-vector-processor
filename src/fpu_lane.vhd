@@ -214,6 +214,10 @@ begin
             when OP_FADD => madd_b_in <= FLOAT_ONE;  madd_c_in <= op_b;
             when OP_FSUB => madd_b_in <= FLOAT_ONE;  madd_c_in <= op_b_neg;
             when OP_FMUL => madd_c_in <= FLOAT_ZERO;
+            -- MOV: result = op_a * 1.0 + 0.0 = op_a. Routes MOV through the
+            -- same FMADD pipeline so it has the same latency as all other FPU
+            -- instructions and writeback happens at the correct cycle.
+            when OP_MOV  => madd_b_in <= FLOAT_ONE;  madd_c_in <= FLOAT_ZERO;
             when others  => null;
         end case;
     end process;
@@ -308,7 +312,8 @@ begin
                     -- must all be captured at the same pipeline stage.
                     if LAT_FMADD = i - 1 then
                         if opcode_pipe(LAT_FMADD) = OP_FADD or opcode_pipe(LAT_FMADD) = OP_FSUB or
-                           opcode_pipe(LAT_FMADD) = OP_FMUL or opcode_pipe(LAT_FMADD) = OP_FMADD then
+                           opcode_pipe(LAT_FMADD) = OP_FMUL or opcode_pipe(LAT_FMADD) = OP_FMADD or
+                           opcode_pipe(LAT_FMADD) = OP_MOV then
                             shared_res_pipe(i) <= raw_madd;
                         end if;
                     end if;
@@ -379,8 +384,10 @@ begin
                     -- also present RIGHT NOW", which is the correct zero-cycle match.
                     -- =================================================================
                     if 0 = i - 1 then
-                        -- MOV: zero-latency passthrough of op_a → result register
-                        if opcode = OP_MOV  then shared_res_pipe(i) <= op_a;     end if;
+                        -- Zero-latency predicate logic. MOV is no longer here;
+                        -- it now routes through the FMADD pipeline (see INPUT
+                        -- CONDITIONING) so its writeback aligns with all other
+                        -- FPU instructions at FPU_MAX_LATENCY cycles.
                         if opcode = OP_PAND then shared_cmp_pipe(i) <= raw_pand; end if;
                         if opcode = OP_POR  then shared_cmp_pipe(i) <= raw_por;  end if;
                         if opcode = OP_PXOR then shared_cmp_pipe(i) <= raw_pxor; end if;
@@ -417,7 +424,8 @@ begin
         -- eliminates one register of extra latency for the deepest IP.
         if LAT_FMADD = FPU_MAX_LATENCY then
             if opcode_pipe(FPU_MAX_LATENCY) = OP_FADD or opcode_pipe(FPU_MAX_LATENCY) = OP_FSUB or
-               opcode_pipe(FPU_MAX_LATENCY) = OP_FMUL or opcode_pipe(FPU_MAX_LATENCY) = OP_FMADD then
+               opcode_pipe(FPU_MAX_LATENCY) = OP_FMUL or opcode_pipe(FPU_MAX_LATENCY) = OP_FMADD or
+               opcode_pipe(FPU_MAX_LATENCY) = OP_MOV then
                 result <= raw_madd;
             end if;
         end if;
@@ -445,7 +453,7 @@ begin
         -- realistic case FPU_MAX_LATENCY > 0, this branch is dead code that
         -- synthesis eliminates, adding zero area.
         if 0 = FPU_MAX_LATENCY then
-            if opcode = OP_MOV  then result    <= op_a;     end if;
+            -- MOV removed: it now uses the FMADD pipeline path.
             if opcode = OP_PAND then comp_flag <= raw_pand; end if;
             if opcode = OP_POR  then comp_flag <= raw_por;  end if;
             if opcode = OP_PXOR then comp_flag <= raw_pxor; end if;

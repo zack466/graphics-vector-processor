@@ -1,6 +1,6 @@
 # test09_gradient.s
-# WIDTH: 128
-# HEIGHT: 64
+# WIDTH: 32
+# HEIGHT: 32
 # Draw an RGB gradient image using dynamic WIDTH and HEIGHT uniforms.
 #   R (X) = floor((x / WIDTH) * 255)
 #   G (Y) = floor((y / HEIGHT) * 255)

@@ -1,19 +1,13 @@
 # TODO
-* fully integrate all the components into a module that can be used in platform designer, works with memory and controlled by CSR
 * check sin/cos resource usage, and switch to flopoco or something else if needed
   * test if flopoco arithmetic modules use less resources (I'm ok with losing out on a bit of precision)
   * everything can be done with flopoco floating point format, should only need to convert to IEEE when outputting to framebuffer for compatibility
-* add immediate FPU instructions, don't support things like swizzling or mask, but allow encoding low-precision immediate constants, for things like scalar multiplication, negation, etc
-  * or could just hardcode some constants in the FPU like -1, 1/2, 1/3, 1/4, pi, pi/2, pi/3, pi/4, etc and use for scaling
 * test memory controller with real DDR3 memory
 * (in progress) review documentation manually and verify that it is accurate
-* (in progress) instead of triggering top-level for every warp invocation, add simple warp scheduler that just schedules the single warp to draw an entire frame.
-  * could also implement latency hiding for memory operations? Would also help to simplify MCU. We definitely have enough M10K blocks.
-* create top top level that can trigger processor to draw a frame, and keeps it in sync with the VIP framebuffer.
-  should probably hardcode addresses of two backbuffers for double buffering.
-* might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard).
-  Or just one warp that utilizes latency hiding should be ok.
-* (in progress) replace reciprocal with division operation for better float precision? Figure out why gradient is slightly wrong at midpoint
+* (in progress) create top top level that can trigger processor to draw a frame, and keeps it in sync with the VIP framebuffer.
+  * should probably hardcode addresses of two backbuffers for double buffering.
+  * does the HDMI interface require initialization? check de10-nano examples/docs
+* might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard). Or just one warp that utilizes latency hiding should be ok.
 
 # Agent changes
 
@@ -587,3 +581,85 @@ The internal_opcode (instruction[31:26]) seen by the ALU lane is now `sub_op[5:4
 - `programming_manual.md` — Removed the 1-bit full_mask limitation notes and the "TODO: fix this / Gotcha" warning. Updated the write-mask section and the SIMT section.
 
 **Side effect (bug fix):** Tests that used `LDI_LO vN.w, 0x00FF` to set the alpha channel (test01, test02, test04, test05, test06) previously wrote nothing due to the broken `full_mask=0` encoding. They now correctly write W=255, and the generated PNG images will show proper alpha=255.
+
+---
+## Fix qsys wrapper testbench + new shader tests (2026-04-13)
+
+### Bug Fixed: `tb_gpu_qsys_wrapper.vhd` bound check failure
+
+`variable file_name : string(1 to 15)` was too short for `"frame_0.hex"` (11 chars).
+VHDL fixed-length string assignment raised a runtime bounds-check failure at line 303,
+causing the simulation to crash instead of dumping the frame hex file. Fix: removed the
+variable and passed the concatenated string expression directly to `file_open` and `report`.
+The `--qsys` mode in `runner.py` now works end-to-end for all tests.
+
+### New assembly shaders
+
+Three new shaders added to `tools/`, all passing in both isolated and Qsys wrapper modes
+(64×64 pixels each):
+
+**`test11_sdf_circles.s`** — Branchless SDF circle using:
+- `DOT` — 4-component dot product for `u²+v²` (squared distance from origin)
+- `FSQRT` — Euclidean distance
+- `FMAX` / `FMIN` — branchless clamp-low / clamp-high for smooth coloring
+- `FADD` — offset the SDF for the sky haze channel
+- `MOV` — component-masked copy to pack R, G, B, A into one register
+
+**`test12_ray_march.s`** — 5-step unrolled sphere ray march:
+- Camera at origin; sphere at (0,0,3) radius 1; focal length 1.5
+- `DOT` for `|q|²`, `FSQRT` for `|q|`, `FADD` for step accumulation `t += sdf`
+- Color encodes the final march distance (warm orange for close hits → dark blue sky for misses)
+- Component-masked `LDI_LO/HI` and `MOV` pack a 3-component sphere-center vector (0,0,3,0)
+  into a single vector register with different values per component lane
+
+**`test13_plasma.s`** — Time-animated plasma effect:
+- `SIN` — per-pixel sine evaluation
+- `TIME` — elapsed-milliseconds uniform for animation
+- `FADD` — phase accumulation per channel
+- Three interference patterns (R/G/B) at different frequencies produce a full-colour plasma
+
+---
+
+## 2026-04-13 — Fix double-buffer addressing in `tb_gpu_qsys_wrapper` and `run_gpu.tcl`
+
+**Bug:** With 5 frames in qsys mode, odd frames (f1, f3) rendered as empty images while even frames (f0, f2, f4) were correct.
+
+**Root cause:** `fb_base_addr` is the *upper 16 bits* of the DDR3 byte address (a "page" number). The GPU computes `pixel_addr = (fb_base_addr << 16) + warp_offset*4`. The testbench set `FB_1_ADDR = FB_SIZE_BYTES` (e.g. 4096 for 32×32), which caused the CSR to store page 4096, placing FB1 writes at DDR3 address `4096 * 65536 = 0x10000000`. The testbench then tried to read from byte address 4096 — completely mismatched. Even frames worked because FB0 = page 0 = address 0 in both the GPU and testbench.
+
+**Fixes:**
+- **`src/tb_gpu_qsys_wrapper.vhd`**: Added `FB_0_PAGE = 0`, `FB_1_PAGE = 1` constants. Derived `FB_0_ADDR = 0`, `FB_1_ADDR = 65536`. Updated CSR writes to pass page numbers (not byte addresses). Updated `SIM_MEM_WORDS = (FB_1_ADDR + FB_SIZE_BYTES) / 16` to correctly size simulated DDR3 to cover both framebuffers.
+- **`tools/run_gpu.tcl`**: Changed `REG_FB_1` write from `0x00200000` to `0x00000020` (page 32 → DDR3 address 0x00200000 = 2MB), so the lower 16 bits stored in the CSR correctly represent the page number.
+
+**Verified:** `test13_plasma` at 32×32, 5 frames — all frames non-empty, test passes in ~97s.
+
+---
+
+## 2026-04-13 — Fix MOV instruction latency and DOT write_mask
+
+**Problem:** `test11_sdf_circles` produced a solid green image and `test12_ray_march` produced a solid orange image. Both should render distinct pixel-by-pixel graphics.
+
+**Root causes identified:**
+
+1. **`fpu_lane.vhd` — MOV zero-latency bug**: MOV was implemented as a zero-latency injection into `shared_res_pipe(1)` using the unregistered `opcode` port. However, the writeback controller delays its enable by `FPU_MAX_LATENCY=28` cycles, so the result was long gone by the time writeback fired. The fix routes MOV through the FMADD IP core (`result = op_a × 1.0 + 0.0 = op_a`), giving it the same `LAT_FMADD`-cycle latency as FADD/FSUB/FMUL.
+
+2. **`warp_unit.vhd` — DOT write_mask bug**: In `exec_mux_ctrl`, the `INST_TYPE_RED` branch never set `write_mask`, so it fell through to the default `dec_fpu.write_mask = instruction[25:22]`, which equals `rd_addr` rather than the actual component mask in `instruction[29:26]`. For `DOT v13.xyzw, v8, v8` (rd=13 = 0b1101), this wrote X/Z/W but not Y. The fix adds `exec_mux_ctrl.write_mask <= dec_red.red_mask;` in the RED branch.
+
+**Fixes:**
+- **`src/fpu_lane.vhd`**: Added `when OP_MOV => madd_b_in <= FLOAT_ONE; madd_c_in <= FLOAT_ZERO;` to FMADD input conditioning. Added `OP_MOV` to FMADD sequential injection check and combinational output bypass. Removed MOV from zero-latency injection block.
+- **`src/warp_unit.vhd`**: Added `exec_mux_ctrl.write_mask <= dec_red.red_mask;` in `INST_TYPE_RED` branch of `exec_mux_ctrl`.
+
+**Verified:** `test11_sdf_circles` and `test12_ray_march` both PASS with correct rendered images.
+
+---
+
+## 2026-04-13 — Three new example shaders (pastel, checkerboard, Mandelbrot)
+
+**Added:**
+
+- **`tools/test14_pastel.s`** (52 instructions): Animated pastel sine waves. Computes `wave = (uv.x + uv.y)*5 + t`, packs three phase-shifted wave values `(wave, wave+2, wave+4)` into a single register's x/y/z lanes, then evaluates all three channels with one SIN instruction. Output is `sin(wave+phase)*0.3 + 0.7` scaled to [0,255].
+
+- **`tools/test15_checkerboard.s`** (59 instructions): Horizontally-scrolling checkerboard. Grid coordinates are offset by +1000 (even constant) before F2I so truncation-toward-zero equals floor for negative inputs. Parity computed via float mod-2: `is_even = checker_sum - 2*floor(checker_sum/2)`. Branchless color: `51 + 153*is_even`.
+
+- **`tools/test16_mandelbrot.s`** (249 instructions): Mandelbrot fractal with animated zoom into seahorse valley (-0.7453, 0.1127). Uses FEXP2 (new instruction in shaders): `exp(x) = exp2(x * log2(e))`. 16 iterations unrolled (IMEM limit = 256 words). zx/zy clamped to ±1000 each step to prevent IEEE 754 overflow. Coloring by final `|z|^2 / 200`, clamped [0,1]: orange for escaped, blue for in-set.
+
+**Verified:** All three tests PASS.

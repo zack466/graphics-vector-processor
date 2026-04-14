@@ -153,7 +153,23 @@ architecture structural of frame_processor is
     signal int_rx_data       : std_logic_vector(DATA_WIDTH-1 downto 0);
     signal int_rx_valid      : std_logic;
 
+    -- Uniform registers
+    signal frame_width_reg   : std_logic_vector(15 downto 0);
+    signal frame_height_reg  : std_logic_vector(15 downto 0);
+    signal time_ms_reg       : std_logic_vector(31 downto 0);
+
 begin
+
+    process(clk)
+    begin
+        if rising_edge(clk) then
+            -- Latch in uniforms to prevent issues if they happen to change
+            -- while the processor is running.
+            frame_width_reg  <= frame_width;
+            frame_height_reg <= frame_height;
+            time_ms_reg      <= time_ms;
+        end if;
+    end process;
 
     -- ========================================================================
     -- Instruction Memory (shared; all warps run the same program)
@@ -212,11 +228,12 @@ begin
             warp_halted     => warp_halted_sig,
             warp_break      => open,
             
-            -- Route Shader Uniforms into the Warp Unit
-            frame_width     => frame_width,
-            frame_height    => frame_height,
-            time_ms         => time_ms,
+            -- Shader uniforms
+            frame_width     => frame_width_reg,
+            frame_height    => frame_height_reg,
+            time_ms         => time_ms_reg,
             
+            -- pixel buffer interface
             mem_stall       => mcu_mem_stall,
             pixel_buf_valid => warp_pixel_valid,
             pixel_buf_addr  => warp_pixel_addr,
