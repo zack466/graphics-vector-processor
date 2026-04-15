@@ -85,6 +85,10 @@ architecture sim of tb_call_stack is
     -- Pixel buffer outputs (New M10K interface)
     signal pixel_buf_valid : std_logic;
     signal pixel_buf_addr  : std_logic_vector(31 downto 0);
+    signal pixel_wr_en     : std_logic;
+    signal pixel_wr_addr   : std_logic_vector(4 downto 0);
+    signal pixel_wr_data   : std_logic_vector(31 downto 0);
+
     signal pixel_rd_en     : std_logic := '0';
     signal pixel_rd_addr   : std_logic_vector(2 downto 0) := "000";
     signal pixel_rd_data   : std_logic_vector(DATA_WIDTH-1 downto 0);
@@ -147,12 +151,24 @@ begin
             time_ms         => (others => '0'),
             
             -- Pixel Buffer
-            mem_stall       => '0',
             pixel_buf_valid => pixel_buf_valid,
             pixel_buf_addr  => pixel_buf_addr,
-            pixel_rd_en     => pixel_rd_en,
-            pixel_rd_addr   => pixel_rd_addr,
-            pixel_rd_data   => pixel_rd_data
+            pixel_buf_dirty => '0',
+            pixel_wr_en     => pixel_wr_en,
+            pixel_wr_addr   => pixel_wr_addr,
+            pixel_wr_data   => pixel_wr_data
+        );
+
+    -- Instantiation of the pixel buffer for testing
+    u_pixel_buffer : entity work.pixel_buffer_ram
+        port map (
+            clk      => clk,
+            we       => pixel_wr_en,
+            wr_addr  => pixel_wr_addr,
+            wr_data  => pixel_wr_data,
+            rd_en    => pixel_rd_en,
+            rd_addr  => pixel_rd_addr,
+            rd_data  => pixel_rd_data
         );
 
     -- ========================================================================

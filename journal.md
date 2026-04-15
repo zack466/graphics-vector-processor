@@ -8,6 +8,8 @@
   * should probably hardcode addresses of two backbuffers for double buffering.
   * does the HDMI interface require initialization? check de10-nano examples/docs
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard). Or just one warp that utilizes latency hiding should be ok.
+* TEST ON HARDWARE!!!
+* delete program.hex and other aux files so automated test doesn't get confused if run by itself
 
 # Agent changes
 
@@ -342,7 +344,7 @@ The old `processor.vhd` mixed host interface logic (CSR writes to set warp_offse
 - `tools/run_all_tests.py` — updated SIM_EXE and elaboration target; added print confirmation after PNG save.
 
 **Bug fix (VHDL case-insensitivity):**
-The initial `tb_frame_processor_automated.vhd` used signal names `frame_width`/`frame_height` which silently collided with generics `FRAME_WIDTH`/`FRAME_HEIGHT` (VHDL is case-insensitive), causing port bindings to resolve to the constant generic values rather than the driven signals. Fixed by renaming the signals to `fp_width`/`fp_height`.
+The initial `tb_frame_processor_automated.vhd` used signal names `frame_width`/`frame_height` which silently collided with generics `FRAME_WIDTH`/`FRAME_HEIGHT` (VHDL is case-insensitivity), causing port bindings to resolve to the constant generic values rather than the driven signals. Fixed by renaming the signals to `fp_width`/`fp_height`.
 
 **Verification:** All 9 assembly tests pass (9/9) with `tb_frame_processor_automated`. PNG images are generated for all tests.
 
@@ -687,3 +689,40 @@ Three new shaders added to `tools/`, all passing in both isolated and Qsys wrapp
 - Modified `Makefile` to allow `ghdl` to allocate maximum stack sizes to execute `Qsys` environment tests without segfaults.
 - Updated `programming_manual.md` with the new instruction decoding logic for `RETURN`.
 - All `make test-all` assertions and simulations pass successfully!
+
+---
+## Date: 2026-04-14
+
+### Phase 1: Latency Hiding Implementation (Single-Warp)
+
+Implemented the first phase of the latency hiding proposal. The goal was to allow the warp unit to begin computing the next thread block immediately after rendering its pixels, overlapping the next block's compute time with the memory controller's (MCU) DDR3 burst transfer.
+
+**Changes:**
+
+#### `src/warp_unit.vhd`
+- Removed the internal `pixel_buffer_ram` instantiation.
+- Added new output ports to push packed pixels to the top-level: `pixel_wr_en`, `pixel_wr_addr`, and `pixel_wr_data`.
+- Added a `pixel_buf_dirty` input port to track if the top-level buffer is busy.
+- Modified the FSM to:
+    - In `DECODE`, stall when `OP_RETURN` is encountered if `pixel_buf_dirty` is high.
+    - In `EXEC_WAIT`, pulse `pixel_buf_valid` and transition directly to `HALTED` after the 32nd thread is written to the buffer, bypassing the previous `MEM_WAIT` state.
+    - Removed the `MEM_WAIT` state from the `proc_state_t` type.
+
+#### `src/mcu_block_transfer.vhd`
+- Removed the `mem_stall` output port.
+- Added a `pixel_buf_done` output pulse port.
+- Modified the FSM to pulse `pixel_buf_done` for one cycle when transitioning from `STORE_BURST` back to `IDLE`.
+
+#### `src/frame_processor.vhd`
+- Instantiated the `pixel_buffer_ram` at the top level.
+- Connected the warp unit's `pixel_wr_*` ports and the MCU's `pixel_rd_*` ports to the central buffer.
+- Added a `pixel_buf_dirty` flag that is set when `pixel_buf_valid` pulses and cleared when `mcu_pixel_done` pulses.
+- Gated the top-level `frame_done` signal so it only fires after both the scheduler is done AND the final MCU transfer has completed.
+
+**Testbench Updates:**
+- `src/tb_warp_unit.vhd`: Updated to include the new pixel buffer write ports and the externalized pixel buffer instantiation for testing.
+- `src/tb_mcu_block_transfer.vhd`: Updated to use the new `pixel_buf_done` port instead of `mem_stall`.
+- `src/tb_call_stack.vhd`: Updated to include the externalized pixel buffer and fixed compilation errors due to changed interfaces.
+- `src/tb_frame_processor.vhd`: Verified the correct behavior of the gated `frame_done` and the asynchronous pixel transfers.
+
+All modified testbenches pass correctly. The `tb_frame_processor_automated` also passes, confirming that the overall system logic remains sound.

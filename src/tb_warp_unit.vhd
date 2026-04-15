@@ -73,6 +73,12 @@ architecture sim of tb_warp_unit is
     -- Pixel buffer interface (New M10K implementation)
     signal pixel_buf_valid : std_logic;
     signal pixel_buf_addr  : std_logic_vector(31 downto 0);
+    signal pixel_buf_dirty : std_logic := '0';
+    
+    signal pixel_wr_en     : std_logic;
+    signal pixel_wr_addr   : std_logic_vector(4 downto 0);
+    signal pixel_wr_data   : std_logic_vector(31 downto 0);
+
     signal pixel_rd_en     : std_logic := '0';
     signal pixel_rd_addr   : std_logic_vector(2 downto 0) := "000";
     signal pixel_rd_data   : std_logic_vector(DATA_WIDTH-1 downto 0);
@@ -133,14 +139,26 @@ begin
             time_ms         => (others => '0'),
             
             -- Pixel Buffer output handshake
-            mem_stall       => '0',
             pixel_buf_valid => pixel_buf_valid,
             pixel_buf_addr  => pixel_buf_addr,
+            pixel_buf_dirty => pixel_buf_dirty,
             
-            -- Pixel Buffer M10K Read Port
-            pixel_rd_en     => pixel_rd_en,
-            pixel_rd_addr   => pixel_rd_addr,
-            pixel_rd_data   => pixel_rd_data
+            -- Pixel Buffer Write Port
+            pixel_wr_en     => pixel_wr_en,
+            pixel_wr_addr   => pixel_wr_addr,
+            pixel_wr_data   => pixel_wr_data
+        );
+
+    -- Mock pixel buffer to test the writing from warp_unit
+    u_pixel_buffer : entity work.pixel_buffer_ram
+        port map (
+            clk      => clk,
+            we       => pixel_wr_en,
+            wr_addr  => pixel_wr_addr,
+            wr_data  => pixel_wr_data,
+            rd_en    => pixel_rd_en,
+            rd_addr  => pixel_rd_addr,
+            rd_data  => pixel_rd_data
         );
 
     process

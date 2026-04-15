@@ -31,7 +31,7 @@ entity mcu_block_transfer is
         -- Processor Control
         pixel_buf_valid   : in  std_logic;
         base_addr         : in  std_logic_vector(ADDR_WIDTH-1 downto 0);
-        mem_stall         : out std_logic;
+        pixel_buf_done    : out std_logic;
 
         -- Interface to warp_unit's pixel_buffer_ram (M10K)
         pixel_rd_en       : out std_logic;
@@ -102,10 +102,6 @@ begin
     -- enable all bytes when writing
     tx_byte_en <= (others => '1');
 
-    -- Stall the warp immediately on the same cycle valid is asserted, 
-    -- and hold it until the FSM successfully returns to IDLE.
-    mem_stall <= '0' when (state = IDLE and pixel_buf_valid = '0') else '1';
-
     -- ========================================================================
     -- FSM SEQUENTIAL LOGIC
     -- ========================================================================
@@ -113,12 +109,16 @@ begin
     begin
         if rising_edge(clk) then
             if reset = '1' then
-                state         <= IDLE;
-                cmd_valid_reg <= '0';
-                tx_valid_reg  <= '0';
-                tx_count      <= 0;
-                rd_count      <= 0;
+                state          <= IDLE;
+                cmd_valid_reg  <= '0';
+                tx_valid_reg   <= '0';
+                pixel_buf_done <= '0';
+                tx_count       <= 0;
+                rd_count       <= 0;
             else
+                -- Default: clear pulse
+                pixel_buf_done <= '0';
+                
                 case state is
                     when IDLE =>
                         if pixel_buf_valid = '1' then
@@ -146,8 +146,9 @@ begin
                         if tx_ready = '1' and tx_valid_reg = '1' then
                             if tx_count = 7 then
                                 -- Burst complete
-                                tx_valid_reg <= '0';
-                                state        <= IDLE;
+                                tx_valid_reg   <= '0';
+                                pixel_buf_done <= '1';
+                                state          <= IDLE;
                             else
                                 -- Advance TX beat
                                 tx_count <= tx_count + 1;

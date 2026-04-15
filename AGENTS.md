@@ -27,6 +27,6 @@ When writing designs/testbenches in VHDL, always abide by these guideleines:
 - Try to follow the style of the existing code for naming and general style
 
 ## Development Process
-After making changes or fixing a bug, log your progress and append it to a file called `journal.md` in the project's root directory.
+After making changes or fixing a bug, log your progress and **append** it to a file called `journal.md` in the project's root directory.
 When modifying a file with nontrivial changes, always ensure that the comments in the file are kept up-to-date.
 Furthermore, changes to the design of the project should be kept up-to-date in `README.md`, which contains the design document.

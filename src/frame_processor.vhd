@@ -127,11 +127,22 @@ architecture structural of frame_processor is
     signal sched_warp_offset : std_logic_vector(ADDR_WIDTH-1 downto 0);
     signal sched_fb_base     : std_logic_vector(15 downto 0); -- fb_base forwarded by scheduler
     signal warp_halted_sig   : std_logic;
+    signal sched_frame_done  : std_logic;
+
+    -- Pixel Buffer State (Latency Hiding Sync)
+    signal pixel_buf_dirty    : std_logic := '0';
+    signal mcu_pixel_done     : std_logic;
 
     -- Warp ↔ MCU Handshake and RAM interface
     signal warp_pixel_valid   : std_logic;
     signal warp_pixel_addr    : std_logic_vector(ADDR_WIDTH-1 downto 0);
-    signal mcu_mem_stall      : std_logic;
+    
+    -- Pixel Buffer Write Interface (from warp)
+    signal warp_pixel_wr_en   : std_logic;
+    signal warp_pixel_wr_addr : std_logic_vector(4 downto 0);
+    signal warp_pixel_wr_data : std_logic_vector(31 downto 0);
+    
+    -- Pixel Buffer Read Interface (from MCU)
     signal warp_pixel_rd_en   : std_logic;
     signal warp_pixel_rd_addr : std_logic_vector(2 downto 0);
     signal warp_pixel_rd_data : std_logic_vector(DATA_WIDTH-1 downto 0);
@@ -158,11 +169,36 @@ architecture structural of frame_processor is
     signal frame_height_reg  : std_logic_vector(15 downto 0);
     signal time_ms_reg       : std_logic_vector(31 downto 0);
 
+    signal frame_done_pending : std_logic := '0';
+
 begin
 
     process(clk)
     begin
         if rising_edge(clk) then
+            if reset = '1' then
+                pixel_buf_dirty    <= '0';
+                frame_done_pending <= '0';
+                frame_done         <= '0';
+            else
+                frame_done <= '0';
+
+                if warp_pixel_valid = '1' then
+                    pixel_buf_dirty <= '1';
+                elsif mcu_pixel_done = '1' then
+                    pixel_buf_dirty <= '0';
+                end if;
+
+                if sched_frame_done = '1' then
+                    frame_done_pending <= '1';
+                end if;
+
+                if frame_done_pending = '1' and (pixel_buf_dirty = '0' or mcu_pixel_done = '1') then
+                    frame_done <= '1';
+                    frame_done_pending <= '0';
+                end if;
+            end if;
+            
             -- Latch in uniforms to prevent issues if they happen to change
             -- while the processor is running.
             frame_width_reg  <= frame_width;
@@ -198,7 +234,7 @@ begin
             frame_start  => frame_start,
             frame_width  => frame_width,
             frame_height => frame_height,
-            frame_done   => frame_done,
+            frame_done   => sched_frame_done,
             warp_start   => sched_warp_start,
             warp_offset  => sched_warp_offset,
             warp_halted  => warp_halted_sig,
@@ -234,12 +270,28 @@ begin
             time_ms         => time_ms_reg,
             
             -- pixel buffer interface
-            mem_stall       => mcu_mem_stall,
             pixel_buf_valid => warp_pixel_valid,
             pixel_buf_addr  => warp_pixel_addr,
-            pixel_rd_en     => warp_pixel_rd_en,
-            pixel_rd_addr   => warp_pixel_rd_addr,
-            pixel_rd_data   => warp_pixel_rd_data
+            pixel_buf_dirty => pixel_buf_dirty,
+            
+            -- write port to pixel buffer
+            pixel_wr_en     => warp_pixel_wr_en,
+            pixel_wr_addr   => warp_pixel_wr_addr,
+            pixel_wr_data   => warp_pixel_wr_data
+        );
+
+    -- ========================================================================
+    -- Central Pixel Buffer RAM (M10K)
+    -- ========================================================================
+    u_pixel_buffer : entity work.pixel_buffer_ram
+        port map (
+            clk      => clk,
+            we       => warp_pixel_wr_en,
+            wr_addr  => warp_pixel_wr_addr,
+            wr_data  => warp_pixel_wr_data,
+            rd_en    => warp_pixel_rd_en,
+            rd_addr  => warp_pixel_rd_addr,
+            rd_data  => warp_pixel_rd_data
         );
 
     -- ========================================================================
@@ -255,7 +307,7 @@ begin
             clk             => clk, reset => reset,
             pixel_buf_valid => warp_pixel_valid,
             base_addr       => warp_pixel_addr,
-            mem_stall       => mcu_mem_stall,
+            pixel_buf_done  => mcu_pixel_done,
             pixel_rd_en     => warp_pixel_rd_en,
             pixel_rd_addr   => warp_pixel_rd_addr,
             pixel_rd_data   => warp_pixel_rd_data,

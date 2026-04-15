@@ -200,14 +200,15 @@ entity warp_unit is
         time_ms         : in  std_logic_vector(31 downto 0);
 
         -- ==========================================
-        -- Pixel Buffer Output (to mcu_block_transfer)
+        -- Pixel Buffer Output (to frame_processor top-level)
         -- ==========================================
-        mem_stall       : in  std_logic;                       -- MCU stall signal
         pixel_buf_valid : out std_logic;                       -- 1-cycle trigger: buffer full
         pixel_buf_addr  : out std_logic_vector(31 downto 0);   -- computed DDR3 byte address
-        pixel_rd_en     : in  std_logic;                       -- MCU read enable
-        pixel_rd_addr   : in  std_logic_vector(2 downto 0);    -- MCU read address (0-7)
-        pixel_rd_data   : out std_logic_vector(127 downto 0)   -- MCU read data from M10K (128-bit)
+        pixel_buf_dirty : in  std_logic;                       -- stall if top-level buffer is busy
+        
+        pixel_wr_en     : out std_logic;
+        pixel_wr_addr   : out std_logic_vector(4 downto 0);
+        pixel_wr_data   : out std_logic_vector(31 downto 0)
     );
 end entity warp_unit;
 
@@ -216,7 +217,7 @@ architecture structural of warp_unit is
     -- ========================================================================
     -- PROCESSOR FSM STATES
     -- ========================================================================
-    type proc_state_t is (HALTED, FETCH_ADDR, FETCH_DATA, DECODE, EXEC_WAIT, MEM_WAIT, ADVANCE_PC);
+    type proc_state_t is (HALTED, FETCH_ADDR, FETCH_DATA, DECODE, EXEC_WAIT, ADVANCE_PC);
     signal state, next_state : proc_state_t;
 
     -- ========================================================================
@@ -318,7 +319,7 @@ begin
     warp_halted <= '1' when state = HALTED else '0';
 
     -- ========================================================================
-    -- PIXEL BUFFER RAM (M10K)
+    -- PIXEL BUFFER OUTPUTS
     -- ========================================================================
     -- Packs the low bytes of the snooped vector register into a single RGBA
     -- pixel. Assumes that each component of the vector is an integer from 0 to
@@ -329,16 +330,9 @@ begin
                          exec_mem_store_data(1)(7 downto 0) &
                          exec_mem_store_data(0)(7 downto 0);
 
-    u_pixel_buffer : entity work.pixel_buffer_ram
-        port map (
-            clk      => clk,
-            we       => exec_mem_store_valid,
-            wr_addr  => exec_mem_store_thread_id,
-            wr_data  => packed_pixel_data,
-            rd_en    => pixel_rd_en,
-            rd_addr  => pixel_rd_addr,
-            rd_data  => pixel_rd_data
-        );
+    pixel_wr_en   <= exec_mem_store_valid;
+    pixel_wr_addr <= exec_mem_store_thread_id;
+    pixel_wr_data <= packed_pixel_data;
 
 
     -- ========================================================================
@@ -371,7 +365,7 @@ begin
 
                 -- OP_RETURN: halt the warp
                 if state = DECODE and ifu_inst_out(3 downto 0) = INST_TYPE_SYS and
-                   ifu_inst_out(31 downto 26) = OP_RETURN then
+                   ifu_inst_out(31 downto 26) = OP_RETURN and pixel_buf_dirty = '0' then
                     running <= '0';
                 end if;
 
@@ -405,7 +399,7 @@ begin
     -- FSM — Process B: Combinational Next-State & Output Routing
     -- ========================================================================
     process(state, running, ifu_inst_out, iss_issue_valid, exec_flush_active,
-            exec_mem_store_valid, mem_stall)
+            exec_mem_store_valid, pixel_buf_dirty)
         variable v_inst_type : std_logic_vector(3 downto 0);
     begin
         -- Defaults
@@ -438,12 +432,17 @@ begin
 
                 elsif v_inst_type = INST_TYPE_SYS then
                     if ifu_inst_out(31 downto 26) = OP_RETURN then
-                        -- Issue through barrel scheduler so execution_unit snoops the
-                        -- source register and fills pixel_buffer_ram for all 32 threads.
-                        -- After EXEC_WAIT the FSM goes to HALTED.
-                        -- running is cleared synchronously this cycle (control process).
-                        iss_valid_in <= '1';
-                        next_state   <= EXEC_WAIT;
+                        if pixel_buf_dirty = '1' then
+                            -- Stall until the top-level pixel buffer is ready
+                            next_state <= DECODE;
+                        else
+                            -- Issue through barrel scheduler so execution_unit snoops the
+                            -- source register and writes to the top-level pixel buffer.
+                            -- After EXEC_WAIT the FSM goes to HALTED.
+                            -- running is cleared synchronously this cycle (control process).
+                            iss_valid_in <= '1';
+                            next_state   <= EXEC_WAIT;
+                        end if;
                     elsif ifu_inst_out(31 downto 26) = OP_BREAK then
                         -- running cleared in control process; PC advances so BREAK
                         -- is not re-hit if the warp is somehow restarted.
@@ -475,18 +474,8 @@ begin
                         -- Wait for exec_mem_store_valid='0' before signaling completion.
                         if exec_mem_store_valid = '0' then
                             pixel_buf_valid <= '1';
-                            next_state      <= MEM_WAIT;
+                            next_state      <= HALTED;
                         end if;
-                    else
-                        next_state <= ADVANCE_PC;
-                    end if;
-                end if;
-
-            when MEM_WAIT =>
-                if mem_stall = '0' then
-                    -- RETURN reg: MCU has accepted the pixel buffer; warp halts.
-                    if ifu_inst_out(31 downto 26) = OP_RETURN then
-                        next_state <= HALTED;
                     else
                         next_state <= ADVANCE_PC;
                     end if;
