@@ -6,9 +6,10 @@
     
     # local GHDL flake
     ghdl-custom.url = "git+file:/Users/zack4/forks/ghdl";
+    nvc-custom.url = "git+file:/Users/zack4/repos/nvc";
   };
 
-  outputs = { self, nixpkgs, ghdl-custom }: 
+  outputs = { self, nixpkgs, ghdl-custom, nvc-custom }: 
     let
       # Assuming you are testing this on the same Apple Silicon machine
       system = "aarch64-darwin";
@@ -20,6 +21,7 @@
         buildInputs = [
           # Pulls the compiled, wrapped binary from your GHDL flake's package output
           ghdl-custom.packages.${system}.default
+          nvc-custom.packages.${system}.default
           
           # Standard tools for a VHDL workflow
           pkgs.gnumake
@@ -30,6 +32,7 @@
           echo "========================================================"
           echo "VHDL Simulation Environment Ready!"
           echo "Using local GHDL from: $(which ghdl)"
+          echo "Using local NVC from: $(which nvc)"
           echo "--------------------------------------------------------"
           ghdl --version | head -n 2
           echo "========================================================"
