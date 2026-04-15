@@ -5,6 +5,9 @@ use IEEE.NUMERIC_STD.ALL;
 use work.vector_types_pkg.all;
 use work.processor_constants_pkg.all;
 
+library fp_scalar_product;
+
+
 entity vector_reduction_unit is
     port (
         clk         : in  std_logic;
@@ -34,24 +37,6 @@ architecture rtl of vector_reduction_unit is
     signal cond_b : vector_t;
 
     signal valid_pipe : std_logic_vector(LAT_REDUCT downto 0) := (others => '0');
-
-    component fp_scalar_product is
-        generic( latency : integer := 37 );
-        port (
-            clk    : in  std_logic;
-            areset : in  std_logic;
-            en     : in  std_logic;
-            a0     : in  std_logic_vector(31 downto 0);
-            b0     : in  std_logic_vector(31 downto 0);
-            a1     : in  std_logic_vector(31 downto 0);
-            b1     : in  std_logic_vector(31 downto 0);
-            a2     : in  std_logic_vector(31 downto 0);
-            b2     : in  std_logic_vector(31 downto 0);
-            a3     : in  std_logic_vector(31 downto 0);
-            b3     : in  std_logic_vector(31 downto 0);
-            q      : out std_logic_vector(31 downto 0)
-        );
-    end component;
 
 begin
 
@@ -101,12 +86,10 @@ begin
     -- ========================================================================
     -- 2. HARDWARE IP INSTANTIATION
     -- ========================================================================
-    u_scalar_product : fp_scalar_product
-        generic map (latency => LAT_REDUCT)
-        port map (
+    u_scalar_product : fp_scalar_product.fp_scalar_product
+	     port map (
             clk    => clk,
             areset => reset,
-            en     => '1', 
             a0     => cond_a(0), b0 => cond_b(0),
             a1     => cond_a(1), b1 => cond_b(1),
             a2     => cond_a(2), b2 => cond_b(2),

@@ -29,27 +29,8 @@ architecture rtl of swizzle_network is
     signal mux_b       : vector_t;
 begin
 
-    -- Purely combinational multiplexing and routing process
-    process(vec_a_in, vec_b_in, prf_a_in, prf_b_in, is_logic_op, swiz_sel_a, swiz_sel_b, mux_a, mux_b)
-    begin
-        -- 1. Pre-Swizzle Multiplexer (Inject Predicates if Logic Op)
-        for i in 0 to 3 loop
-            if is_logic_op = '1' then
-                -- Zero-pad the 1-bit predicate to a full 32-bit word
-                mux_a(i) <= x"0000000" & "000" & prf_a_in(i);
-                mux_b(i) <= x"0000000" & "000" & prf_b_in(i);
-            else
-                -- Pass standard math vectors through
-                mux_a(i) <= vec_a_in(i);
-                mux_b(i) <= vec_b_in(i);
-            end if;
-        end loop;
-
-        -- 2. Swizzle Routing (Operates blindly on whatever the Mux provided)
-        for i in 0 to 3 loop
-            vec_a_out(i) <= mux_a(to_integer(unsigned(swiz_sel_a(i))));
-            vec_b_out(i) <= mux_b(to_integer(unsigned(swiz_sel_b(i))));
-        end loop;
-    end process;
+    -- no swizzling just to test place/route
+	 vec_a_out <= vec_a_in;
+	 vec_b_out <= vec_b_in;
 
 end architecture rtl;

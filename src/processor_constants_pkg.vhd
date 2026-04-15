@@ -221,20 +221,20 @@ package processor_constants_pkg is
     -- ========================================================================
     -- HARDWARE LATENCY CONSTANTS
     -- ========================================================================
-    constant LAT_FMADD      : integer := 22;
-    constant LAT_FRCP       : integer := 14;
+    constant LAT_FMADD      : integer := 20;
+    constant LAT_FRCP       : integer := 9;
     constant LAT_FSQRT      : integer := 9;
     constant LAT_FRSQRT     : integer := 28;
-    constant LAT_FMIN       : integer := 3;
-    constant LAT_FMAX       : integer := 3;
-    constant LAT_FSIN       : integer := 21;
-    constant LAT_FCOS       : integer := 21;
+    constant LAT_FMIN       : integer := 2;
+    constant LAT_FMAX       : integer := 2;
+    constant LAT_FSIN       : integer := 32;
+    constant LAT_FCOS       : integer := 32;
     constant LAT_FLOG2      : integer := 21;
-    constant LAT_FEXP2      : integer := 17;
+    constant LAT_FEXP2      : integer := 9;
     constant LAT_FCMP_LT    : integer := 3;
-    constant LAT_FCMP_EQ    : integer := 3;
-    constant LAT_I2F        : integer := 6; 
-    constant LAT_F2I        : integer := 6; 
+    constant LAT_FCMP_EQ    : integer := 1;
+    constant LAT_I2F        : integer := 11; 
+    constant LAT_F2I        : integer := 5; 
     constant LAT_REDUCT     : integer := 37;    -- 4d scalar product
 
     constant FPU_MAX_LATENCY : integer := 37;
