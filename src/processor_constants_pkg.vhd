@@ -496,30 +496,28 @@ package processor_constants_pkg is
     --
     -- LAT_* values are in clock cycles from the cycle input data is presented
     -- to the cycle the result appears at the IP core output.
-    constant LAT_FMADD      : integer := 22; -- Fused multiply-add (ALTFP_MULT + ALTFP_ADD pipeline)
-    constant LAT_FDIV       : integer := 14; -- Division (ALTFP_DIV)
-    constant LAT_FSQRT      : integer := 9;  -- Square root (ALTFP_SQRT)
-    constant LAT_FRSQRT     : integer := 28; -- Reciprocal square root — equals FPU_MAX_LATENCY (bottleneck op)
-    constant LAT_FMIN       : integer := 3;  -- Component-wise minimum (comparator + mux)
-    constant LAT_FMAX       : integer := 3;  -- Component-wise maximum (comparator + mux)
-    constant LAT_FSIN       : integer := 21; -- Sine (ALTFP_SINCOS)
-    constant LAT_FCOS       : integer := 21; -- Cosine (ALTFP_SINCOS)
-    constant LAT_FLOG2      : integer := 21; -- Base-2 log (ALTFP_LOG)
-    constant LAT_FEXP2      : integer := 17; -- Base-2 exponent (ALTFP_EXP)
-    constant LAT_FCMP_LT    : integer := 3;  -- Less-than compare (ALTFP_COMPARE)
-    constant LAT_FCMP_EQ    : integer := 3;  -- Equality compare (ALTFP_COMPARE)
-    constant LAT_I2F        : integer := 6;  -- Integer to float conversion (ALTFP_CONVERT)
-    constant LAT_F2I        : integer := 6;  -- Float to integer conversion (ALTFP_CONVERT)
-    constant LAT_REDUCT     : integer := 16; -- 4D dot product reduction (optimized accumulator IP)
+    constant LAT_FMADD      : integer := 20; -- Fused multiply-add
+    constant LAT_FRCP       : integer := 9;  -- Reciprocal (should be unused)
+    constant LAT_FDIV       : integer := 9;  -- Division
+    constant LAT_FSQRT      : integer := 9;  -- Square root
+    constant LAT_FMIN       : integer := 2;  -- Component-wise minimum
+    constant LAT_FMAX       : integer := 2;  -- Component-wise maximum
+    constant LAT_FSIN       : integer := 18; -- Sine
+    constant LAT_FCOS       : integer := 18; -- Cosine
+    constant LAT_FLOG2      : integer := 21; -- Base-2 log
+    constant LAT_FEXP2      : integer := 9;  -- Base-2 exponent
+    constant LAT_FCMP_LT    : integer := 3;  -- Less-than compare
+    constant LAT_FCMP_EQ    : integer := 1;  -- Equality compare
+    constant LAT_I2F        : integer := 11; -- Integer to float conversion
+    constant LAT_F2I        : integer := 5;  -- Float to integer conversion
+    constant LAT_REDUCT     : integer := 16; -- 4D scalar product
 
-    -- FPU_MAX_LATENCY: The normalizing pipeline depth.
-    -- WHY 28 (= LAT_FRSQRT): reciprocal square root is the slowest operation.
-    -- Every other unit has a shift-register delay appended to pad its output to
-    -- this same latency.  This ensures that for any single instruction, all 32
-    -- thread results arrive at the VRF write port in a contiguous 32-cycle
-    -- burst starting exactly FPU_MAX_LATENCY cycles after issue of thread 0.
-    -- The FSM waits in EXEC_WAIT until exec_flush_active='0', which the
-    -- execution unit asserts only after the last padded result has committed.
-    constant FPU_MAX_LATENCY : integer := LAT_FRSQRT; -- Tied to bottleneck op; update LAT_FRSQRT if IP changes
+    -- FPU_MAX_LATENCY: The normalizing pipeline depth (length of slowest
+    -- operation). Every other unit has a shift-register delay appended to pad
+    -- its output to this same latency.  This ensures that for any single
+    -- instruction, all 32 thread results arrive at the VRF write port in
+    -- a contiguous 32-cycle burst starting exactly FPU_MAX_LATENCY cycles
+    -- after issue of thread 0.
+    constant FPU_MAX_LATENCY : integer := LAT_FLOG2; -- Tied to bottleneck op; update if IP changes
 
 end package;

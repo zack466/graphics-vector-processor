@@ -60,7 +60,7 @@
 -- -----------------
 -- clk         : System clock.  All registers are rising-edge triggered.
 -- reset       : Synchronous active-high reset.  Flushes the valid shift
---               register; data pipelines settle to zero from initialisation.
+--               register.
 -- valid_in    : Asserted for one cycle when a new reduction is presented on
 --               vec_a/vec_b.  Enters the valid shift register at index 0.
 -- vec_a       : First 4-component input vector (array of four 32-bit floats).
@@ -151,29 +151,6 @@ architecture rtl of vector_reduction_unit is
     -- It becomes valid LAT_REDUCT cycles after cond_a/cond_b are presented.
     signal raw_result : word_t;
 
-    -- fp_scalar_product: Altera/Intel FPGA floating-point IP.
-    -- Computes q = a0*b0 + a1*b1 + a2*b2 + a3*b3 with configurable latency.
-    -- WHY this IP? It implements the full 4-wide sum-of-products in a single
-    -- deeply-pipelined unit, far more efficiently than chaining individual FMA
-    -- operations which would require 4x the adder logic and careful scheduling.
-    component fp_scalar_product is
-        generic( latency : integer := 37 );
-        port (
-            clk    : in  std_logic;
-            areset : in  std_logic;
-            en     : in  std_logic;
-            a0     : in  std_logic_vector(31 downto 0);
-            b0     : in  std_logic_vector(31 downto 0);
-            a1     : in  std_logic_vector(31 downto 0);
-            b1     : in  std_logic_vector(31 downto 0);
-            a2     : in  std_logic_vector(31 downto 0);
-            b2     : in  std_logic_vector(31 downto 0);
-            a3     : in  std_logic_vector(31 downto 0);
-            b3     : in  std_logic_vector(31 downto 0);
-            q      : out std_logic_vector(31 downto 0)
-        );
-    end component;
-
 begin
 
     -- ========================================================================
@@ -249,12 +226,11 @@ begin
     -- en is tied to '1': the IP core runs every cycle.  The barrel scheduler
     -- feeds new data every cycle (one thread per cycle), so there is no reason
     -- to gate the IP core — doing so would add control complexity for no gain.
-    u_scalar_product : fp_scalar_product
+    u_scalar_product : entity work.fp_scalar_product
         generic map (latency => LAT_REDUCT)
         port map (
             clk    => clk,
             areset => reset,
-            en     => '1',
             a0     => cond_a(0), b0 => cond_b(0),
             a1     => cond_a(1), b1 => cond_b(1),
             a2     => cond_a(2), b2 => cond_b(2),
@@ -320,7 +296,7 @@ begin
     -- ========================================================================
     -- 4. COMBINATIONAL OUTPUT ROUTING
     -- ========================================================================
-    -- BUG FIX: If LAT_REDUCT == FPU_MAX_LATENCY, the pipeline shift logic would 
+    -- If LAT_REDUCT == FPU_MAX_LATENCY, the pipeline shift logic would 
     -- require an extra cycle (because i-1 = FPU_MAX_LATENCY is out of bounds).
     -- The combinational bypass extracts raw_result directly in this case.
     process(res_pipe, raw_result)

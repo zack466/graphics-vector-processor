@@ -11,9 +11,7 @@ begin
     pipeline_input: process(clock)
     begin
         if rising_edge(clock) then
-            if en = '1' then
-                pipe(0) <= data_in;
-            end if;
+            pipe(0) <= data_in;
         end if;
     end process;
     
@@ -21,9 +19,7 @@ begin
         process(clock)
         begin
             if rising_edge(clock) then
-                if en = '1' then
-                    pipe(i) <= pipe(i - 1);
-                end if;
+                pipe(i) <= pipe(i - 1);
             end if;
         end process;
     end generate pipeline_iter;
@@ -40,12 +36,10 @@ begin
     process(clock)
     begin
         if rising_edge(clock) then
-            if en = '1' then
-                pipe(0) <= data_in;
-                for i in 1 to latency - 1 loop
-                    pipe(i) <= pipe(i - 1);
-                end loop;
-            end if;
+            pipe(0) <= data_in;
+            for i in 1 to latency - 1 loop
+                pipe(i) <= pipe(i - 1);
+            end loop;
         end if;
     end process;
 
@@ -61,41 +55,14 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_addsub is
-    signal sum : real;
-    signal difference : real;
-    signal result_sum : real;
-    signal result_difference : real;
-begin
-    sum <= to_real(to_float(a)) + to_real(to_float(b));
-    difference <= to_real(to_float(a)) - to_real(to_float(b));
-
-    pipeline_add: entity work.Pipeline
-    generic map(latency => latency)
-    port map(clock => clk, en => en, data_in => sum, data_out => result_sum);
-
-    pipeline_sub: entity work.Pipeline
-    generic map(latency => latency)
-    port map(clock => clk, en => en, data_in => difference, data_out => result_difference);
-
-    q <= to_slv(to_float(result_sum));
-    s <= to_slv(to_float(result_difference));
-end architecture;
-
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use ieee.math_real.all;
-use ieee.float_pkg.all;
-
-architecture sim of fp_mult_add is
+architecture sim of fp_multiply_add is
     signal math_res, pipelined_res : real;
 begin
     math_res <= (to_real(to_float(a)) * to_real(to_float(b))) + to_real(to_float(c));
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -113,7 +80,7 @@ begin
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -131,7 +98,7 @@ begin
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -149,7 +116,7 @@ begin
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -169,7 +136,7 @@ begin
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -189,7 +156,7 @@ begin
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -207,7 +174,7 @@ begin
     
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
         
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -225,7 +192,7 @@ begin
     
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
         
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -243,7 +210,7 @@ begin
     
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
         
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -261,7 +228,7 @@ begin
     
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
         
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -272,14 +239,14 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_less_than is
+architecture sim of fp_lt is
     signal logic_res : std_logic;
 begin
     logic_res <= '1' when to_real(to_float(a)) < to_real(to_float(b)) else '0';
 
     pipe_inst: entity work.Pipeline_sl
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => logic_res, data_out => q);
+        port map(clock => clk, data_in => logic_res, data_out => q(0));
 end architecture;
 
 library ieee;
@@ -288,14 +255,14 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_equal is
+architecture sim of fp_eq is
     signal logic_res : std_logic;
 begin
     logic_res <= '1' when to_real(to_float(a)) = to_real(to_float(b)) else '0';
 
     pipe_inst: entity work.Pipeline_sl
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => logic_res, data_out => q);
+        port map(clock => clk, data_in => logic_res, data_out => q(0));
 end architecture;
 
 library ieee;
@@ -311,7 +278,7 @@ begin
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -329,7 +296,7 @@ begin
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     -- WHY DOES VHDL NOT TRUNCATE FLOATS BY DEFAULT BRUHHH
     q <= std_logic_vector(to_signed(integer(trunc(pipelined_res)), 32));
@@ -348,7 +315,7 @@ begin
 
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
-        port map(clock => clk, en => en, data_in => math_res, data_out => pipelined_res);
+        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
     q <= to_slv(to_float(pipelined_res));
 end architecture;
@@ -371,7 +338,6 @@ begin
         generic map(latency => latency)
         port map(
             clock    => clk, 
-            en       => en, 
             data_in  => math_res, 
             data_out => pipelined_res
         );
