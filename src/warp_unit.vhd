@@ -399,7 +399,7 @@ begin
     -- FSM — Process B: Combinational Next-State & Output Routing
     -- ========================================================================
     process(state, running, ifu_inst_out, iss_issue_valid, exec_flush_active,
-            exec_mem_store_valid, pixel_buf_dirty)
+            exec_mem_store_valid, pixel_buf_dirty, do_reset_pc)
         variable v_inst_type : std_logic_vector(3 downto 0);
     begin
         -- Defaults

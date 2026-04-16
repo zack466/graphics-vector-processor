@@ -226,7 +226,7 @@ begin
     -- en is tied to '1': the IP core runs every cycle.  The barrel scheduler
     -- feeds new data every cycle (one thread per cycle), so there is no reason
     -- to gate the IP core — doing so would add control complexity for no gain.
-    u_scalar_product : entity work.fp_scalar_product
+    u_scalar_product : entity work.fp_scalar_product_0
         generic map (latency => LAT_REDUCT)
         port map (
             clk    => clk,

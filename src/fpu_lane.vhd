@@ -232,22 +232,22 @@ begin
     -- save power when its opcode is not in flight would require tracking
     -- occupancy across the full pipeline depth — more hardware than the power
     -- savings are worth for a small warp processor.
-    u_fp_madd : entity work.fp_multiply_add generic map(latency=>LAT_FMADD)    port map(clk=>clk, areset=>reset, a=>madd_a_in, b=>madd_b_in, c=>madd_c_in, q=>raw_madd);
-    u_fp_div  : entity work.fp_div          generic map(latency=>LAT_FDIV)     port map(clk=>clk, areset=>reset, a=>op_a, b=>op_b, q=>raw_div);
-    u_fp_sqrt : entity work.fp_sqrt         generic map(latency=>LAT_FSQRT)    port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_sqrt);
-    u_fp_log2 : entity work.fp_log2         generic map(latency=>LAT_FLOG2)    port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_log2);
-    u_fp_exp2 : entity work.fp_exp2         generic map(latency=>LAT_FEXP2)    port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_exp2);
-    u_fp_sin  : entity work.fp_sin          generic map(latency=>LAT_FSIN)     port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_sin);
-    u_fp_cos  : entity work.fp_cos          generic map(latency=>LAT_FCOS)     port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_cos);
-    u_fp_min  : entity work.fp_min          generic map(latency=>LAT_FMIN)     port map(clk=>clk, areset=>reset, a=>op_a, b=>op_b, q=>raw_min);
-    u_fp_max  : entity work.fp_max          generic map(latency=>LAT_FMAX)     port map(clk=>clk, areset=>reset, a=>op_a, b=>op_b, q=>raw_max);
-    u_fp_i2f  : entity work.fp_fix2float    generic map(latency=>LAT_I2F)      port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_i2f);
-    u_fp_f2i  : entity work.fp_float2fix    generic map(latency=>LAT_F2I)      port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_f2i);
+    u_fp_madd : entity work.fp_multiply_add_0 generic map(latency=>LAT_FMADD)    port map(clk=>clk, areset=>reset, a=>madd_a_in, b=>madd_b_in, c=>madd_c_in, q=>raw_madd);
+    u_fp_div  : entity work.fp_div_0          generic map(latency=>LAT_FDIV)     port map(clk=>clk, areset=>reset, a=>op_a, b=>op_b, q=>raw_div);
+    u_fp_sqrt : entity work.fp_sqrt_0         generic map(latency=>LAT_FSQRT)    port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_sqrt);
+    u_fp_log2 : entity work.fp_log2_0         generic map(latency=>LAT_FLOG2)    port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_log2);
+    u_fp_exp2 : entity work.fp_exp2_0         generic map(latency=>LAT_FEXP2)    port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_exp2);
+    u_fp_sin  : entity work.fp_sin_0          generic map(latency=>LAT_FSIN)     port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_sin);
+    u_fp_cos  : entity work.fp_cos_0          generic map(latency=>LAT_FCOS)     port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_cos);
+    u_fp_min  : entity work.fp_min_0          generic map(latency=>LAT_FMIN)     port map(clk=>clk, areset=>reset, a=>op_a, b=>op_b, q=>raw_min);
+    u_fp_max  : entity work.fp_max_0          generic map(latency=>LAT_FMAX)     port map(clk=>clk, areset=>reset, a=>op_a, b=>op_b, q=>raw_max);
+    u_fp_i2f  : entity work.fp_fix2float_0    generic map(latency=>LAT_I2F)      port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_i2f);
+    u_fp_f2i  : entity work.fp_float2fix_0    generic map(latency=>LAT_F2I)      port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_f2i);
 
     -- CMP cores receive the (possibly swapped) operands so that GT/GE work
     -- correctly without needing separate IP instances.
-    u_fp_lt   : entity work.fp_lt           generic map(latency=>LAT_FCMP_LT)  port map(clk=>clk, areset=>reset, a=>cmp_a_in, b=>cmp_b_in, q(0)=>raw_lt);
-    u_fp_eq   : entity work.fp_eq           generic map(latency=>LAT_FCMP_EQ)  port map(clk=>clk, areset=>reset, a=>cmp_a_in, b=>cmp_b_in, q(0)=>raw_eq);
+    u_fp_lt   : entity work.fp_lt_0           generic map(latency=>LAT_FCMP_LT)  port map(clk=>clk, areset=>reset, a=>cmp_a_in, b=>cmp_b_in, q(0)=>raw_lt);
+    u_fp_eq   : entity work.fp_eq_0           generic map(latency=>LAT_FCMP_EQ)  port map(clk=>clk, areset=>reset, a=>cmp_a_in, b=>cmp_b_in, q(0)=>raw_eq);
 
     -- ========================================================================
     -- SEQUENTIAL PIPELINE SHIFT & MULTIPLEXED INJECTION
