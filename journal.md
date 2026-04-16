@@ -10,7 +10,9 @@
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard). Or just one warp that utilizes latency hiding should be ok.
 * TEST ON HARDWARE!!!
 * delete program.hex and other aux files so automated test doesn't get confused if run by itself
-* modify fp_sim_arch so is easier to swap between simulation entites and Altera IP
+* ALM usage:
+  * ensure predicate register file uses M10K, not ALMs, takes around 4000 ALMs but should definitely be way less.
+  * sin/cos take up by far the most ALMs per entity (~600-700 each)
 
 # Agent changes
 
