@@ -143,7 +143,7 @@ begin
     -- Making this a pure process (no clock) means synthesis can optimise the
     -- logic freely and report timing on the combinational path rather than
     -- hiding it behind a pipeline register that would cost area for no benefit.
-    process(opcode, op_a, op_b, imm_data, thread_id, warp_offset, frame_width, frame_height, time_ms)
+    process(opcode, op_a, op_b, imm_data, thread_id, warp_offset, frame_width, frame_height, time_ms, is_load)
         variable a_uns : unsigned(31 downto 0);
         variable b_uns : unsigned(31 downto 0);
         variable a_sgn : signed(31 downto 0);

@@ -7,34 +7,6 @@ package fp_sim_types is
 end package fp_sim_types;
 
 ---------------------------------------------------------
--- Pipeline Entities
----------------------------------------------------------
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.math_real.all;
-
-entity Pipeline is
-    generic ( latency : integer := 1 );
-    port(
-        clock    : in std_logic;
-        data_in  : in real;
-        data_out : out real
-    );
-end Pipeline;
-
-library ieee;
-use ieee.std_logic_1164.all;
-
-entity Pipeline_sl is
-    generic ( latency : integer := 1 );
-    port(
-        clock    : in std_logic;
-        data_in  : in std_logic;
-        data_out : out std_logic
-    );
-end Pipeline_sl;
-
----------------------------------------------------------
 -- Floating Point Arithmetic Entities
 ---------------------------------------------------------
 
@@ -42,7 +14,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use work.fp_sim_types.all;
 
-entity fp_multiply_add is
+entity fp_multiply_add_0 is
     generic( latency : integer := 22 );
     port (
         clk    : in  std_logic := '0';
@@ -50,12 +22,12 @@ entity fp_multiply_add is
         a, b, c: in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_multiply_add;
+end entity fp_multiply_add_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_div is
+entity fp_div_0 is
     generic( latency : integer := 14 );
     port (
         clk    : in  std_logic := '0';
@@ -63,12 +35,12 @@ entity fp_div is
         a, b   : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_div;
+end entity fp_div_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_sqrt is
+entity fp_sqrt_0 is
     generic( latency : integer := 9 );
     port (
         clk    : in  std_logic := '0';
@@ -76,25 +48,12 @@ entity fp_sqrt is
         a      : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_sqrt;
+end entity fp_sqrt_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_rsqrt is
-    generic( latency : integer := 28 );
-    port (
-        clk    : in  std_logic := '0';
-        areset : in  std_logic := '0';
-        a      : in  std_logic_vector(31 downto 0);
-        q      : out std_logic_vector(31 downto 0)
-    );
-end entity fp_rsqrt;
-
-library ieee;
-use ieee.std_logic_1164.all;
-
-entity fp_min is
+entity fp_min_0 is
     generic( latency : integer := 3 );
     port (
         clk    : in  std_logic := '0';
@@ -102,12 +61,12 @@ entity fp_min is
         a, b   : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_min;
+end entity fp_min_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_max is
+entity fp_max_0 is
     generic( latency : integer := 3 );
     port (
         clk    : in  std_logic := '0';
@@ -115,12 +74,12 @@ entity fp_max is
         a, b   : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_max;
+end entity fp_max_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_sin is
+entity fp_sin_0 is
     generic( latency : integer := 21 );
     port (
         clk    : in  std_logic := '0';
@@ -128,12 +87,12 @@ entity fp_sin is
         a      : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_sin;
+end entity fp_sin_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_cos is
+entity fp_cos_0 is
     generic( latency : integer := 21 );
     port (
         clk    : in  std_logic := '0';
@@ -141,12 +100,12 @@ entity fp_cos is
         a      : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_cos;
+end entity fp_cos_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_log2 is
+entity fp_log2_0 is
     generic( latency : integer := 21 );
     port (
         clk    : in  std_logic := '0';
@@ -154,12 +113,12 @@ entity fp_log2 is
         a      : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_log2;
+end entity fp_log2_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_exp2 is
+entity fp_exp2_0 is
     generic( latency : integer := 17 );
     port (
         clk    : in  std_logic := '0';
@@ -167,12 +126,12 @@ entity fp_exp2 is
         a      : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_exp2;
+end entity fp_exp2_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_lt is
+entity fp_lt_0 is
     generic( latency : integer := 3 );
     port (
         clk    : in  std_logic := '0';
@@ -180,12 +139,12 @@ entity fp_lt is
         a, b   : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(0 downto 0) 
     );
-end entity fp_lt;
+end entity fp_lt_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_eq is
+entity fp_eq_0 is
     generic( latency : integer := 3 );
     port (
         clk    : in  std_logic := '0';
@@ -193,12 +152,12 @@ entity fp_eq is
         a, b   : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(0 downto 0) 
     );
-end entity fp_eq;
+end entity fp_eq_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_fix2float is
+entity fp_fix2float_0 is
     generic( latency : integer := 6 );
     port (
         clk    : in  std_logic := '0';
@@ -206,12 +165,12 @@ entity fp_fix2float is
         a      : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_fix2float;
+end entity fp_fix2float_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_float2fix is
+entity fp_float2fix_0 is
     generic( latency : integer := 6 );
     port (
         clk    : in  std_logic := '0';
@@ -219,12 +178,12 @@ entity fp_float2fix is
         a      : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_float2fix;
+end entity fp_float2fix_0;
 
 library ieee;
 use ieee.std_logic_1164.all;
 
-entity fp_rcp is
+entity fp_rcp_0 is
     generic( latency : integer := 14 );
     port (
         clk    : in  std_logic := '0';
@@ -232,13 +191,13 @@ entity fp_rcp is
         a      : in  std_logic_vector(31 downto 0);
         q      : out std_logic_vector(31 downto 0)
     );
-end entity fp_rcp;
+end entity fp_rcp_0;
 
 library IEEE;
 use IEEE.std_logic_1164.all;
 use IEEE.numeric_std.all;
 
-entity fp_scalar_product is
+entity fp_scalar_product_0 is
     generic( latency : integer := 37 );
     port (
         clk    : in  std_logic                     := '0';             --    clk.clk
@@ -253,4 +212,4 @@ entity fp_scalar_product is
         b3     : in  std_logic_vector(31 downto 0) := (others => '0'); --     b3.b3
         q      : out std_logic_vector(31 downto 0)                     --      q.q
     );
-end entity fp_scalar_product; 
+end entity fp_scalar_product_0; 
