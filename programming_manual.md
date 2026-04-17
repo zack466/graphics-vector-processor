@@ -46,7 +46,7 @@ Each thread has **16 vector registers** `v0`–`v15`. Each register holds four 3
 ```
 v0  →  [ W | Z | Y | X ]
          ↑   ↑   ↑   ↑
-         A   B   G   R  (when used as pixel color)
+         A   R   G   B  (when used as pixel color)
 ```
 
 All registers are initialized to `0x00000000` on reset. Unwritten components remain 0.

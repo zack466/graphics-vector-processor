@@ -9,6 +9,7 @@
   * sin/cos take up by far the most ALMs per entity (~600-700 each)
 * fix some of the shaders (is the resolution hardcoded???) or warp offset is wrong?
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard). Or just one warp that utilizes latency hiding should be ok.
+* MOV doesn't work???
 
 # Agent changes
 
