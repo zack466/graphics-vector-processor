@@ -232,8 +232,8 @@ begin
         port map (
             clk          => clk, reset => reset,
             frame_start  => frame_start,
-            frame_width  => frame_width,
-            frame_height => frame_height,
+            frame_width  => frame_width_reg,
+            frame_height => frame_height_reg,
             frame_done   => sched_frame_done,
             warp_start   => sched_warp_start,
             warp_offset  => sched_warp_offset,
