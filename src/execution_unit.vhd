@@ -157,8 +157,10 @@ architecture rtl of execution_unit is
     signal s1_inst_type   : std_logic_vector(3 downto 0);
     signal s1_red_mode    : std_logic_vector(1 downto 0);
     signal s1_red_mask    : std_logic_vector(3 downto 0);
-    signal s1_prf_rs1     : std_logic_vector(3 downto 0) := "0000";
-    signal s1_prf_rs2     : std_logic_vector(3 downto 0) := "0000";
+    -- NOTE: s1_prf_rs1 / s1_prf_rs2 removed. predicate_reg_file now has
+    -- 1-cycle registered reads (M10K), so prf_rs1_data / prf_rs2_data arrive
+    -- at S1 already aligned with vrf_rs*_data and are fed directly to the
+    -- swizzle network without an extra pipeline register.
     signal s1_thread_id   : std_logic_vector(4 downto 0) := (others => '0');
     signal s1_warp_offset : std_logic_vector(31 downto 0) := (others => '0');
     signal s1_frame_width : std_logic_vector(15 downto 0) := (others => '0');
@@ -230,9 +232,6 @@ begin
                 s1_inst_type    <= inst_type_in;
                 s1_red_mode     <= red_mode_in;
                 s1_red_mask     <= red_mask_in;
-                s1_prf_rs1      <= prf_rs1_data;
-                s1_prf_rs2      <= prf_rs2_data;
-                
                 -- Uniform routing
                 s1_thread_id    <= thread_id_in;
                 s1_warp_offset  <= warp_offset_in;
@@ -283,11 +282,13 @@ begin
             wb_vrf_we => wb_vrf_we_out, wb_prf_we => wb_prf_we_out
         );
 
+    -- prf_rs1_data / prf_rs2_data are now registered outputs from PRF (M10K),
+    -- arriving at S1 in sync with vrf_rs*_data. Feed directly without s1_prf_rs* staging.
     u_swizzle: entity work.swizzle_network
         port map (
             is_logic_op => s1_ctrl.is_logic_op, vec_a_in => vrf_rs1_data,
-            prf_a_in => s1_prf_rs1, swiz_sel_a => s1_ctrl.swiz_sel_a, vec_a_out => swiz_a_out,
-            vec_b_in => vrf_rs2_data, prf_b_in => s1_prf_rs2, swiz_sel_b => s1_ctrl.swiz_sel_b, vec_b_out => swiz_b_out
+            prf_a_in => prf_rs1_data, swiz_sel_a => s1_ctrl.swiz_sel_a, vec_a_out => swiz_a_out,
+            vec_b_in => vrf_rs2_data, prf_b_in => prf_rs2_data, swiz_sel_b => s1_ctrl.swiz_sel_b, vec_b_out => swiz_b_out
         );
 
     u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(0), op_b=>s2_swiz_b(0), op_c=>s2_rs3(0), result=>fpu_res_x, valid_out=>open, comp_flag=>comp_flag_x, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
