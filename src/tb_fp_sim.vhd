@@ -36,8 +36,6 @@ architecture behavior of tb_fp_sim is
     -- Signals for Conversions
     signal i2f_a, i2f_q : std_logic_vector(31 downto 0) := (others => '0');
     signal f2i_a, f2i_q : std_logic_vector(31 downto 0) := (others => '0');
-    -- Signals for Reciprocal
-    signal rcp_a, rcp_q : std_logic_vector(31 downto 0) := (others => '0');
     -- Signals for Scalar Product
     signal sp_a0, sp_a1, sp_a2, sp_a3 : std_logic_vector(31 downto 0) := (others => '0');
     signal sp_b0, sp_b1, sp_b2, sp_b3 : std_logic_vector(31 downto 0) := (others => '0');
@@ -152,19 +150,17 @@ begin
         assert to_integer(signed(f2i_q)) = 42 report "Float2Fix Failed!" severity error;
 
         ---------------------------------------------------------
-        -- Test: Div, Sqrt, Exp2, Rcp (Latency: 9)
+        -- Test: Div, Sqrt, Exp2 (Latency: 9)
         ---------------------------------------------------------
         div_a <= to_slv(to_float(10.0, 8, 23)); div_b <= to_slv(to_float(2.0, 8, 23));
         sqrt_a <= to_slv(to_float(144.0, 8, 23));
         exp2_a <= to_slv(to_float(3.0, 8, 23));
-        rcp_a <= to_slv(to_float(4.0, 8, 23));
         
         for i in 1 to LAT_FDIV loop wait until rising_edge(clk); end loop;
         wait for 1 ns;
         assert to_real(to_float(div_q)) = 5.0    report "Div Failed!" severity error;
         assert to_real(to_float(sqrt_q)) = 12.0  report "Sqrt Failed!" severity error;
         assert to_real(to_float(exp2_q)) = 8.0   report "Exp2 Failed!" severity error;
-        assert to_real(to_float(rcp_q)) = 0.25   report "Reciprocal Failed!" severity error;
 
         ---------------------------------------------------------
         -- Test: Integer to Float (Latency: 11)

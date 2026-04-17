@@ -21,8 +21,8 @@ set REG_TIME_MS    0x010
 set IMEM_BASE      0x400        ;# IMEM programming window starts here
 
 # Frame dimensions
-set FRAME_W        1024
-set FRAME_H        768
+set FRAME_W        640
+set FRAME_H        480
 
 # Program to load (hex strings; one 32-bit word per line)
 set program {
