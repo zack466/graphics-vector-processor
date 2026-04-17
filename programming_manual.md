@@ -130,6 +130,15 @@ Load the global thread ID into all selected components of `dest`.
 THREAD_ID v0.xyzw    # v0 = global thread ID in all 4 components
 ```
 
+#### `TIME  dest[.mask]`
+Load the current time in milliseconds into the destination register.
+
+#### `HEIGHT  dest[.mask]`
+Load the current frame height in pixels into the destination register.
+
+#### `WIDTH  dest[.mask]`
+Load the current frame height in pixels into the destination register.
+
 #### `IADD  dest[.mask], src1, src2`
 Integer addition: `dest = src1 + src2`
 
@@ -215,7 +224,8 @@ Float sine: `dest = sin(src1)` (radians)
 Float cosine: `dest = cos(src1)` (radians)
 
 #### `MOV  dest[.mask], src1[.swizzle]`
-Register move: `dest = src1`. Copies the (optionally swizzled) value of `src1` into `dest`, gated by the write mask. Zero-latency passthrough through the FPU pipeline — no floating-point operation is performed.
+~~Register move: `dest = src1`. Copies the (optionally swizzled) value of `src1` into `dest`, gated by the write mask. Zero-latency passthrough through the FPU pipeline — no floating-point operation is performed.~~
+**Currently not working**, copy registers using the FADD or IADD instruction with an argument of 0 instead.
 
 #### `FMIN  dest[.mask], src1[.swizzle], src2`
 Float minimum: `dest = min(src1, src2)`
@@ -505,9 +515,9 @@ Each thread writes one 128-bit pixel to the framebuffer:
 
 | Memory bits | Component | Image channel |
 |---|---|---|
-| [31:0] | X | Red (R) |
+| [31:0] | X | Blue (B) |
 | [63:32] | Y | Green (G) |
-| [95:64] | Z | Blue (B) |
+| [95:64] | Z | Red (R) |
 | [127:96] | W | Alpha (A) |
 
 Colors are **raw 8-bit integers** in the range [0, 255], stored in the lower 8 bits of each 32-bit VRF component. `runner.py` reads these directly without any scaling. Use `F2I` to convert floating-point intermediate results to integers before `STORE`.
@@ -637,7 +647,13 @@ W Z Y X     ← each line is one pixel (128-bit bus: W=[127:96], Z=[95:64], Y=[6
 ### Example 1: Per-Thread ID Output
 
 ```asm
-# Each thread stores its own ID as an integer in all components.
+# test01_thread_id.s
+# Simplest possible test: store raw integer thread ID to memory.
+# Expected: pixel N = {W=255, Z=N, Y=N, X=N}
+# e.g. pixel 0: "FF000000"
+#      pixel 1: "FF010101"
+#      pixel 2: "FF020202"
+
 THREAD_ID v0.xyzw       # v0.xyzw = absolute thread index
 LDI_LO v0.w, 0x00FF     # Make alpha opaque
 FLUSH
@@ -647,39 +663,92 @@ RETURN v0               # write packed pixels from v0 to framebuffer and halt
 ### Example 2: Float Gradient (R = x/32, G = y/32)
 
 ```asm
-THREAD_ID v0.xyzw        # v0 = global_tid = warp_offset + lane (same in all 4 components)
-LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (column mask)
-LDI_LO v3.xyzw, 0x0005  # v3 = 5 (row shift amount)
-LDI_LO v10.xyzw, 0x0000
-LDI_HI v10.xyzw, 0x3D00 # v10 = 0x3D000000 = 0.03125f = 1/32
-LDI_LO v13.xyzw, 0x0000
-LDI_HI v13.xyzw, 0x437F # v13 = 0x437F0000 = 255.0f
+# test09_gradient.s
+# WIDTH: 32
+# HEIGHT: 32
+# Draw an RGB gradient image using dynamic WIDTH and HEIGHT uniforms.
+#   R (X) = floor((x / WIDTH) * 255)
+#   G (Y) = floor((y / HEIGHT) * 255)
+#   B (Z) = 0
+#   A (W) = 255 (fully opaque)
 
-IAND v4.xyzw, v0, v1    # v4 = x = tid & 0x1F  (column 0..31, same in all components)
-ISHR v6.xyzw, v0, v3    # v6 = y = tid >> 5     (row 0..31, same in all components)
-I2F v8.xyzw, v4         # v8 = float(x) in all 4 components
-I2F v9.xyzw, v6         # v9 = float(y) in all 4 components
-FMUL v11.xyzw, v8, v10  # v11 = x/32 in all 4 components
-FMUL v12.xyzw, v9, v10  # v12 = y/32 in all 4 components
+THREAD_ID v0.xyzw        # v0 = global_tid
+WIDTH v1.xyzw            # v1 = width
+HEIGHT v2.xyzw           # v2 = height
 
-# Initialize v14 = 255.0f in all components.
-# This sets the alpha channel (W). X and Y will be overwritten below; Z by FSUB.
-LDI_LO v14.xyzw, 0x0000
-LDI_HI v14.xyzw, 0x437F # v14 = {255.0f, 255.0f, 255.0f, 255.0f}
+# -------------------------------------------------------------------------
+# 1. Convert integers to floats to prepare for division
+# -------------------------------------------------------------------------
+I2F v3.xyzw, v0          # v3 = float(tid)
+I2F v4.xyzw, v1          # v4 = float(width)
+I2F v5.xyzw, v2          # v5 = float(height)
 
-FMUL v14.x, v11, v13    # v14.X = R = (x/32) * 255.0f
-FMUL v14.y, v12, v13    # v14.Y = G = (y/32) * 255.0f
-FSUB v14.z, v13, v13    # v14.Z = 255.0f - 255.0f = 0.0f  (Blue = 0)
-# v14.W stays 255.0f from LDI above (Alpha = 255)
+# -------------------------------------------------------------------------
+# 2. Compute float_y = floor(tid / width)
+# We must use F2I briefly just to truncate the fraction, then go right 
+# back to float space.
+# -------------------------------------------------------------------------
+FDIV v7.xyzw, v3, v4     # v7 = float(tid) / float_width
+LDI_LO v12.xyzw, low(0.4999)
+LDI_HI v12.xyzw, high(0.4999)
+FSUB v7.xyzw, v7, v12
+F2I  v7.xyzw, v7         # v7 = int_y (Truncate fraction)
+I2F  v7.xyzw, v7         # v7 = float_y (Back to float space)
 
-F2I v15.xyzw, v14       # convert floats to integers: {255, 0, G_int, R_int}
-FLUSH                    # drain pipeline before pixel snoop reads VRF
-RETURN v15               # write packed RGBA for all 32 threads and halt warp
+# -------------------------------------------------------------------------
+# 3. Compute float_x = tid - (y * width) entirely in floats
+# -------------------------------------------------------------------------
+FMUL v8.xyzw, v7, v4     # v8 = float_y * float_width
+FSUB v8.xyzw, v3, v8     # v8 = float_x = float_tid - (float_y * float_width)
+
+# -------------------------------------------------------------------------
+# 4. Normalize x and y to [0.0, 1.0] ranges
+# -------------------------------------------------------------------------
+FDIV v8.xyzw, v8, v4     # v8 = x_norm = float_x / float_width
+FDIV v9.xyzw, v7, v5     # v9 = y_norm = float_y / float_height
+
+# -------------------------------------------------------------------------
+# 5. Scale to [0, 255] and pack into final RGBA vector
+# -------------------------------------------------------------------------
+LDI_LO v10.xyzw, low(255.0)
+LDI_HI v10.xyzw, high(255.0)  # v10 = 255.0f
+
+# Initialize output vector with Alpha=255.0 (W component)
+LDI_LO v11.xyzw, low(255.0)
+LDI_HI v11.xyzw, high(255.0)  # v11 = {255.0f, 255.0f, 255.0f, 255.0f}
+
+FMUL v11.z, v8, v10      # v11.Z (Red)   = x_norm * 255.0f
+FMUL v11.y, v9, v10      # v11.Y (Green) = y_norm * 255.0f
+FSUB v11.x, v10, v10     # v11.X (Blue)  = 255.0f - 255.0f = 0.0f
+
+# -------------------------------------------------------------------------
+# 6. Writeback to Pixel Buffer
+# -------------------------------------------------------------------------
+F2I v11.xyzw, v11        # Convert RGBA floats to integers: {255, 0, G, R}
+FLUSH                    # Drain pipeline before pixel snoop reads VRF
+RETURN v11               # End shader, write pixel buffer
 ```
 
 ### Example 3: Checkerboard (White if x+y even, Black if odd)
 
 ```asm
+# test08_checkerboard.s
+# Draw a 32x32 checkerboard pattern using branchless ALU computation.
+#
+# Each warp covers 32 pixels in one row. The testbench runs 32 warps with
+# warp_offset = 0, 32, 64, ..., 992, so:
+#   x = global_tid & 0x1F  (column: 0..31)
+#   y = global_tid >> 5    (row:    0..31)
+#
+# Color rule: white (255) if (x + y) is even, black (0) if (x + y) is odd.
+#
+# Since RETURN reg cannot occur within a divergent path (and STORE has been
+# removed), the checkerboard is computed branchlessly:
+#
+#   parity    = (x + y) & 1      (0=even=white, 1=odd=black)
+#   not_parity = 1 - parity      (1=white, 0=black)
+#   pixel     = not_parity * 255 (255=white, 0=black)
+
 THREAD_ID v0.xyzw        # v0 = global_tid = warp_offset + lane
 LDI_LO v1.xyzw, 0x001F  # v1 = 0x1F (column mask)
 LDI_LO v3.xyzw, 0x0005  # v3 = 5 (row shift amount)
