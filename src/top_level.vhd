@@ -77,9 +77,9 @@ architecture rtl of top_level is
     constant BUF_2_TOP : std_logic_vector(15 downto 0) := x"3080";
 
     -- Full byte addresses for VIP START_ADDR writes
-    constant BUF_0_FULL : std_logic_vector(31 downto 0) := x"3000_0000";
-    constant BUF_1_FULL : std_logic_vector(31 downto 0) := x"3040_0000";
-    constant BUF_2_FULL : std_logic_vector(31 downto 0) := x"3080_0000";
+    constant BUF_0_FULL : std_logic_vector(31 downto 0) := x"0000_0000";
+    constant BUF_1_FULL : std_logic_vector(31 downto 0) := x"1000_0000";
+    constant BUF_2_FULL : std_logic_vector(31 downto 0) := x"2000_0000";
 
     -- VIP register byte addresses (symbols-addressed)
     constant REG_CONTROL     : std_logic_vector(31 downto 0) := x"0000_0000";
