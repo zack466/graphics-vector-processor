@@ -62,7 +62,7 @@ architecture behavioral of tb_fpu_lane is
         ("OP_FLOG2  ", OP_FLOG2, x"40000000", x"00000000", x"00000000", '0', '0', 1.0,     '0', true,  false),
         ("OP_FEXP2  ", OP_FEXP2, x"40000000", x"00000000", x"00000000", '0', '0', 4.0,     '0', true,  false),
         ("OP_SIN    ", OP_SIN,   x"3F800000", x"00000000", x"00000000", '0', '0', 0.84147, '0', true,  false),
-        ("OP_COS    ", OP_COS,   x"3F800000", x"00000000", x"00000000", '0', '0', 0.54030, '0', true,  false),
+        -- OP_COS removed: fp_cos_0 IP eliminated to save ALMs
         ("OP_FMIN   ", OP_FMIN,  x"40000000", x"40800000", x"00000000", '0', '0', 2.0,     '0', true,  false),
         ("OP_FMAX   ", OP_FMAX,  x"40000000", x"40800000", x"00000000", '0', '0', 4.0,     '0', true,  false),
         ("OP_I2F    ", OP_I2F,   x"00000005", x"00000000", x"00000000", '0', '0', 5.0,     '0', true,  false),

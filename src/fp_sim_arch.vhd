@@ -161,23 +161,7 @@ begin
     q <= to_slv(to_float(pipelined_res));
 end architecture;
 
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use ieee.math_real.all;
-use ieee.float_pkg.all;
-
-architecture sim of fp_cos_0 is
-    signal math_res, pipelined_res : real;
-begin
-    math_res <= cos(to_real(to_float(a)));
-    
-    pipe_inst: entity work.Pipeline
-        generic map(latency => latency)
-        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
-        
-    q <= to_slv(to_float(pipelined_res));
-end architecture;
+-- fp_cos_0 architecture removed (entity also removed from fp_sim_entities.vhd).
 
 library ieee;
 use ieee.std_logic_1164.all;

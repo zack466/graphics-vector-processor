@@ -4,12 +4,13 @@
 The core processor operates on vector registers, with each 32-bit sub-unit referenced as a tuple (x, y, z, w). The architecture is designed to maximize parallel throughput for graphics workloads while strictly managing FPGA logic resources. It utilizes a Single Instruction, Multiple Thread (SIMT) execution model, grouping 32 threads into a single "Warp" that shares a common Program Counter (PC).
 
 **1.0. Top-Level Hierarchy**
-The top-level entity is `frame_processor`, a structural entity (no datapath logic) that wires together:
-* **`warp_scheduler`** — frame-level FSM that iterates `warp_offset` from 0 to `frame_width × frame_height − 1` in steps of 32, dispatching one warp block at a time.
-* **`warp_unit`** — self-contained SIMT warp: IFU, decode, issue, FPU/ALU/RED execution, VRF, PRF, and pixel snoop buffer. Accepts `warp_start`/`warp_offset`; exposes `pixel_buf_valid`, `pixel_buf_data` (1024-bit flat buffer of 32 packed RGBA pixels), and `warp_halted`.
-* **`mcu_block_transfer`** — accepts the warp's 1024-bit pixel buffer and emits 8 sequential 128-bit Avalon burst beats to DDR3.
+The top-level entity is `frame_processor` (`NUM_WARPS=2` default), a structural entity (no datapath logic) that wires together:
+* **`warp_scheduler`** — frame-level FSM that dispatches `warp_offset` blocks to any idle warp in priority order. Tracks `disp_pending` to prevent double-dispatch, and only signals `frame_done` when all warps have halted and no blocks are in flight.
+* **`warp_unit` ×2** — self-contained SIMT warp: IFU, decode, issue, FPU/ALU/RED execution, VRF, PRF. Transitions directly to HALTED after filling its pixel buffer, enabling the scheduler to immediately assign a new block while the MCU drains the previous one in the background.
+* **`pixel_buffer_ram` ×2** — one dedicated M10K pixel buffer per warp. Avoids any write-port contention between concurrent warps.
+* **`mcu_block_transfer`** — round-robin arbiter across all warp pixel buffers; emits 8 sequential 128-bit Avalon burst beats per warp block to DDR3.
 * **`avm_burst_bridge`** — thin Avalon-MM master protocol layer between the MCU and the DDR3 controller.
-* **`instruction_memory`** — shared M10K BRAM; all warps execute the same shader program.
+* **`instruction_memory` ×2** — one M10K BRAM copy per warp, all receiving identical `prog_*` writes. Per-warp copies allow independent PCs; a single M10K cannot serve more than 2 independent read ports.
 
 The host drives `frame_start` (1-cycle pulse), `frame_width`, and `frame_height` and waits for `frame_done`. There is no per-warp CSR interface.
 
@@ -39,6 +40,7 @@ The execution stage utilizes a parallel, multi-path topology for standard floati
 Each lane contains a Unified Multiply-Add (MADD) datapath and transcendental units.
 * **Predicate Logic ALU & Swizzling:** Integrated directly into the FPU lanes to allow bitwise operations (`PAND`, `POR`, `PXOR`) on predicate masks. A pre-swizzle multiplexer injects PRF data into the datapath *before* the swizzle network, natively supporting cross-lane boolean operations (e.g., `POR p2, p0.xxxx, p1.yyyy`).
 * **Comparison Modifiers:** Native support for `Swap Operands` and `Invert Result` on comparison instructions. This allows the hardware to evaluate all six algebraic relations (=, ≠, <, ≤, >, ≥) using only `Equal` and `Less Than` hardware cores.
+* **Cosine Removed:** The `fp_cos_0` IP core (~600–700 ALMs per lane, ~2,800 ALMs total) has been eliminated. Shaders should compute `cos(x) = sin(x + π/2)` instead. The `OP_SIN` instruction and the `fp_sin_0` core (which sets `FPU_MAX_LATENCY = 18`) are retained.
 
 **3.2. Dedicated Integer ALU Lane**
 A lightweight, single-lane integer Arithmetic Logic Unit (ALU) operates concurrently with the floating-point cores.
@@ -102,25 +104,28 @@ By bounding the maximum pipeline latency to 28 cycles, the architecture intrinsi
 ## 7. Memory Subsystem
 The processor writes pixels to external DDR3 memory using a sequential block-transfer architecture. The old scatter/gather MCU (which scanned 32 thread addresses independently) has been replaced by a snoop-based design that is simpler and better suited to framebuffer output.
 
-**7.1. Pixel Snoop Buffer (inside warp_unit)**
-As the barrel scheduler issues a `STORE` instruction over 32 cycles (one thread per cycle), `execution_unit` snoops the VRF read data at Stage 1 and provides three outputs: `mem_store_valid`, `mem_store_data` (4 × 32-bit XYZW components), and `mem_store_thread_id`. The warp_unit uses these to fill a 32-entry × 32-bit `pixel_snoop` buffer. Each entry packs the lower 8 bits of all four components into a single 32-bit RGBA word:
+**7.1. Per-Warp Pixel Buffer (`pixel_buffer_ram` ×2)**
+As the barrel scheduler issues an `OP_RETURN` instruction over 32 cycles, `execution_unit` snoops the VRF read data and provides `mem_store_valid`, `mem_store_data`, and `mem_store_thread_id`. `warp_unit` drives these directly to `frame_processor` via `pixel_wr_*` ports, which writes them into a dedicated per-warp M10K `pixel_buffer_ram`. Each entry packs the lower 8 bits of all four components into a single 32-bit RGBA word:
 ```
 pixel_snoop[t] = W[7:0] & Z[7:0] & Y[7:0] & X[7:0]
 ```
-The full 1024-bit buffer is exposed as `pixel_buf_data` on the warp_unit port boundary.
+After the 32nd pixel is written, the warp pulses `pixel_buf_valid` for one cycle and transitions to `HALTED`, making it available for the next dispatch.
 
-**7.2. mcu_block_transfer**
-Accepts the warp's `pixel_buf_valid` pulse, `pixel_buf_addr`, `pixel_buf_data`, and `pixel_exec_mask`. Latches the buffer and emits exactly 8 sequential 128-bit Avalon write beats (beat k carries threads 4k+3..4k+0, MSB to LSB). `mem_stall` is held high until all 8 beats have been acknowledged, keeping the warp FSM in `MEM_WAIT`.
+**7.2. Latency Hiding via `pixel_buf_dirty`**
+`frame_processor` tracks a per-warp `pixel_buf_dirty` level signal, set on `pixel_buf_valid` and cleared on `mcu_pixel_done`. This is fed back to each `warp_unit` as its `pixel_buf_dirty` input. If a warp completes its next block while its buffer is still being drained, it stalls in `DECODE` until the MCU finishes.
 
-**7.3. avm_burst_bridge**
+**7.3. mcu_block_transfer (Round-Robin Arbiter)**
+Monitors `pixel_buf_valid` (a vector, one bit per warp) as a level signal. In IDLE, uses a round-robin arbiter to select the next warp with a pending buffer, latches its `base_addr`, and emits exactly 8 sequential 128-bit Avalon write beats (beat k carries threads 4k+3..4k+0, MSB to LSB). On completion, pulses `pixel_buf_done(i)` to clear the dirty flag for that warp.
+
+**7.4. avm_burst_bridge**
 Thin Avalon-MM master driver. Holds the base address constant for all 8 beats of the burst (the DDR3 controller auto-increments the address internally). Handles `waitrequest` by pausing without losing beat data.
 
-**7.4. Address Calculation**
+**7.5. Address Calculation**
 The physical DDR3 byte address for a warp block is:
 ```
-phys_addr = (STORE.base_addr << 16) + warp_offset * 4
+phys_addr = (fb_base_addr << 16) + warp_offset * 4
 ```
 `warp_offset` is the pixel index of thread 0 within the warp, supplied by `warp_scheduler`. Multiplying by 4 converts from pixel index to byte address (4 bytes per 32-bit RGBA pixel). Each warp's 32-pixel block therefore occupies 128 consecutive bytes in DDR3.
 
-**7.5. Sequential Memory Ordering**
-`LOAD` and `STORE` both block the warp FSM in `MEM_WAIT` until the full burst completes, enforcing strict sequential memory ordering. There is no out-of-order or overlapping memory access.
+**7.6. Asynchronous Pixel Transfer**
+The `MEM_WAIT` state has been removed. A warp halts immediately after filling its pixel buffer; the MCU drains it asynchronously. Two concurrent warps can overlap compute with memory transfer: warp A computes its next block while the MCU bursts warp B's completed block to DDR3.

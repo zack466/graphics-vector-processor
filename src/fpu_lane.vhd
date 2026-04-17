@@ -147,7 +147,7 @@ architecture rtl of fpu_lane is
     -- Raw outputs from each IP core. All IPs run every cycle; only the correct
     -- one's output is gated into the shared pipeline at the right stage.
     signal raw_madd, raw_div, raw_sqrt, raw_log2, raw_exp2 : word_t;
-    signal raw_sin, raw_cos, raw_min, raw_max, raw_i2f, raw_f2i : word_t;
+    signal raw_sin, raw_min, raw_max, raw_i2f, raw_f2i : word_t; -- fp_cos_0 removed to save ALMs
     signal raw_lt, raw_eq : std_logic;
 
     -- Combinational predicate logic results. These are zero-latency (pure gates
@@ -238,7 +238,7 @@ begin
     u_fp_log2 : entity work.fp_log2_0         generic map(latency=>LAT_FLOG2)    port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_log2);
     u_fp_exp2 : entity work.fp_exp2_0         generic map(latency=>LAT_FEXP2)    port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_exp2);
     u_fp_sin  : entity work.fp_sin_0          generic map(latency=>LAT_FSIN)     port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_sin);
-    u_fp_cos  : entity work.fp_cos_0          generic map(latency=>LAT_FCOS)     port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_cos);
+    -- fp_cos_0 removed to save ~600-700 ALMs per FPU lane; use SIN with phase offset in shader
     u_fp_min  : entity work.fp_min_0          generic map(latency=>LAT_FMIN)     port map(clk=>clk, areset=>reset, a=>op_a, b=>op_b, q=>raw_min);
     u_fp_max  : entity work.fp_max_0          generic map(latency=>LAT_FMAX)     port map(clk=>clk, areset=>reset, a=>op_a, b=>op_b, q=>raw_max);
     u_fp_i2f  : entity work.fp_fix2float_0    generic map(latency=>LAT_I2F)      port map(clk=>clk, areset=>reset, a=>op_a, q=>raw_i2f);
@@ -331,9 +331,6 @@ begin
                     if LAT_FSIN = i - 1 then
                         if opcode_pipe(LAT_FSIN) = OP_SIN then shared_res_pipe(i) <= raw_sin; end if;
                     end if;
-                    if LAT_FCOS = i - 1 then
-                        if opcode_pipe(LAT_FCOS) = OP_COS then shared_res_pipe(i) <= raw_cos; end if;
-                    end if;
                     if LAT_FMIN = i - 1 then
                         if opcode_pipe(LAT_FMIN) = OP_FMIN then shared_res_pipe(i) <= raw_min; end if;
                     end if;
@@ -410,7 +407,7 @@ begin
     -- In practice, FPU_MAX_LATENCY is set to the longest IP latency, so these
     -- combinational override paths will fire for at least one IP (the slowest).
     process(shared_res_pipe, shared_cmp_pipe, opcode_pipe, cmp_inv_pipe, opcode, op_a,
-            raw_madd, raw_div, raw_sqrt, raw_log2, raw_exp2, raw_sin, raw_cos,
+            raw_madd, raw_div, raw_sqrt, raw_log2, raw_exp2, raw_sin,
             raw_min, raw_max, raw_i2f, raw_f2i, raw_lt, raw_eq, raw_pand, raw_por, raw_pxor)
     begin
         -- Default: take results from the end of the shared pipeline.
@@ -432,7 +429,6 @@ begin
         if LAT_FLOG2 = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FLOG2 then result <= raw_log2; end if;
         if LAT_FEXP2 = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FEXP2 then result <= raw_exp2; end if;
         if LAT_FSIN  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_SIN   then result <= raw_sin;  end if;
-        if LAT_FCOS  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_COS   then result <= raw_cos;  end if;
         if LAT_FMIN  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FMIN  then result <= raw_min;  end if;
         if LAT_FMAX  = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_FMAX  then result <= raw_max;  end if;
         if LAT_I2F   = FPU_MAX_LATENCY and opcode_pipe(FPU_MAX_LATENCY) = OP_I2F   then result <= raw_i2f;  end if;

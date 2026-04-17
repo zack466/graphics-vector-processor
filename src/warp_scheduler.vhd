@@ -3,60 +3,65 @@
 -- ============================================================================
 -- PURPOSE:
 --   Frame-level FSM that iterates warp_offset from 0 to (total_pixels - 1)
---   in steps of WARP_SIZE, driving a single warp_unit through every pixel
---   block needed to render a complete frame.  A single `frame_start` pulse
---   triggers the full iteration; `frame_done` pulses when the last warp
---   completes.
+--   in steps of WARP_SIZE, dispatching pixel blocks to NUM_WARPS concurrent
+--   warp_unit instances.  A single `frame_start` pulse triggers the full
+--   iteration; `frame_done` pulses when all warps have halted.
 --
---   Designed for extensibility to multiple concurrent warps (latency hiding):
---   the warp_start / warp_halted ports are indexed arrays whose size is the
---   NUM_WARPS generic.  The single-warp instantiation uses NUM_WARPS=1.
+--   The scheduler maximises throughput by dispatching to any idle warp every
+--   clock cycle.  If both warps are idle and work remains, it dispatches to
+--   warp 0 on one cycle and warp 1 on the next (priority: lowest index first).
 --
 -- FSM STATES:
 --
 --   IDLE       Wait for frame_start.  On entry: latch total_pixels =
 --              frame_width * frame_height and reset next_offset = 0.
 --
---   DISPATCH      Assert warp_start(0)='1' for exactly one cycle with
---                warp_offset(0) = next_offset.  Advance next_offset by WARP_SIZE.
+--   RUNNING    Each cycle:
+--              1. Clear disp_pending(i) when warp_halted(i) deasserts, meaning
+--                 the warp has acknowledged the dispatch and is now running.
+--              2. If next_offset < total_pixels, scan for the first warp where
+--                 warp_halted(i)='1' AND disp_pending(i)='0'.  Dispatch to it:
+--                 assert warp_start(i) for one cycle, latch warp_offset(i),
+--                 advance next_offset by WARP_SIZE, set disp_pending(i)='1'.
+--              3. If next_offset >= total_pixels AND all warp_halted='1' AND
+--                 all disp_pending='0': transition to DONE.
 --
---   WAIT_RUNNING  Wait for warp_halted(0)='0' (warp has started executing).
---                This state is necessary because warp_halted is still '1'
---                immediately after DISPATCH — the warp takes one or two cycles
---                to transition out of HALTED after warp_start fires.  Without
---                this state, WAIT_HALT would see the old '1' and exit instantly.
+--   DONE       Assert frame_done='1' for one cycle; return to IDLE.
 --
---   WAIT_HALT     Wait for warp_halted(0)='1' (warp FSM returned to HALTED
---                after OP_RETURN).  The warp's MEM_WAIT already blocks until
---                the full burst completes, so no separate MCU-done check is
---                needed.
---                - next_offset < total_pixels  → DISPATCH (next warp block)
---                - next_offset >= total_pixels → DONE
+-- DISPATCH ARBITRATION:
+--   Priority scan: warp 0 is tried before warp 1 (before warp 2, ...).
+--   Because the scan only dispatches one warp per cycle, back-to-back dispatch
+--   to different warps happens on consecutive cycles without any gap.
 --
---   DONE          Assert frame_done='1' for one cycle; return to IDLE.
+-- PENDING TRACKING (disp_pending):
+--   After a warp_start pulse, warp_halted(i) may remain '1' for 1-2 cycles
+--   while the warp_unit's FSM exits HALTED.  Without disp_pending, the
+--   scheduler would see warp_halted(i)='1' and try to dispatch the same warp
+--   again.  disp_pending(i) is set on dispatch and cleared when warp_halted(i)
+--   first deasserts, preventing double-dispatch.
+--
+-- COMPLETION:
+--   DONE is entered only when next_offset >= total_pixels AND all warp slots
+--   are confirmed idle (halted=1, pending=0).  This guarantees every pixel
+--   block that was dispatched has fully completed before frame_done fires.
 --
 -- TIMING NOTES:
---   - frame_start must be a 1-cycle pulse; holding it will not re-trigger
---     the FSM while it is already running.
---   - warp_start is a 1-cycle pulse; the warp_unit latches warp_offset on
---     the same cycle.
---   - total_pixels is registered from frame_width * frame_height on the same
---     cycle frame_start is detected.  The multiply is a DSP-inferred unsigned
---     multiply (16×16 → 32 bits).
+--   - frame_start must be a 1-cycle pulse; the FSM ignores it while RUNNING.
+--   - warp_start(i) is a 1-cycle pulse; the warp_unit latches warp_offset(i)
+--     on the same rising edge.
+--   - total_pixels is registered from frame_width * frame_height on the cycle
+--     frame_start is detected.  The multiply is DSP-inferred (16×16 → 32 bits).
 --   - frame_done is a 1-cycle pulse, not a level signal.
---
--- EXTENSION TO MULTIPLE WARPS (Change 3):
---   Set NUM_WARPS > 1.  The DISPATCH state should send warp_start to any idle
---   warp slot and WAIT_HALT should track which slots are done.  All internal
---   next_offset logic carries over unchanged.
 -- ============================================================================
 
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
+use work.vector_types_pkg.all;
 
 entity warp_scheduler is
     generic (
+        NUM_WARPS  : integer := 2;  -- Number of concurrent warp units
         WARP_SIZE  : integer := 32;
         ADDR_WIDTH : integer := 32
     );
@@ -70,86 +75,117 @@ entity warp_scheduler is
         frame_height : in  std_logic_vector(15 downto 0);  -- rows per frame
         frame_done   : out std_logic;   -- 1-cycle pulse: all warps completed
 
-        -- Warp 0 control (NUM_WARPS=1 for now; extend to arrays for Change 3)
-        warp_start   : out std_logic;
-        warp_offset  : out std_logic_vector(ADDR_WIDTH-1 downto 0);
-        warp_halted  : in  std_logic;   -- '1' while warp FSM is in HALTED state
+        -- Per-warp control (arrays of size NUM_WARPS)
+        warp_start   : out std_logic_vector(NUM_WARPS-1 downto 0);       -- 1-cycle dispatch pulse per warp
+        warp_offset  : out slv32_array_t(0 to NUM_WARPS-1);              -- pixel base offset for each warp
+        warp_halted  : in  std_logic_vector(NUM_WARPS-1 downto 0);       -- '1' while warp FSM is HALTED
 
-        -- Framebuffer addressing (passed through to warp_unit unchanged; future
-        -- double-buffering logic will toggle this between two base addresses here)
-        fb_base_addr : in  std_logic_vector(15 downto 0);  -- input from frame_processor
-        fb_base_out  : out std_logic_vector(15 downto 0)   -- forwarded to warp_unit
+        -- Framebuffer base address forwarded to warp_unit unchanged
+        fb_base_addr : in  std_logic_vector(15 downto 0);
+        fb_base_out  : out std_logic_vector(15 downto 0)
     );
 end entity warp_scheduler;
 
 architecture rtl of warp_scheduler is
 
-    type state_t is (IDLE, DISPATCH, WAIT_RUNNING, WAIT_HALT, DONE);
+    type state_t is (IDLE, RUNNING, DONE);
     signal state : state_t := IDLE;
 
     -- Total pixel count for the current frame (registered on frame_start)
-    signal total_pixels : unsigned(31 downto 0) := (others => '0');
+    signal total_pixels  : unsigned(31 downto 0) := (others => '0');
 
     -- Next warp offset to dispatch (increments by WARP_SIZE after each dispatch)
-    signal next_offset  : unsigned(31 downto 0) := (others => '0');
+    signal next_offset   : unsigned(31 downto 0) := (others => '0');
+
+    -- disp_pending(i): set when warp i has been dispatched but has not yet
+    -- deasserted warp_halted (i.e., it hasn't transitioned out of HALTED yet).
+    -- Prevents the scheduler from dispatching the same warp twice in a row.
+    signal disp_pending  : std_logic_vector(NUM_WARPS-1 downto 0) := (others => '0');
+
+    -- Registered per-warp offset outputs
+    signal warp_offset_reg : slv32_array_t(0 to NUM_WARPS-1) := (others => (others => '0'));
 
 begin
 
-    -- Pass fb_base_addr through unchanged.  In a future double-buffering
-    -- extension the scheduler would toggle between two addresses here.
+    -- Pass fb_base_addr through unchanged.
     fb_base_out <= fb_base_addr;
 
+    -- Drive warp_offset output from the registered array
+    gen_offset: for i in 0 to NUM_WARPS-1 generate
+        warp_offset(i) <= warp_offset_reg(i);
+    end generate;
+
     process(clk)
+        variable v_all_done  : std_logic;     -- '1' when all warps are idle and work is done
+        variable v_sel       : integer range 0 to NUM_WARPS-1; -- selected warp for dispatch
+        variable v_dispatched: boolean;        -- true once a warp is dispatched this cycle
     begin
         if rising_edge(clk) then
             if reset = '1' then
                 state        <= IDLE;
                 total_pixels <= (others => '0');
                 next_offset  <= (others => '0');
-                warp_start   <= '0';
+                disp_pending <= (others => '0');
+                warp_start   <= (others => '0');
                 frame_done   <= '0';
-                warp_offset  <= (others => '0');
+                for i in 0 to NUM_WARPS-1 loop
+                    warp_offset_reg(i) <= (others => '0');
+                end loop;
             else
-                -- Default outputs (overridden in specific states)
-                warp_start <= '0';
+                -- Default pulse outputs
+                warp_start <= (others => '0');
                 frame_done <= '0';
 
                 case state is
 
                     when IDLE =>
                         if frame_start = '1' then
-                            -- Latch frame dimensions and compute total pixel count.
-                            -- 16-bit × 16-bit unsigned multiply → 32-bit result.
                             total_pixels <= unsigned(frame_width) * unsigned(frame_height);
-                            next_offset <= (others => '0');
-                            state <= DISPATCH;
+                            next_offset  <= (others => '0');
+                            disp_pending <= (others => '0');
+                            state        <= RUNNING;
                         end if;
 
-                    when DISPATCH =>
-                        -- Pulse warp_start for one cycle and drive warp_offset.
-                        warp_start  <= '1';
-                        warp_offset <= std_logic_vector(next_offset);
-                        -- Advance offset so WAIT_HALT can check completion condition.
-                        next_offset <= next_offset + to_unsigned(WARP_SIZE, 32);
-                        state       <= WAIT_RUNNING;
-
-                    when WAIT_RUNNING =>
-                        -- Wait for warp_halted to deassert, confirming the warp
-                        -- has started executing (transitioned out of HALTED).
-                        -- Without this state, WAIT_HALT would see the residual '1'
-                        -- from the previous HALTED state and exit instantly.
-                        if warp_halted = '0' then
-                            state <= WAIT_HALT;
-                        end if;
-
-                    when WAIT_HALT =>
-                        -- Wait for the warp to finish (warp_halted reasserts on OP_RETURN).
-                        if warp_halted = '1' then
-                            if next_offset < total_pixels then
-                                state <= DISPATCH;
-                            else
-                                state <= DONE;
+                    when RUNNING =>
+                        -- Step 1: Clear disp_pending for any warp that has started running.
+                        -- Once warp_halted deasserts the warp has left HALTED, confirming
+                        -- it received its dispatch.
+                        for i in 0 to NUM_WARPS-1 loop
+                            if warp_halted(i) = '0' then
+                                disp_pending(i) <= '0';
                             end if;
+                        end loop;
+
+                        -- Step 2: If work remains, find the first idle warp and dispatch.
+                        -- An idle warp has halted='1' and no pending dispatch.
+                        v_dispatched := false;
+                        if next_offset < total_pixels then
+                            for i in 0 to NUM_WARPS-1 loop
+                                if not v_dispatched and
+                                   warp_halted(i) = '1' and disp_pending(i) = '0' then
+                                    warp_start(i)      <= '1';
+                                    warp_offset_reg(i) <= std_logic_vector(next_offset);
+                                    next_offset        <= next_offset +
+                                                         to_unsigned(WARP_SIZE, 32);
+                                    disp_pending(i)    <= '1';
+                                    v_dispatched       := true;
+                                end if;
+                            end loop;
+                        end if;
+
+                        -- Step 3: Check for frame completion.
+                        -- All work is dispatched and every warp has halted (with no
+                        -- pending dispatch that could still be in-flight).
+                        v_all_done := '1';
+                        for i in 0 to NUM_WARPS-1 loop
+                            -- A warp is not done if it is currently running (halted='0')
+                            -- or if it was dispatched but hasn't acknowledged yet.
+                            if warp_halted(i) = '0' or disp_pending(i) = '1' then
+                                v_all_done := '0';
+                            end if;
+                        end loop;
+                        if next_offset >= total_pixels and v_all_done = '1' then
+                            state <= DONE;
                         end if;
 
                     when DONE =>

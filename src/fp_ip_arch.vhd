@@ -68,16 +68,7 @@ begin
     u_fp:  fp_sin.fp_sin port map(clk=>clk, areset=>areset, a=>a, q=>q);
 end architecture;
 
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use ieee.math_real.all;
-
-library fp_cos;
-architecture structural of fp_cos_0 is
-begin
-    u_fp:  fp_cos.fp_cos port map(clk=>clk, areset=>areset, a=>a, q=>q);
-end architecture;
+-- fp_cos_0 removed: fp_cos IP core eliminated to save ~600-700 ALMs per FPU lane.
 
 library ieee;
 use ieee.std_logic_1164.all;

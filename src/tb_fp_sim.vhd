@@ -25,8 +25,8 @@ architecture behavior of tb_fp_sim is
     signal sqrt_a, sqrt_q   : std_logic_vector(31 downto 0) := (others => '0');
     -- Signals for Min / Max
     signal minmax_a, minmax_b, min_q, max_q : std_logic_vector(31 downto 0) := (others => '0');
-    -- Signals for Trig Functions
-    signal trig_a, sin_q, cos_q : std_logic_vector(31 downto 0) := (others => '0');
+    -- Signals for Trig Functions (cos removed along with fp_cos_0 IP)
+    signal trig_a, sin_q : std_logic_vector(31 downto 0) := (others => '0');
     -- Signals for Log / Exp
     signal log2_a, log2_q : std_logic_vector(31 downto 0) := (others => '0');
     signal exp2_a, exp2_q : std_logic_vector(31 downto 0) := (others => '0');
@@ -70,9 +70,7 @@ begin
         generic map (latency => LAT_FSIN)
         port map (clk => clk, areset => areset, a => trig_a, q => sin_q);
 
-    dut_cos: entity work.fp_cos_0
-        generic map (latency => LAT_FCOS)
-        port map (clk => clk, areset => areset, a => trig_a, q => cos_q);
+    -- dut_cos removed: fp_cos_0 IP and OP_COS eliminated to save ALMs.
 
     dut_log2: entity work.fp_log2_0
         generic map (latency => LAT_FLOG2)
@@ -188,7 +186,7 @@ begin
         for i in 1 to LAT_FSIN loop wait until rising_edge(clk); end loop;
         wait for 1 ns;
         assert to_real(to_float(sin_q)) = 0.0 report "Sin Failed!" severity error;
-        assert to_real(to_float(cos_q)) = 1.0 report "Cos Failed!" severity error;
+        -- cos test removed: fp_cos_0 eliminated
 
         ---------------------------------------------------------
         -- Test: Fused Multiply-Add (Latency: 20)

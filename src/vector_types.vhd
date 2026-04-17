@@ -41,4 +41,17 @@ package vector_types_pkg is
     subtype word_t is std_logic_vector(31 downto 0);
     type vector_t is array (0 to 3) of word_t;
     subtype swizzle_sel_t is std_logic_vector(2 downto 0);
+
+    -- -------------------------------------------------------------------------
+    -- Unconstrained array types for multi-warp port arrays.
+    -- Used by warp_scheduler, mcu_block_transfer, and frame_processor to pass
+    -- per-warp data with a single generic NUM_WARPS controlling array bounds.
+    -- VHDL-2008 allows port constraints of the form slv32_array_t(0 to N-1)
+    -- where N is a generic, which is how these types are used in practice.
+    -- -------------------------------------------------------------------------
+    type slv3_array_t   is array (natural range <>) of std_logic_vector(2 downto 0);
+    type slv5_array_t   is array (natural range <>) of std_logic_vector(4 downto 0);
+    type slv16_array_t  is array (natural range <>) of std_logic_vector(15 downto 0);
+    type slv32_array_t  is array (natural range <>) of std_logic_vector(31 downto 0);
+    type slv128_array_t is array (natural range <>) of std_logic_vector(127 downto 0);
 end package;

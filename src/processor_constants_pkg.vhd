@@ -131,7 +131,8 @@ package processor_constants_pkg is
     constant OP_F2I     : std_logic_vector(5 downto 0) := "001101"; -- Float-to-integer conversion (truncate)
     constant OP_I2F     : std_logic_vector(5 downto 0) := "001110"; -- Integer-to-float conversion
     constant OP_SIN     : std_logic_vector(5 downto 0) := "010000"; -- Sine (radians)
-    constant OP_COS     : std_logic_vector(5 downto 0) := "010001"; -- Cosine (radians)
+    -- NOTE: OP_COS (010001) has been removed; the fp_cos_0 IP core was removed
+    -- to save ~600-700 ALMs per FPU lane.  Use SIN with a phase offset instead.
     constant OP_MOV     : std_logic_vector(5 downto 0) := "010010"; -- Register move: rd = rs1 (with write mask)
 
     -- Predicate Logic Opcodes
@@ -501,8 +502,7 @@ package processor_constants_pkg is
     constant LAT_FSQRT      : integer := 6;  -- Square root
     constant LAT_FMIN       : integer := 2;  -- Component-wise minimum
     constant LAT_FMAX       : integer := 2;  -- Component-wise maximum
-    constant LAT_FSIN       : integer := 18; -- Sine
-    constant LAT_FCOS       : integer := 18; -- Cosine
+    constant LAT_FSIN       : integer := 18; -- Sine (fp_cos_0 removed; FPU_MAX_LATENCY still tied here)
     constant LAT_FLOG2      : integer := 12; -- Base-2 log
     constant LAT_FEXP2      : integer := 5;  -- Base-2 exponent
     constant LAT_FCMP_LT    : integer := 3;  -- Less-than compare

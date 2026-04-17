@@ -725,3 +725,42 @@ Implemented the first phase of the latency hiding proposal. The goal was to allo
 - `src/tb_frame_processor.vhd`: Verified the correct behavior of the gated `frame_done` and the asynchronous pixel transfers.
 
 All modified testbenches pass correctly. The `tb_frame_processor_automated` also passes, confirming that the overall system logic remains sound.
+
+## 2026-04-17 — Phase 2: Dual-Warp + COS Removal
+
+### Changes Made
+
+**Removed Cosine Unit (ALM Savings)**
+- Deleted `fp_cos_0` entity from `fp_sim_entities.vhd` and both simulation/synthesis architectures from `fp_sim_arch.vhd` and `fp_ip_arch.vhd`.
+- Removed `u_fp_cos` instantiation, `raw_cos` signal, and all `LAT_FCOS`/`OP_COS` injection blocks from `fpu_lane.vhd`.
+- Removed `OP_COS` opcode constant and `LAT_FCOS` latency constant from `processor_constants_pkg.vhd` (replaced with a comment noting that `cos(x) = sin(x + π/2)` can be used instead).
+- Updated `instruction_decoder.vhd`, `tb_fp_sim.vhd`, and `tb_fpu_lane.vhd` to remove all cosine references.
+- Saves ~600-700 ALMs per FPU lane (2,400–2,800 ALMs total across 4 lanes).
+
+**Phase 2: Dual Warp Units**
+- Added multi-warp array types to `vector_types.vhd`: `slv3_array_t`, `slv5_array_t`, `slv16_array_t`, `slv32_array_t`, `slv128_array_t` (unconstrained, VHDL-2008).
+- **`warp_scheduler.vhd`** — Full rewrite for `NUM_WARPS=2` (default):
+  - New `RUNNING` state that continuously scans for idle warps and dispatches pixel blocks each cycle.
+  - `disp_pending` vector prevents double-dispatch during the 1-2 cycle window after `warp_start` before `warp_halted` deasserts.
+  - `DONE` entered only when `next_offset >= total_pixels` AND all warps halted AND no pending dispatches.
+  - Back-to-back dispatch to warp 0 and warp 1 possible on consecutive cycles.
+- **`mcu_block_transfer.vhd`** — Full rewrite for `NUM_WARPS=2` (default):
+  - Round-robin arbiter scans `pixel_buf_valid` vector (level signal, not pulse) to select next warp.
+  - Per-warp `pixel_rd_en`, `pixel_rd_addr`, `pixel_rd_data` arrays; `tx_data` muxed from `selected_warp`.
+  - `pixel_buf_done(i)` pulses after warp `i`'s 8-beat burst completes.
+- **`frame_processor.vhd`** — Full rewrite for `NUM_WARPS=2` (default):
+  - `gen_warps` generate loop instantiates one `instruction_memory`, one `warp_unit`, and one `pixel_buffer_ram` per warp.
+  - All IMEM copies receive identical `prog_*` writes (broadcast), keeping them in sync.
+  - Per-warp `pixel_buf_dirty` level signal derived from `warp_pixel_valid` pulse, cleared by `mcu_pixel_done`.
+  - `frame_done` delayed until all pending MCU transfers complete.
+- **`tb_warp_scheduler.vhd`** — Updated for 2-warp array interface; mock warps run independently via `gen_mock` generate; dispatch log captures all (warp, offset) pairs and verifies monotone offset sequence.
+- **`tb_mcu_block_transfer.vhd`** — Updated for new array port interface (NUM_WARPS=1 unit test).
+
+### Test Results
+All testbenches pass:
+- `tb_fp_sim`, `tb_fpu_lane`: verified sine pipeline, cosine removed cleanly.
+- `tb_warp_scheduler`: all 5 tests pass (1/2/8-warp frames, re-trigger, pulse check).
+- `tb_mcu_block_transfer`: 8-beat burst transfer verified.
+- `tb_warp_unit`: all tests pass with unchanged interface.
+- `tb_frame_processor`: 1-warp and 2-warp frames pass (8 and 16 beats respectively, correct DDR3 addresses).
+- All other integration and unit tests pass unchanged.

@@ -117,18 +117,8 @@ entity fp_sin_0 is
     );
 end entity fp_sin_0;
 
-library ieee;
-use ieee.std_logic_1164.all;
-
-entity fp_cos_0 is
-    generic( latency : integer := 21 );
-    port (
-        clk    : in  std_logic := '0';
-        areset : in  std_logic := '0';
-        a      : in  std_logic_vector(31 downto 0);
-        q      : out std_logic_vector(31 downto 0)
-    );
-end entity fp_cos_0;
+-- fp_cos_0 removed: cosine IP was eliminated to save ~600-700 ALMs per FPU lane.
+-- Use SIN with a phase-offset (cos(x) = sin(x + pi/2)) in the shader instead.
 
 library ieee;
 use ieee.std_logic_1164.all;

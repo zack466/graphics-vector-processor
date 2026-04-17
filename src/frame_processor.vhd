@@ -5,48 +5,47 @@
 -- PURPOSE:
 --   Top-level structural entity that wires together every subsystem needed to
 --   render a complete frame to DDR3 SDRAM from a single `frame_start` pulse.
---   No datapath logic lives here; this entity is pure wiring.
+--   No datapath logic lives here; this entity is pure wiring and per-warp
+--   synchronisation bookkeeping.
 --
 -- SUBSYSTEM MAP:
---   u_imem   : instruction_memory  — shared M10K BRAM; all warps run the same
---                                    shader program loaded via prog_* ports.
---   u_sched  : warp_scheduler      — frame-level FSM; iterates warp_offset from
---                                    0 to frame_width*frame_height in steps of 32.
---   u_warp   : warp_unit           — single SIMT warp (IFU, decode, issue, exec,
---                                    VRF, PRF, mixed-width M10K pixel buffer).
---   u_mcu    : mcu_block_transfer  — fetches from warp_unit's pipelined M10K 
---                                    pixel buffer and emits 8 sequential 128-bit 
---                                    Avalon burst beats.
---   u_bridge : avm_burst_bridge    — Avalon-MM burst protocol driver to DDR3.
+--   u_imem[i]  : instruction_memory  — one physical M10K BRAM copy per warp,
+--                                      all receiving the same prog_* writes
+--                                      simultaneously.  Giving each warp its
+--                                      own IMEM copy avoids the 2-port M10K
+--                                      limit when warps run at different PCs.
+--   u_sched    : warp_scheduler      — frame-level FSM; dispatches WARP_SIZE-
+--                                      pixel blocks to any idle warp in round-
+--                                      robin order.
+--   u_warp[i]  : warp_unit           — one SIMT warp per slot: IFU, decode,
+--                                      issue, exec, VRF, PRF.  Each warp has
+--                                      its own pixel buffer RAM (u_pbuf[i]).
+--   u_pbuf[i]  : pixel_buffer_ram    — per-warp M10K pixel buffer.  Written by
+--                                      warp_unit i via pixel_wr_* ports;
+--                                      read by the MCU during burst transfer.
+--   u_mcu      : mcu_block_transfer  — arbitrates across all NUM_WARPS pixel
+--                                      buffers and emits 8 sequential 128-bit
+--                                      Avalon burst beats for each.
+--   u_bridge   : avm_burst_bridge    — Avalon-MM burst protocol driver to DDR3.
 --
--- TOPOLOGY:
+-- MULTI-WARP LATENCY HIDING:
+--   Each warp transitions directly to HALTED as soon as it fills its pixel
+--   buffer (no MEM_WAIT state).  The scheduler sees warp_halted immediately
+--   and can dispatch the next pixel block while the MCU drains the filled
+--   buffer in the background.
 --
---   [frame_start / frame_width / frame_height / time_ms]
---       |
---   [u_sched: warp_scheduler]
---       |  warp_start, warp_offset
---       v
---   [u_warp: warp_unit] <──> [u_imem: instruction_memory]
---       |  pixel_buf_valid, pixel_buf_addr
---       |  ── pixel_rd_data (128-bit) ──>
---       |  <── pixel_rd_en, pixel_rd_addr, mem_stall ──
---       v
---   [u_mcu: mcu_block_transfer]
---       |  cmd/tx channels
---       v
---   [u_bridge: avm_burst_bridge]
---       |  avm_* (Avalon-MM master)
---       v
---   [DDR3 SDRAM]
+--   Each warp has a per-warp `pixel_buf_dirty` level signal managed here.
+--   If a warp finishes its next block before the MCU has completed the previous
+--   transfer, it stalls in DECODE until `pixel_buf_dirty` clears.
 --
--- EXTENSION TO MULTIPLE WARPS:
---   Instantiate N warp_unit entities and extend warp_scheduler to NUM_WARPS=N.
---   The MCU will need an arbiter to multiplex the pixel buffer read interfaces 
---   from multiple warps.
+-- INSTRUCTION MEMORY REPLICATION:
+--   All NUM_WARPS IMEM copies receive identical prog_* writes and therefore
+--   hold the same shader program.  A single IMEM cannot serve multiple warps
+--   at different PCs because M10K block RAMs have at most 2 independent ports.
 --
 -- PORT DESCRIPTIONS:
 --   clk, reset        : System clock and synchronous active-high reset.
---   avm_* : Avalon-MM master port to DDR3 controller.
+--   avm_*             : Avalon-MM master port to DDR3 controller.
 --   prog_we           : Write-enable for instruction memory programming.
 --   prog_wr_addr      : IMEM word address (IMEM_ADDR_WIDTH bits).
 --   prog_wr_data      : 32-bit instruction word to write.
@@ -54,7 +53,9 @@
 --   frame_width       : Frame width in pixels (16-bit unsigned).
 --   frame_height      : Frame height in pixels (16-bit unsigned).
 --   time_ms           : Elapsed time in milliseconds (shader uniform).
---   frame_done        : 1-cycle pulse when all warps have completed.
+--   frame_done        : 1-cycle pulse when all warps have completed and all
+--                       pixel transfers have finished.
+--   fb_base_addr      : Upper 16 bits of DDR3 byte address used by RETURN.
 -- ============================================================================
 
 library IEEE;
@@ -64,6 +65,7 @@ use work.vector_types_pkg.all;
 
 entity frame_processor is
     generic (
+        NUM_WARPS       : integer := 2;   -- Number of concurrent warp units
         PC_WIDTH        : integer := 16;
         IMEM_ADDR_WIDTH : integer := 8;
         WARP_SIZE       : integer := 32;
@@ -104,10 +106,7 @@ entity frame_processor is
         time_ms           : in  std_logic_vector(31 downto 0) := (others => '0');
         frame_done        : out std_logic;
 
-        -- Framebuffer base address: upper 16 bits of the DDR3 byte address used
-        -- by the RETURN instruction.  Passed through warp_scheduler → warp_unit.
-        -- Set to 0x0000 for a single framebuffer; alternate between 0x0000 and a
-        -- second page address to implement double buffering with vsync later.
+        -- Upper 16 bits of DDR3 byte address used by RETURN.
         fb_base_addr      : in  std_logic_vector(15 downto 0) := (others => '0')
     );
 end entity frame_processor;
@@ -115,37 +114,38 @@ end entity frame_processor;
 architecture structural of frame_processor is
 
     -- ========================================================================
-    -- Internal Interconnect
+    -- PER-WARP INTERCONNECT ARRAYS
     -- ========================================================================
 
-    -- IMEM read port (warp_unit drives address, IMEM returns data)
-    signal imem_rd_addr : std_logic_vector(PC_WIDTH-1 downto 0);
-    signal imem_rd_data : std_logic_vector(31 downto 0);
+    -- IMEM read interfaces (one per warp; same data in each copy)
+    signal imem_rd_addr : slv16_array_t(0 to NUM_WARPS-1);
+    signal imem_rd_data : slv32_array_t(0 to NUM_WARPS-1);
 
-    -- Scheduler → Warp
-    signal sched_warp_start  : std_logic;
-    signal sched_warp_offset : std_logic_vector(ADDR_WIDTH-1 downto 0);
-    signal sched_fb_base     : std_logic_vector(15 downto 0); -- fb_base forwarded by scheduler
-    signal warp_halted_sig   : std_logic;
+    -- Scheduler → per-warp control
+    signal sched_warp_start  : std_logic_vector(NUM_WARPS-1 downto 0);
+    signal sched_warp_offset : slv32_array_t(0 to NUM_WARPS-1);
+    signal sched_fb_base     : std_logic_vector(15 downto 0);
+    signal warp_halted_vec   : std_logic_vector(NUM_WARPS-1 downto 0);
     signal sched_frame_done  : std_logic;
 
-    -- Pixel Buffer State (Latency Hiding Sync)
-    signal pixel_buf_dirty    : std_logic := '0';
-    signal mcu_pixel_done     : std_logic;
+    -- Per-warp pixel-buffer dirty flags (level: '1' while buffer awaits MCU)
+    signal pixel_buf_dirty   : std_logic_vector(NUM_WARPS-1 downto 0) := (others => '0');
+    signal mcu_pixel_done    : std_logic_vector(NUM_WARPS-1 downto 0);
 
-    -- Warp ↔ MCU Handshake and RAM interface
-    signal warp_pixel_valid   : std_logic;
-    signal warp_pixel_addr    : std_logic_vector(ADDR_WIDTH-1 downto 0);
-    
-    -- Pixel Buffer Write Interface (from warp)
-    signal warp_pixel_wr_en   : std_logic;
-    signal warp_pixel_wr_addr : std_logic_vector(4 downto 0);
-    signal warp_pixel_wr_data : std_logic_vector(31 downto 0);
-    
-    -- Pixel Buffer Read Interface (from MCU)
-    signal warp_pixel_rd_en   : std_logic;
-    signal warp_pixel_rd_addr : std_logic_vector(2 downto 0);
-    signal warp_pixel_rd_data : std_logic_vector(DATA_WIDTH-1 downto 0);
+    -- Per-warp pixel_buf_valid pulses from warp_unit
+    signal warp_pixel_valid  : std_logic_vector(NUM_WARPS-1 downto 0);
+    -- Per-warp DDR3 base addresses output by warp_unit
+    signal warp_pixel_addr   : slv32_array_t(0 to NUM_WARPS-1);
+
+    -- Per-warp pixel buffer WRITE interface (warp → pixel_buffer_ram)
+    signal warp_pix_wr_en    : std_logic_vector(NUM_WARPS-1 downto 0);
+    signal warp_pix_wr_addr  : slv5_array_t(0 to NUM_WARPS-1);
+    signal warp_pix_wr_data  : slv32_array_t(0 to NUM_WARPS-1);
+
+    -- Per-warp pixel buffer READ interface (MCU → pixel_buffer_ram)
+    signal pix_rd_en         : std_logic_vector(NUM_WARPS-1 downto 0);
+    signal pix_rd_addr       : slv3_array_t(0 to NUM_WARPS-1);
+    signal pix_rd_data       : slv128_array_t(0 to NUM_WARPS-1);
 
     -- MCU → Bridge (command channel)
     signal int_cmd_valid     : std_logic;
@@ -164,7 +164,7 @@ architecture structural of frame_processor is
     signal int_rx_data       : std_logic_vector(DATA_WIDTH-1 downto 0);
     signal int_rx_valid      : std_logic;
 
-    -- Uniform registers
+    -- Latched uniforms
     signal frame_width_reg   : std_logic_vector(15 downto 0);
     signal frame_height_reg  : std_logic_vector(15 downto 0);
     signal time_ms_reg       : std_logic_vector(31 downto 0);
@@ -173,34 +173,44 @@ architecture structural of frame_processor is
 
 begin
 
+    -- ========================================================================
+    -- UNIFORM LATCH & DIRTY-FLAG MANAGEMENT
+    -- ========================================================================
     process(clk)
     begin
         if rising_edge(clk) then
             if reset = '1' then
-                pixel_buf_dirty    <= '0';
+                pixel_buf_dirty    <= (others => '0');
                 frame_done_pending <= '0';
                 frame_done         <= '0';
             else
                 frame_done <= '0';
 
-                if warp_pixel_valid = '1' then
-                    pixel_buf_dirty <= '1';
-                elsif mcu_pixel_done = '1' then
-                    pixel_buf_dirty <= '0';
-                end if;
+                -- Per-warp dirty flag: set when warp pulses pixel_buf_valid,
+                -- cleared when the MCU completes the burst for that warp.
+                for i in 0 to NUM_WARPS-1 loop
+                    if warp_pixel_valid(i) = '1' then
+                        pixel_buf_dirty(i) <= '1';
+                    elsif mcu_pixel_done(i) = '1' then
+                        pixel_buf_dirty(i) <= '0';
+                    end if;
+                end loop;
 
+                -- Delay frame_done until all buffers have been flushed to DDR3.
+                -- pixel_buf_dirty = "00" means all pending MCU transfers are done.
                 if sched_frame_done = '1' then
                     frame_done_pending <= '1';
                 end if;
 
-                if frame_done_pending = '1' and (pixel_buf_dirty = '0' or mcu_pixel_done = '1') then
-                    frame_done <= '1';
+                if frame_done_pending = '1' and
+                   (pixel_buf_dirty = (pixel_buf_dirty'range => '0') or
+                    mcu_pixel_done /= (mcu_pixel_done'range => '0')) then
+                    frame_done         <= '1';
                     frame_done_pending <= '0';
                 end if;
             end if;
-            
-            -- Latch in uniforms to prevent issues if they happen to change
-            -- while the processor is running.
+
+            -- Latch uniforms to prevent glitches during active rendering
             frame_width_reg  <= frame_width;
             frame_height_reg <= frame_height;
             time_ms_reg      <= time_ms;
@@ -208,24 +218,11 @@ begin
     end process;
 
     -- ========================================================================
-    -- Instruction Memory (shared; all warps run the same program)
-    -- ========================================================================
-    u_imem : entity work.instruction_memory
-        generic map ( ADDR_WIDTH => IMEM_ADDR_WIDTH )
-        port map (
-            clk     => clk,
-            we      => prog_we,
-            wr_addr => prog_wr_addr,
-            wr_data => prog_wr_data,
-            rd_addr => imem_rd_addr(IMEM_ADDR_WIDTH-1 downto 0),
-            rd_data => imem_rd_data
-        );
-
-    -- ========================================================================
-    -- Warp Scheduler (frame-level FSM)
+    -- WARP SCHEDULER
     -- ========================================================================
     u_sched : entity work.warp_scheduler
         generic map (
+            NUM_WARPS  => NUM_WARPS,
             WARP_SIZE  => WARP_SIZE,
             ADDR_WIDTH => ADDR_WIDTH
         )
@@ -237,80 +234,29 @@ begin
             frame_done   => sched_frame_done,
             warp_start   => sched_warp_start,
             warp_offset  => sched_warp_offset,
-            warp_halted  => warp_halted_sig,
+            warp_halted  => warp_halted_vec,
             fb_base_addr => fb_base_addr,
             fb_base_out  => sched_fb_base
         );
 
     -- ========================================================================
-    -- Warp Unit (single warp; extend to N for latency hiding)
-    -- ========================================================================
-    u_warp : entity work.warp_unit
-        generic map (
-            PC_WIDTH        => PC_WIDTH,
-            IMEM_ADDR_WIDTH => IMEM_ADDR_WIDTH,
-            WARP_SIZE       => WARP_SIZE,
-            ADDR_WIDTH      => ADDR_WIDTH,
-            DATA_WIDTH      => DATA_WIDTH,
-            REG_WIDTH       => REG_WIDTH
-        )
-        port map (
-            clk             => clk, reset => reset,
-            imem_addr       => imem_rd_addr,
-            imem_data       => imem_rd_data,
-            warp_start      => sched_warp_start,
-            warp_offset     => sched_warp_offset,
-            fb_base_addr    => sched_fb_base,
-            warp_halted     => warp_halted_sig,
-            warp_break      => open,
-            
-            -- Shader uniforms
-            frame_width     => frame_width_reg,
-            frame_height    => frame_height_reg,
-            time_ms         => time_ms_reg,
-            
-            -- pixel buffer interface
-            pixel_buf_valid => warp_pixel_valid,
-            pixel_buf_addr  => warp_pixel_addr,
-            pixel_buf_dirty => pixel_buf_dirty,
-            
-            -- write port to pixel buffer
-            pixel_wr_en     => warp_pixel_wr_en,
-            pixel_wr_addr   => warp_pixel_wr_addr,
-            pixel_wr_data   => warp_pixel_wr_data
-        );
-
-    -- ========================================================================
-    -- Central Pixel Buffer RAM (M10K)
-    -- ========================================================================
-    u_pixel_buffer : entity work.pixel_buffer_ram
-        port map (
-            clk      => clk,
-            we       => warp_pixel_wr_en,
-            wr_addr  => warp_pixel_wr_addr,
-            wr_data  => warp_pixel_wr_data,
-            rd_en    => warp_pixel_rd_en,
-            rd_addr  => warp_pixel_rd_addr,
-            rd_data  => warp_pixel_rd_data
-        );
-
-    -- ========================================================================
-    -- Block Transfer MCU
+    -- MCU BLOCK TRANSFER (Shared; arbitrates across all warp pixel buffers)
     -- ========================================================================
     u_mcu : entity work.mcu_block_transfer
         generic map (
+            NUM_WARPS  => NUM_WARPS,
             WARP_SIZE  => WARP_SIZE,
             ADDR_WIDTH => ADDR_WIDTH,
             DATA_WIDTH => DATA_WIDTH
         )
         port map (
             clk             => clk, reset => reset,
-            pixel_buf_valid => warp_pixel_valid,
+            pixel_buf_valid => pixel_buf_dirty,   -- level signal per warp
             base_addr       => warp_pixel_addr,
             pixel_buf_done  => mcu_pixel_done,
-            pixel_rd_en     => warp_pixel_rd_en,
-            pixel_rd_addr   => warp_pixel_rd_addr,
-            pixel_rd_data   => warp_pixel_rd_data,
+            pixel_rd_en     => pix_rd_en,
+            pixel_rd_addr   => pix_rd_addr,
+            pixel_rd_data   => pix_rd_data,
             cmd_valid       => int_cmd_valid,
             cmd_is_store    => int_cmd_is_store,
             cmd_addr        => int_cmd_addr,
@@ -323,7 +269,7 @@ begin
         );
 
     -- ========================================================================
-    -- Avalon Burst Bridge
+    -- AVALON BURST BRIDGE
     -- ========================================================================
     u_bridge : entity work.avm_burst_bridge
         generic map (
@@ -353,5 +299,77 @@ begin
             avm_readdatavalid => avm_readdatavalid,
             avm_waitrequest   => avm_waitrequest
         );
+
+    -- ========================================================================
+    -- PER-WARP GENERATE BLOCK
+    -- Instantiates one instruction_memory, one warp_unit, and one
+    -- pixel_buffer_ram for each warp slot.  All IMEM copies receive the same
+    -- prog_* writes and therefore hold the same shader program.
+    -- ========================================================================
+    gen_warps: for i in 0 to NUM_WARPS-1 generate
+
+        -- ----------------------------------------------------------------
+        -- Instruction Memory (one copy per warp; all hold the same program)
+        -- ----------------------------------------------------------------
+        u_imem : entity work.instruction_memory
+            generic map ( ADDR_WIDTH => IMEM_ADDR_WIDTH )
+            port map (
+                clk     => clk,
+                we      => prog_we,              -- broadcast to all copies
+                wr_addr => prog_wr_addr,
+                wr_data => prog_wr_data,
+                rd_addr => imem_rd_addr(i)(IMEM_ADDR_WIDTH-1 downto 0),
+                rd_data => imem_rd_data(i)
+            );
+
+        -- ----------------------------------------------------------------
+        -- Warp Unit
+        -- ----------------------------------------------------------------
+        u_warp : entity work.warp_unit
+            generic map (
+                PC_WIDTH        => PC_WIDTH,
+                IMEM_ADDR_WIDTH => IMEM_ADDR_WIDTH,
+                WARP_SIZE       => WARP_SIZE,
+                ADDR_WIDTH      => ADDR_WIDTH,
+                DATA_WIDTH      => DATA_WIDTH,
+                REG_WIDTH       => REG_WIDTH
+            )
+            port map (
+                clk             => clk, reset => reset,
+                imem_addr       => imem_rd_addr(i),
+                imem_data       => imem_rd_data(i),
+                warp_start      => sched_warp_start(i),
+                warp_offset     => sched_warp_offset(i),
+                fb_base_addr    => sched_fb_base,
+                warp_halted     => warp_halted_vec(i),
+                warp_break      => open,
+                frame_width     => frame_width_reg,
+                frame_height    => frame_height_reg,
+                time_ms         => time_ms_reg,
+                pixel_buf_valid => warp_pixel_valid(i),
+                pixel_buf_addr  => warp_pixel_addr(i),
+                pixel_buf_dirty => pixel_buf_dirty(i),
+                pixel_wr_en     => warp_pix_wr_en(i),
+                pixel_wr_addr   => warp_pix_wr_addr(i),
+                pixel_wr_data   => warp_pix_wr_data(i)
+            );
+
+        -- ----------------------------------------------------------------
+        -- Per-warp Pixel Buffer RAM (M10K)
+        -- Write port: from warp_unit (32-bit × 32 entries)
+        -- Read port:  from MCU (128-bit × 8 entries)
+        -- ----------------------------------------------------------------
+        u_pbuf : entity work.pixel_buffer_ram
+            port map (
+                clk     => clk,
+                we      => warp_pix_wr_en(i),
+                wr_addr => warp_pix_wr_addr(i),
+                wr_data => warp_pix_wr_data(i),
+                rd_en   => pix_rd_en(i),
+                rd_addr => pix_rd_addr(i),
+                rd_data => pix_rd_data(i)
+            );
+
+    end generate gen_warps;
 
 end architecture structural;
