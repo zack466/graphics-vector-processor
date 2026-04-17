@@ -495,21 +495,20 @@ package processor_constants_pkg is
     -- consecutive threads.
     --
     -- LAT_* values are in clock cycles from the cycle input data is presented
-    -- to the cycle the result appears at the IP core output.
-    constant LAT_FMADD      : integer := 20; -- Fused multiply-add
-    constant LAT_FRCP       : integer := 9;  -- Reciprocal (should be unused)
+    -- to the cycle the result appears at the IP core output. Targeting 100 MHz.
+    constant LAT_FMADD      : integer := 9;  -- Fused multiply-add
     constant LAT_FDIV       : integer := 9;  -- Division
-    constant LAT_FSQRT      : integer := 9;  -- Square root
+    constant LAT_FSQRT      : integer := 6;  -- Square root
     constant LAT_FMIN       : integer := 2;  -- Component-wise minimum
     constant LAT_FMAX       : integer := 2;  -- Component-wise maximum
     constant LAT_FSIN       : integer := 18; -- Sine
     constant LAT_FCOS       : integer := 18; -- Cosine
-    constant LAT_FLOG2      : integer := 21; -- Base-2 log
-    constant LAT_FEXP2      : integer := 9;  -- Base-2 exponent
+    constant LAT_FLOG2      : integer := 12; -- Base-2 log
+    constant LAT_FEXP2      : integer := 5;  -- Base-2 exponent
     constant LAT_FCMP_LT    : integer := 3;  -- Less-than compare
     constant LAT_FCMP_EQ    : integer := 1;  -- Equality compare
-    constant LAT_I2F        : integer := 11; -- Integer to float conversion
-    constant LAT_F2I        : integer := 5;  -- Float to integer conversion
+    constant LAT_I2F        : integer := 4;  -- Integer to float conversion
+    constant LAT_F2I        : integer := 2;  -- Float to integer conversion
     constant LAT_REDUCT     : integer := 16; -- 4D scalar product
 
     -- FPU_MAX_LATENCY: The normalizing pipeline depth (length of slowest
@@ -518,6 +517,6 @@ package processor_constants_pkg is
     -- instruction, all 32 thread results arrive at the VRF write port in
     -- a contiguous 32-cycle burst starting exactly FPU_MAX_LATENCY cycles
     -- after issue of thread 0.
-    constant FPU_MAX_LATENCY : integer := LAT_FLOG2; -- Tied to bottleneck op; update if IP changes
+    constant FPU_MAX_LATENCY : integer := LAT_FSIN; -- Tied to bottleneck op; update if IP changes
 
 end package;

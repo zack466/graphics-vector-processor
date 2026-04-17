@@ -100,10 +100,6 @@ begin
         generic map (latency => LAT_F2I)
         port map (clk => clk, areset => areset, a => f2i_a, q => f2i_q);
 
-    dut_rcp: entity work.fp_rcp_0
-        generic map (latency => LAT_FRCP)
-        port map (clk => clk, areset => areset, a => rcp_a, q => rcp_q);
-
     dut_scalar_product: entity work.fp_scalar_product_0
         generic map (latency => LAT_REDUCT)
         port map (clk => clk, areset => areset, 

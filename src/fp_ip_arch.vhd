@@ -150,17 +150,6 @@ use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 use ieee.math_real.all;
 
-library fp_rcp;
-architecture structural of fp_rcp_0 is
-begin
-    u_fp:  fp_rcp.fp_rcp port map(clk=>clk, areset=>areset, a=>a, q=>q);
-end architecture;
-
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use ieee.math_real.all;
-
 library fp_scalar_product;
 architecture structural of fp_scalar_product_0 is
 begin
