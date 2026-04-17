@@ -72,9 +72,9 @@ architecture rtl of top_level is
     constant MS_TICKS        : integer := 50_000;  -- 50 MHz => 50000 cycles / ms
 
     -- Buffer addresses (top 16 bits; bytes addresses are these << 16)
-    constant BUF_0_TOP : std_logic_vector(15 downto 0) := x"3000";
-    constant BUF_1_TOP : std_logic_vector(15 downto 0) := x"3040";
-    constant BUF_2_TOP : std_logic_vector(15 downto 0) := x"3080";
+    constant BUF_0_TOP : std_logic_vector(15 downto 0) := x"0000";
+    constant BUF_1_TOP : std_logic_vector(15 downto 0) := x"1000";
+    constant BUF_2_TOP : std_logic_vector(15 downto 0) := x"2000";
 
     -- Full byte addresses for VIP START_ADDR writes
     constant BUF_0_FULL : std_logic_vector(31 downto 0) := x"0000_0000";
@@ -88,7 +88,10 @@ architecture rtl of top_level is
     constant REG_READER_STAT : std_logic_vector(31 downto 0) := x"0000_001C";
 
     -- Frame info: 1024x768 progressive = (1024<<13) | 768 = 0x0080_0300
-    constant FRAME_INFO_VAL  : std_logic_vector(31 downto 0) := x"0080_0300";
+    -- constant FRAME_INFO_VAL  : std_logic_vector(31 downto 0) := x"0080_0300";
+    -- Frame info: 640x480 progressive = (640<<13) | 480 = 0x0050_01E0
+    constant FRAME_INFO_VAL  : std_logic_vector(31 downto 0) := x"0050_01E0";
+
 
     -- =========================================================================
     -- Host-writable registers
@@ -97,8 +100,8 @@ architecture rtl of top_level is
     signal step_req    : std_logic := '0';
     signal resume_req  : std_logic := '0';
     signal paused      : std_logic := '0';  -- current pause state
-    signal frame_w_reg : std_logic_vector(15 downto 0) := x"0400";  -- 1024 default
-    signal frame_h_reg : std_logic_vector(15 downto 0) := x"0300";  -- 768  default
+    signal frame_w_reg : std_logic_vector(15 downto 0) := x"0280";  -- 640 default
+    signal frame_h_reg : std_logic_vector(15 downto 0) := x"01e0";  -- 480  default
     signal time_ovr_en : std_logic := '0';
     signal time_ovr_val: std_logic_vector(31 downto 0) := (others => '0');
 
@@ -255,8 +258,8 @@ begin
             time_ovr_en <= '0';
 
             if reset = '1' then
-                frame_w_reg <= x"0400";
-                frame_h_reg <= x"0300";
+                frame_w_reg <= x"0280"; -- 640
+                frame_h_reg <= x"01e0"; -- 480
             elsif avs_host_write = '1' then
                 addr := unsigned(avs_host_address);
                 if addr(11 downto 10) = "00" then
