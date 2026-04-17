@@ -56,6 +56,9 @@ I2F v5.xyzw, v5             # float_height
 
 # y = floor(tid / width)
 FDIV v7.xyzw, v6, v4
+LDI_LO v1.xyzw, low(0.4999)
+LDI_HI v1.xyzw, high(0.4999)
+FSUB v7.xyzw, v7, v1
 F2I  v7.xyzw, v7
 I2F  v7.xyzw, v7             # float_y
 
@@ -362,16 +365,18 @@ LDI_LO v1.xyzw, low(255.0)
 LDI_HI v1.xyzw, high(255.0)
 FMUL v2.xyzw, v13, v1       # R = escape * 255
 FMUL v4.xyzw, v14, v1       # B = hit   * 255
-MOV  v5.xyzw, v1            # v5 = 255 in all lanes  (A pre-fill)
+
+FSUB v0.xyzw, v9, v9        # v0 = 0.0
+FADD v5.xyzw, v1, v0        # v5 = 255 in all lanes  (A pre-fill)
 
 LDI_LO v1.xyzw, low(100.0)
 LDI_HI v1.xyzw, high(100.0)
 FMUL v3.xyzw, v13, v1       # G = escape * 100
 
-MOV v5.x, v2                 # R
-MOV v5.y, v3                 # G
-MOV v5.z, v4                 # B
-                              # v5.w = 255 (A, from MOV v5.xyzw above)
+FADD v5.z, v2, v0                 # R
+FADD v5.y, v3, v0                 # G
+FADD v5.x, v4, v0                 # B
+                              # v5.w = 255 (A, from FADD v5.xyzw above)
 
 F2I  v5.xyzw, v5
 FLUSH

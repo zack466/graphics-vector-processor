@@ -280,8 +280,8 @@ begin
         generic map(latency => latency)
         port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
-    -- WHY DOES VHDL NOT TRUNCATE FLOATS BY DEFAULT BRUHHH
-    q <= std_logic_vector(to_signed(integer(trunc(pipelined_res)), 32));
+    -- bruh
+    q <= std_logic_vector(to_signed(integer(pipelined_res), 32));
 end architecture;
 
 library ieee;

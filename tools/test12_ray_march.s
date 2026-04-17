@@ -14,7 +14,7 @@
 #   DOT   — |q|^2 = q·q without a separate multiply loop
 #   FMAX  — branchless clamp-low
 #   FMIN  — branchless clamp-high
-#   MOV   — splat a single component into all four (for component packing)
+#   (MOV was replaced by FADD with 0.0)
 #
 # Register map (stable through march body):
 #   v8  ray direction normalized: (nx, ny, nz, 0)
@@ -38,6 +38,9 @@ I2F v4.xyzw, v1              # float(width)
 I2F v5.xyzw, v2              # float(height)
 
 FDIV v6.xyzw, v3, v4         # tid / width
+LDI_LO v1.xyzw, low(0.4999)
+LDI_HI v1.xyzw, high(0.4999)
+FSUB v6.xyzw, v6, v1
 F2I  v6.xyzw, v6             # floor -> row y
 I2F  v6.xyzw, v6             # float_y
 
@@ -67,9 +70,9 @@ FSUB v6.xyzw, v6, v13        # v = y_norm*2 - 1  (per-thread row coord)
 
 # ---- Build unnormalized ray direction (u, v, 1.5, 0) in v8 ----
 # Focal length 1.5 gives ~67 degree vertical FOV.
-MOV v8.xyzw, v14             # v8 = {0, 0, 0, 0}
-MOV v8.x,    v7              # v8.x = u
-MOV v8.y,    v6              # v8.y = v
+FADD v8.xyzw, v14, v14       # v8 = {0, 0, 0, 0}
+FADD v8.x,    v7, v14        # v8.x = u
+FADD v8.y,    v6, v14        # v8.y = v
 LDI_LO v8.z, low(1.5)
 LDI_HI v8.z, high(1.5)       # v8.z = 1.5
 
@@ -176,7 +179,7 @@ FMUL v6.xyzw, v3, v5            # hit * 220
 LDI_LO v5.xyzw, low(20.0)
 LDI_HI v5.xyzw, high(20.0)
 FMUL v7.xyzw, v4, v5            # miss * 20
-FADD v11.x, v6, v7              # R
+FADD v11.z, v6, v7              # R
 
 # G = hit * 100 + miss * 30
 LDI_LO v5.xyzw, low(100.0)
@@ -194,10 +197,10 @@ FMUL v6.xyzw, v3, v5
 LDI_LO v5.xyzw, low(180.0)
 LDI_HI v5.xyzw, high(180.0)
 FMUL v7.xyzw, v4, v5
-FADD v11.z, v6, v7              # B
+FADD v11.x, v6, v7              # B
 
 # A = 255
-MOV v11.w, v15
+FADD v11.w, v15, v14
 
 # ---- Write pixel ----
 F2I  v11.xyzw, v11

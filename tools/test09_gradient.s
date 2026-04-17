@@ -24,6 +24,9 @@ I2F v5.xyzw, v2          # v5 = float(height)
 # back to float space.
 # -------------------------------------------------------------------------
 FDIV v7.xyzw, v3, v4     # v7 = float(tid) / float_width
+LDI_LO v12.xyzw, low(0.4999)
+LDI_HI v12.xyzw, high(0.4999)
+FSUB v7.xyzw, v7, v12
 F2I  v7.xyzw, v7         # v7 = int_y (Truncate fraction)
 I2F  v7.xyzw, v7         # v7 = float_y (Back to float space)
 
@@ -49,9 +52,9 @@ LDI_HI v10.xyzw, high(255.0)  # v10 = 255.0f
 LDI_LO v11.xyzw, low(255.0)
 LDI_HI v11.xyzw, high(255.0)  # v11 = {255.0f, 255.0f, 255.0f, 255.0f}
 
-FMUL v11.x, v8, v10      # v11.X (Red)   = x_norm * 255.0f
+FMUL v11.z, v8, v10      # v11.Z (Red)   = x_norm * 255.0f
 FMUL v11.y, v9, v10      # v11.Y (Green) = y_norm * 255.0f
-FSUB v11.z, v10, v10     # v11.Z (Blue)  = 255.0f - 255.0f = 0.0f
+FSUB v11.x, v10, v10     # v11.X (Blue)  = 255.0f - 255.0f = 0.0f
 
 # -------------------------------------------------------------------------
 # 6. Writeback to Pixel Buffer

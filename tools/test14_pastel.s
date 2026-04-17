@@ -13,7 +13,7 @@
 # packing the three phase-shifted arguments into the x/y/z lanes of one register.
 # Result is in [0.4, 1.0] by construction, so no clamping needed.
 #
-# New instructions vs earlier tests: none (reuses FADD / SIN / MOV patterns).
+# New instructions vs earlier tests: none (reuses FADD / SIN patterns).
 #
 # Register map:
 #   v0  scratch (constants, intermediates)
@@ -39,6 +39,10 @@ I2F v1.xyzw, v1             # float_width
 I2F v2.xyzw, v2             # float_height
 I2F v3.xyzw, v3             # float(time_ms)
 
+# zero constant for replacements
+LDI_LO v12.xyzw, low(0.0)
+LDI_HI v12.xyzw, high(0.0)
+
 # t = time_ms / 1000
 LDI_LO v0.xyzw, low(1000.0)
 LDI_HI v0.xyzw, high(1000.0)
@@ -46,6 +50,9 @@ FDIV v3.xyzw, v3, v0        # v3 = t_seconds
 
 # y = floor(tid / width)
 FDIV v6.xyzw, v8, v1
+LDI_LO v0.xyzw, low(0.4999)
+LDI_HI v0.xyzw, high(0.4999)
+FSUB v6.xyzw, v6, v0
 F2I  v6.xyzw, v6
 I2F  v6.xyzw, v6             # v6 = float_y
 
@@ -72,7 +79,7 @@ FMUL v7.xyzw, v7, v0        # * 5
 FADD v7.xyzw, v7, v3        # + t  →  v7 = wave
 
 # Build phase vector: v10 = (wave, wave+2, wave+4, wave)
-MOV v10.xyzw, v7            # all lanes = wave
+FADD v10.xyzw, v7, v12      # all lanes = wave
 LDI_LO v0.xyzw, low(2.0)
 LDI_HI v0.xyzw, high(2.0)
 FADD v10.y, v7, v0          # v10.y = wave + 2
@@ -97,10 +104,10 @@ LDI_HI v0.xyzw, high(255.0)
 FMUL v10.xyzw, v10, v0      # v10 = (R, G, B, ?) in [0,255]
 
 # Pack output: A=255 pre-filled, then set R, G, B from x/y/z lanes
-MOV v11.xyzw, v0             # v11 = (255, 255, 255, 255)  — sets A
-MOV v11.x, v10               # R = v10.x
-MOV v11.y, v10               # G = v10.y
-MOV v11.z, v10               # B = v10.z
+FADD v11.xyzw, v0, v12       # v11 = (255, 255, 255, 255)  — sets A
+FADD v11.z, v10.xxxx, v12    # R = v10.x
+FADD v11.y, v10.yyyy, v12    # G = v10.y
+FADD v11.x, v10.zzzz, v12    # B = v10.z
 
 F2I  v11.xyzw, v11
 FLUSH

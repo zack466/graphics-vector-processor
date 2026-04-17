@@ -10,6 +10,9 @@
 * fix some of the shaders (is the resolution hardcoded???) or warp offset is wrong?
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard). Or just one warp that utilizes latency hiding should be ok.
 * MOV doesn't work???
+* update shaders:
+  * add movement to SDF circles
+  * add zoom to mandelbrot
 
 # Agent changes
 
@@ -726,3 +729,16 @@ Implemented the first phase of the latency hiding proposal. The goal was to allo
 - `src/tb_frame_processor.vhd`: Verified the correct behavior of the gated `frame_done` and the asynchronous pixel transfers.
 
 All modified testbenches pass correctly. The `tb_frame_processor_automated` also passes, confirming that the overall system logic remains sound.
+
+## 2026-04-17
+
+### Fixed float-to-int conversion (rounding vs truncation) and component mapping issues in shaders
+
+The assembly tests assumed that `F2I` truncates, but it actually rounds to nearest. For coordinate mapping tests (where `floor` behavior was expected), this caused minor artifacts when floats evaluated exactly to boundaries. Also, the tests assumed that the `.xyzw` component mapping correlated to `.rgba`, but the hardware actually implements `.bgra` (i.e. X is Blue, Z is Red). Finally, the `MOV` instruction was noted to be broken, and required a replacement strategy using `FADD` or `IADD` with a `0.0` or `0` constant.
+
+**Changes:**
+- **Modified float-to-int conversions:** In all shaders (`test09_gradient.s`, `test11_sdf_circles.s`, `test12_ray_march.s`, `test13_plasma.s`, `test14_pastel.s`, `test15_checkerboard.s`, `test16_mandelbrot.s`), added a subtraction of `0.4999` using `FSUB` before `F2I` whenever truncation (floor) behavior was needed for integer coordinate division or modulus calculations. `F2I` for final color packing was left alone since rounding there is perfectly fine or even preferable.
+- **Fixed component mapping:** Re-mapped `.xyzw` assignments for colors in the shaders from `R=x, G=y, B=z` to `R=z, G=y, B=x` to correctly match the hardware's `.bgra` output format.
+- **Replaced `MOV` instructions:** Hand-compiled out `MOV` operations in all `.s` test files by substituting them with `FADD` (or `IADD`) instructions that add a `0.0` or `0x0000` constant, since the FPU's `MOV` logic was previously found to be buggy or unreliable. In cases where a `0.0` register wasn't explicitly available, one was generated manually using `LDI_LO`/`LDI_HI` (or `FSUB`) immediately preceding the substitution block. When `MOV` included swizzles, the swizzle pattern was shifted appropriately onto the `src1` parameter of `FADD`.
+
+**Verification:** All modified assembly test files successfully compile and pass execution via `run_all_tests.py` using `tb_frame_processor_automated`, generating visually accurate PNG images.

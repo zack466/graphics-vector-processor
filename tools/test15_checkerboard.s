@@ -52,6 +52,9 @@ FDIV v3.xyzw, v3, v0        # v3 = t_seconds
 
 # y = floor(tid / width)
 FDIV v6.xyzw, v7, v1
+LDI_LO v0.xyzw, low(0.4999)
+LDI_HI v0.xyzw, high(0.4999)
+FSUB v6.xyzw, v6, v0
 F2I  v6.xyzw, v6
 I2F  v6.xyzw, v6             # float_y
 
@@ -83,6 +86,10 @@ LDI_LO v0.xyzw, low(1000.0)
 LDI_HI v0.xyzw, high(1000.0)
 FADD v5.xyzw, v5, v0        # grid.x + 1000
 FADD v6.xyzw, v6, v0        # grid.y + 1000
+LDI_LO v0.xyzw, low(0.4999)
+LDI_HI v0.xyzw, high(0.4999)
+FSUB v5.xyzw, v5, v0
+FSUB v6.xyzw, v6, v0
 F2I  v5.xyzw, v5            # floor cx (int)
 F2I  v6.xyzw, v6            # floor cy (int)
 I2F  v5.xyzw, v5            # cx as float
@@ -98,8 +105,13 @@ FADD v8.xyzw, v5, v6
 LDI_LO v0.xyzw, low(2.0)
 LDI_HI v0.xyzw, high(2.0)
 FDIV v9.xyzw, v8, v0        # half_sum
+LDI_LO v0.xyzw, low(0.4999)
+LDI_HI v0.xyzw, high(0.4999)
+FSUB v9.xyzw, v9, v0
 F2I  v9.xyzw, v9
 I2F  v9.xyzw, v9             # float floor(half_sum)
+LDI_LO v0.xyzw, low(2.0)
+LDI_HI v0.xyzw, high(2.0)
 FMUL v9.xyzw, v9, v0        # 2 * floor_half
 FSUB v8.xyzw, v8, v9        # is_even = 0.0 or 1.0
 
@@ -114,9 +126,11 @@ FADD v8.xyzw, v8, v0        # v8 = color in [0,255]
 # Pack output: R=G=B=color_byte, A=255
 LDI_LO v10.xyzw, low(255.0)
 LDI_HI v10.xyzw, high(255.0)
-MOV v10.x, v8               # R
-MOV v10.y, v8               # G
-MOV v10.z, v8               # B
+LDI_LO v0.xyzw, low(0.0)
+LDI_HI v0.xyzw, high(0.0)
+FADD v10.z, v8, v0               # R
+FADD v10.y, v8, v0               # G
+FADD v10.x, v8, v0               # B
                              # v10.w = 255 (A, already set by LDI above)
 
 F2I  v10.xyzw, v10

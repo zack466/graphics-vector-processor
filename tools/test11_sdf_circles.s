@@ -9,10 +9,10 @@
 # New instructions vs earlier tests:
 #   DOT  — 4-component dot product (squared distance from origin)
 #   FSQRT — square root for Euclidean distance
-#   FADD  — float add (offset)
+#   FADD  — float add (offset, and used for MOV replacement)
 #   FMIN  — branchless clamp-high
 #   FMAX  — branchless clamp-low
-#   MOV   — component-masked copy for packing different scalars into one register
+#   (MOV was replaced by FADD with 0.0)
 #
 # Register map:
 #   v0  tid (int)
@@ -42,6 +42,9 @@ I2F v4.xyzw, v1              # float(width)
 I2F v5.xyzw, v2              # float(height)
 
 FDIV v6.xyzw, v3, v4         # tid / width
+LDI_LO v1.xyzw, low(0.4999)
+LDI_HI v1.xyzw, high(0.4999)
+FSUB v6.xyzw, v6, v1
 F2I  v6.xyzw, v6             # floor -> row y
 I2F  v6.xyzw, v6             # float_y
 
@@ -71,9 +74,9 @@ FSUB v7.xyzw, v7, v13        # u = x_norm*2 - 1
 FSUB v6.xyzw, v6, v13        # v = y_norm*2 - 1
 
 # ---- Build 2D point (u, v, 0, 0) in v8 for DOT ----
-MOV v8.xyzw, v14             # v8 = {0, 0, 0, 0}
-MOV v8.x, v7                 # v8.x = u  (per-thread: pixel column coord)
-MOV v8.y, v6                 # v8.y = v  (per-thread: pixel row coord)
+FADD v8.xyzw, v14, v14       # v8 = {0, 0, 0, 0}
+FADD v8.x, v7, v14           # v8.x = u  (per-thread: pixel column coord)
+FADD v8.y, v6, v14           # v8.y = v  (per-thread: pixel row coord)
 
 # ---- SDF: circle at origin, radius 0.45 ----
 DOT   v9.xyzw, v8, v8        # v9 = u^2 + v^2  (broadcast scalar)
@@ -97,7 +100,7 @@ FMUL v10.xyzw, v10, v1       # |sdf| * 5
 FSUB v10.xyzw, v13, v10      # 1 - |sdf|*5
 FMAX v10.xyzw, v10, v14      # clamp low to 0
 FMIN v10.xyzw, v10, v13      # clamp high to 1
-FMUL v11.x, v10, v15         # R = ring_glow * 255
+FMUL v11.z, v10, v15         # R = ring_glow * 255
 
 # ---- G: interior fill = (-sdf * 2) clamped [0,1], scaled ----
 FMUL v10.xyzw, v8, v12       # v10 = -sdf * 2
@@ -112,10 +115,10 @@ LDI_HI v1.xyzw, high(0.7)
 FADD v10.xyzw, v10, v1       # sdf*2 + 0.7
 FMAX v10.xyzw, v10, v14      # clamp low
 FMIN v10.xyzw, v10, v13      # clamp high
-FMUL v11.z, v10, v15         # B = sky_haze * 255
+FMUL v11.x, v10, v15         # B = sky_haze * 255
 
 # ---- A = 255 (fully opaque) ----
-MOV v11.w, v15
+FADD v11.w, v15, v14
 
 # ---- Write pixel ----
 F2I  v11.xyzw, v11

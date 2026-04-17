@@ -5,7 +5,7 @@
 # Program flow:
 #   1. Clear v1, then call the leaf function.
 #      leaf: loads v1.xyzw = 0x42 (integer 66) and returns with BRA_X.
-#   2. MOV v2.xyzw, v1   -- copies v1 into v2 (tests MOV)
+#   2. IADD v2.xyzw, v1, v15 -- copies v1 into v2
 #   3. Call outer (non-leaf function that itself calls leaf):
 #      outer: PUSH_L saves the caller's link, BRA_L calls leaf again,
 #             POP_L restores the link, BRA_X returns.
@@ -20,7 +20,8 @@
 # --- Main ---
 LDI_LO v1.xyzw, 0x0000     # clear v1 so the leaf call is observable
 BRA_L leaf                  # call leaf; link_reg = PC+1 (= next instruction)
-MOV v2.xyzw, v1             # v2 = v1 = 0x42 in all components (tests MOV)
+LDI_LO v15.xyzw, 0x0000     # clear v15 (tests MOV replacement)
+IADD v2.xyzw, v1, v15       # v2 = v1 = 0x42 in all components (tests MOV replacement)
 BRA_L outer                 # call outer (non-leaf); link_reg = PC+1
 FLUSH
 RETURN v2                   # write 32 threads' v2 to framebuffer and halt warp

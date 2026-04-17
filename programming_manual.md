@@ -230,7 +230,7 @@ Float compare less-than: `pdest = (src1 < src2)`
 Float compare equal: `pdest = (src1 == src2)`
 
 #### `F2I  dest[.mask], src1`
-Convert float to integer (truncate toward zero): `dest = (int)src1`
+Convert float to integer (rounds by default): `dest = (int) round(src1)`
 
 #### `I2F  dest[.mask], src1`
 Convert integer to float: `dest = (float)src1`

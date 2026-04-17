@@ -50,6 +50,9 @@ FDIV v8.xyzw, v3, v8          # v8 = t = time_ms / 1000
 
 # y = floor(tid / width)
 FDIV v7.xyzw, v6, v4          # float_tid / float_width
+LDI_LO v1.xyzw, low(0.4999)
+LDI_HI v1.xyzw, high(0.4999)
+FSUB v7.xyzw, v7, v1
 F2I  v7.xyzw, v7
 I2F  v7.xyzw, v7              # v7 = float_y
 
@@ -127,13 +130,13 @@ FMIN v4.xyzw, v4, v13         # v4 = B
 # ================================================================
 # Pack (R, G, B, A) into output register v14.
 # After each SIN channel's FMIN, all 4 components hold the same
-# channel value, so a masked MOV copies the scalar to one lane.
+# channel value, so a masked FADD copies the scalar to one lane.
 # ================================================================
 LDI_LO v14.xyzw, low(255.0)
 LDI_HI v14.xyzw, high(255.0)  # v14 = 255 (A lane pre-filled in all components)
-MOV v14.x, v2                  # v14.x = R
-MOV v14.y, v3                  # v14.y = G
-MOV v14.z, v4                  # v14.z = B
+FADD v14.z, v2, v0             # R
+FADD v14.y, v3, v0             # G
+FADD v14.x, v4, v0             # B
                                 # v14.w = 255 (already set by LDI above)
 
 # ---- Write pixel ----
