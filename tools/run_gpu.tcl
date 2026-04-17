@@ -1,115 +1,185 @@
-# ============================================================================
-# run_gpu.tcl - Full System Initialization and Shader Loader
-# ============================================================================
-# Usage in System Console: 
-#   source run_gpu.tcl
-# Ensure your compiled shader is named "program.hex" in the same directory.
-# ============================================================================
+# =============================================================================
+# load_and_run.tcl
+# Loads a program into the graphics vector processor's IMEM via JTAG,
+# sets uniforms, and starts frame generation.
+#
+# Usage (from System Console):
+#   % source load_and_run.tcl
+# =============================================================================
 
-set hex_filename "program.hex"
+# -----------------------------------------------------------------------------
+# Configuration: adjust to match your Platform Designer address map
+# -----------------------------------------------------------------------------
+set BASE_ADDR      0x00000000   ;# Base of top.avs_host as seen by JTAG master
 
-# ============================================================================
-# 1. Base Addresses (Verify these match your Platform Designer / Qsys map!)
-# ============================================================================
-set GPU_BASE       0x00000000
-set VIP_CTRL_BASE  0x00010000 
+# Register offsets within the avs_host slave
+set REG_CONTROL    0x000        ;# [0]=pause_req, [1]=step_req
+set REG_STATUS     0x004        ;# [0]=paused, [1]=running
+set REG_FRAME_W    0x008
+set REG_FRAME_H    0x00C
+set REG_TIME_MS    0x010
+set IMEM_BASE      0x400        ;# IMEM programming window starts here
 
-# GPU Register Offsets (Byte addresses)
-set REG_CTRL       [expr {$GPU_BASE + 0x00}]
-set REG_STATUS     [expr {$GPU_BASE + 0x04}]
-set REG_DIMENSIONS [expr {$GPU_BASE + 0x08}]
-set REG_FB_0       [expr {$GPU_BASE + 0x10}]
-set REG_FB_1       [expr {$GPU_BASE + 0x14}]
-set IMEM_BASE [expr {$GPU_BASE + 0x2000}]
+# Frame dimensions
+set FRAME_W        1024
+set FRAME_H        768
 
-# ============================================================================
-# 2. Open JTAG Master Connection
-# ============================================================================
-set master_paths [get_service_paths master]
-if {[llength $master_paths] == 0} {
-    puts "ERROR: No JTAG master found. Is the DE10-Nano plugged in and programmed?"
-    return
+# Program to load (hex strings; one 32-bit word per line)
+set program {
+0x3BDC0003
+0x3FC40003
+0x43C80003
+0x47CC0003
+0x3BDDC000
+0x3BC44000
+0x3BC88000
+0x3BCCC000
+0x3C000004
+0x7D11E804
+0x17CCC000
+0x17D9C400
+0x37D98000
+0x3BD98000
+0x0FC18400
+0x0BD5C000
+0x27D04800
+0x07D55400
+0x0BD54400
+0x17D55000
+0x07D99800
+0x0BD98800
+0x17D99000
+0x3C000004
+0x7D028004
+0x0FD54000
+0x0FD98000
+0x07D54C00
+0x07D54C00
+0x3C000004
+0x7D11E804
+0x07D54000
+0x07D98000
+0x37D54000
+0x37D98000
+0x3BD54000
+0x3BD98000
+0x07E15800
+0x3C000004
+0x7D000004
+0x17E60000
+0x37E64000
+0x3BE64000
+0x0FE64000
+0x0BE22400
+0x3C000004
+0x7D0C6404
+0x0FE20000
+0x3C000004
+0x7D093004
+0x07E20000
+0x3C0000A4
+0x7D0DFCA4
+0x486A0000
+0x48AA0000
+0x492A0000
+0x37EA8000
+0xF8000006
+0xFC028006
 }
-set jtag_master [lindex $master_paths 0]
-open_service master $jtag_master
-puts "SUCCESS: Opened JTAG Master ($jtag_master)"
 
-# ============================================================================
-# 3. Halt System & Configure Resolution
-# ============================================================================
-puts "Configuring GPU and Framebuffers..."
+# -----------------------------------------------------------------------------
+# Find and open the JTAG master service
+# -----------------------------------------------------------------------------
+set masters [get_service_paths master]
+if {[llength $masters] == 0} {
+    error "No JTAG master found. Is the board programmed and plugged in?"
+}
+if {[llength $masters] > 1} {
+    puts "Warning: found [llength $masters] masters; using the first."
+    puts "Available masters:"
+    foreach m $masters { puts "  $m" }
+}
+set m [lindex $masters 0]
+puts "Using master: $m"
 
-# Halt GPU (Write 0 to Control)
-master_write_32 $jtag_master $REG_CTRL 0x00000000
+# Claim the service (required before any read/write)
+set claim [claim_service master $m load_and_run]
 
-# Set Dimensions: Width 640 (0x0280), Height 480 (0x01E0) -> 0x028001E0
-master_write_32 $jtag_master $REG_DIMENSIONS 0x028001E0
-
-# Set Framebuffer Page Numbers in DDR3.
-# The GPU stores fb_base_addr as the UPPER 16 bits of the DDR3 byte address.
-# pixel_addr = (fb_base_addr << 16) + pixel_offset
-# So the CSR holds a page number (each page = 65536 bytes).
-# FB0 = page 0 → 0x00000000.  FB1 = page 32 → 0x00200000 (2MB, clears 640×480×4=1.17MB).
-master_write_32 $jtag_master $REG_FB_0 0x00000000
-master_write_32 $jtag_master $REG_FB_1 0x00000020
-
-# ============================================================================
-# 4. Load Shader Program (.hex) into IMEM
-# ============================================================================
-if {![file exists $hex_filename]} {
-    puts "ERROR: Could not find $hex_filename! Please assemble your code first."
-    close_service master $jtag_master
-    return
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+proc w32 {offset value} {
+    global claim BASE_ADDR
+    master_write_32 $claim [expr {$BASE_ADDR + $offset}] $value
 }
 
-puts "Loading instructions from $hex_filename into IMEM..."
-set fp [open $hex_filename r]
-set offset 0
-set instr_count 0
-
-while {[gets $fp line] >= 0} {
-    set line [string trim $line]
-    
-    # Skip empty lines
-    if {$line eq ""} { continue }
-    
-    # Write the 32-bit hex value to the current IMEM offset
-    # Prefixing with "0x" ensures Tcl treats it as a hex literal
-    master_write_32 $jtag_master [expr {$IMEM_BASE + $offset}] "0x$line"
-    
-    incr offset 4
-    incr instr_count
+proc r32 {offset} {
+    global claim BASE_ADDR
+    return [master_read_32 $claim [expr {$BASE_ADDR + $offset}] 1]
 }
-close $fp
-puts "SUCCESS: Loaded $instr_count instructions into IMEM."
 
-# ============================================================================
-# 5. Start the Altera VIP Framebuffer
-# ============================================================================
-puts "Starting Altera VIP Frame Reader..."
-# Write 1 to Register 0 (Offset 0x00) to assert the "Go" bit
-master_write_32 $jtag_master $VIP_CTRL_BASE 0x00000001
+# -----------------------------------------------------------------------------
+# 1. Pause the processor before loading
+#    CONTROL bit[0] = pause_req (self-clearing pulse; latches into 'paused')
+# -----------------------------------------------------------------------------
+puts "Pausing processor..."
+w32 $REG_CONTROL 0x1
+after 10   ;# small delay to let the pulse propagate
 
-# ============================================================================
-# 6. Kickoff the GPU Rendering Loop
-# ============================================================================
-puts "Triggering GPU Execution Loop..."
+set status [r32 $REG_STATUS]
+puts [format "  status = 0x%08x (paused=%d)" $status [expr {$status & 0x1}]]
 
-# Control Register Layout:
-# Bit 0: SW Start
-# Bit 1: Auto-swap on VSYNC enable
-# Bit 2: IRQ enable (leaving 0)
+# -----------------------------------------------------------------------------
+# 2. Reset time counter to zero
+#    Writing to TIME_MS triggers the override (time_ovr_en pulse)
+# -----------------------------------------------------------------------------
+puts "Resetting time counter..."
+w32 $REG_TIME_MS 0
 
-# We write 0x03 to enable auto-swap (2) and trigger the first start (1)
-master_write_32 $jtag_master $REG_CTRL 0x00000003
+# -----------------------------------------------------------------------------
+# 3. Set frame dimensions
+# -----------------------------------------------------------------------------
+puts "Setting frame dimensions: ${FRAME_W}x${FRAME_H}"
+w32 $REG_FRAME_W $FRAME_W
+w32 $REG_FRAME_H $FRAME_H
 
-# Clear the start bit so we don't accidentally re-trigger it. 
-# The hardware swap FSM will handle all future triggers.
-master_write_32 $jtag_master $REG_CTRL 0x00000002
+# -----------------------------------------------------------------------------
+# 4. Load program into IMEM
+# -----------------------------------------------------------------------------
+puts "Loading [llength $program] instruction(s) into IMEM..."
+set i 0
+foreach inst $program {
+    set addr [expr {$IMEM_BASE + ($i * 4)}]
+    w32 $addr $inst
+    puts [format "  IMEM\[%3d\] @ 0x%03x = %s" $i $addr $inst]
+    incr i
+}
 
-puts "==========================================================="
-puts "SYSTEM RUNNING! Your GPU is now rendering to the HDMI port."
-puts "==========================================================="
+# -----------------------------------------------------------------------------
+# 5. (Optional) Verify a couple of uniform writes by reading back
+# -----------------------------------------------------------------------------
+set rb_w [r32 $REG_FRAME_W]
+set rb_h [r32 $REG_FRAME_H]
+puts [format "Readback: frame_w=%d, frame_h=%d" [expr {$rb_w & 0xFFFF}] [expr {$rb_h & 0xFFFF}]]
 
-# Clean up JTAG connection
-close_service master $jtag_master
+# -----------------------------------------------------------------------------
+# 6. Unpause — resume free-running frame generation
+#    Writing 0x0 to CONTROL drops pause_req. But pause_req only *sets* paused;
+#    to clear it we use the button-toggle behavior from hardware. Since the
+#    JTAG side only has pause_req (assert), clearing requires either KEY[0]
+#    press or a small tweak to top_level. See notes below.
+# -----------------------------------------------------------------------------
+puts "Ready. Press KEY\[0\] to unpause and start free-running,"
+puts "or KEY\[1\] to step through frames one at a time."
+
+# 6. Unpause and start
+# puts "Unpausing..."
+# w32 $REG_CONTROL 0x2   ;# bit[1] = resume
+# after 10
+# set status [r32 $REG_STATUS]
+# puts [format "  status = 0x%08x (paused=%d)" $status [expr {$status & 0x1}]]
+# puts "Running."
+
+# Clean up
+close_service master $claim
+puts "Done."
