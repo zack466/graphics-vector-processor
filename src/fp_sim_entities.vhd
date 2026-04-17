@@ -7,6 +7,34 @@ package fp_sim_types is
 end package fp_sim_types;
 
 ---------------------------------------------------------
+-- Pipeline Entities
+---------------------------------------------------------
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.math_real.all;
+
+entity Pipeline is
+    generic ( latency : integer := 1 );
+    port(
+        clock    : in std_logic;
+        data_in  : in real;
+        data_out : out real
+    );
+end Pipeline;
+
+library ieee;
+use ieee.std_logic_1164.all;
+
+entity Pipeline_sl is
+    generic ( latency : integer := 1 );
+    port(
+        clock    : in std_logic;
+        data_in  : in std_logic;
+        data_out : out std_logic
+    );
+end Pipeline_sl;
+
+---------------------------------------------------------
 -- Floating Point Arithmetic Entities
 ---------------------------------------------------------
 

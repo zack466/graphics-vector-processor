@@ -48,63 +48,63 @@ begin
     clk <= not clk after clk_period / 2;
 
     -- Device Under Test Instantiations (with strict generic latency mapping)
-    dut_multiply_add: entity work.fp_multiply_add 
+    dut_multiply_add: entity work.fp_multiply_add_0
         generic map (latency => LAT_FMADD)
         port map (clk => clk, areset => areset, a => ma_a, b => ma_b, c => ma_c, q => ma_q);
 
-    dut_div: entity work.fp_div 
+    dut_div: entity work.fp_div_0
         generic map (latency => LAT_FDIV)
         port map (clk => clk, areset => areset, a => div_a, b => div_b, q => div_q);
 
-    dut_sqrt: entity work.fp_sqrt 
+    dut_sqrt: entity work.fp_sqrt_0
         generic map (latency => LAT_FSQRT)
         port map (clk => clk, areset => areset, a => sqrt_a, q => sqrt_q);
 
-    dut_min: entity work.fp_min 
+    dut_min: entity work.fp_min_0
         generic map (latency => LAT_FMIN)
         port map (clk => clk, areset => areset, a => minmax_a, b => minmax_b, q => min_q);
 
-    dut_max: entity work.fp_max 
+    dut_max: entity work.fp_max_0
         generic map (latency => LAT_FMAX)
         port map (clk => clk, areset => areset, a => minmax_a, b => minmax_b, q => max_q);
 
-    dut_sin: entity work.fp_sin 
+    dut_sin: entity work.fp_sin_0
         generic map (latency => LAT_FSIN)
         port map (clk => clk, areset => areset, a => trig_a, q => sin_q);
 
-    dut_cos: entity work.fp_cos 
+    dut_cos: entity work.fp_cos_0
         generic map (latency => LAT_FCOS)
         port map (clk => clk, areset => areset, a => trig_a, q => cos_q);
 
-    dut_log2: entity work.fp_log2 
+    dut_log2: entity work.fp_log2_0
         generic map (latency => LAT_FLOG2)
         port map (clk => clk, areset => areset, a => log2_a, q => log2_q);
 
-    dut_exp2: entity work.fp_exp2 
+    dut_exp2: entity work.fp_exp2_0
         generic map (latency => LAT_FEXP2)
         port map (clk => clk, areset => areset, a => exp2_a, q => exp2_q);
 
-    dut_lt: entity work.fp_lt
+    dut_lt: entity work.fp_lt_0
         generic map (latency => LAT_FCMP_LT)
         port map (clk => clk, areset => areset, a => cmp_a, b => cmp_b, q => lt_q);
 
-    dut_eq: entity work.fp_eq 
+    dut_eq: entity work.fp_eq_0
         generic map (latency => LAT_FCMP_EQ)
         port map (clk => clk, areset => areset, a => cmp_a, b => cmp_b, q => eq_q);
 
-    dut_i2f: entity work.fp_fix2float 
+    dut_i2f: entity work.fp_fix2float_0
         generic map (latency => LAT_I2F)
         port map (clk => clk, areset => areset, a => i2f_a, q => i2f_q);
 
-    dut_f2i: entity work.fp_float2fix 
+    dut_f2i: entity work.fp_float2fix_0
         generic map (latency => LAT_F2I)
         port map (clk => clk, areset => areset, a => f2i_a, q => f2i_q);
 
-    dut_rcp: entity work.fp_rcp 
+    dut_rcp: entity work.fp_rcp_0
         generic map (latency => LAT_FRCP)
         port map (clk => clk, areset => areset, a => rcp_a, q => rcp_q);
 
-    dut_scalar_product: entity work.fp_scalar_product 
+    dut_scalar_product: entity work.fp_scalar_product_0
         generic map (latency => LAT_REDUCT)
         port map (clk => clk, areset => areset, 
                   a0 => sp_a0, a1 => sp_a1, a2 => sp_a2, a3 => sp_a3,

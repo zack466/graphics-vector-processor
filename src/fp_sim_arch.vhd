@@ -55,7 +55,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_multiply_add is
+architecture sim of fp_multiply_add_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= (to_real(to_float(a)) * to_real(to_float(b))) + to_real(to_float(c));
@@ -73,7 +73,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_div is
+architecture sim of fp_div_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= to_real(to_float(a)) / to_real(to_float(b)) when to_real(to_float(b)) /= 0.0 else 0.0;
@@ -91,7 +91,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_sqrt is
+architecture sim of fp_sqrt_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= sqrt(to_real(to_float(a)));
@@ -109,25 +109,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_rsqrt is
-    signal math_res, pipelined_res : real;
-begin
-    math_res <= 1.0 / sqrt(to_real(to_float(a))) when to_real(to_float(a)) /= 0.0 else 0.0;
-
-    pipe_inst: entity work.Pipeline
-        generic map(latency => latency)
-        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
-
-    q <= to_slv(to_float(pipelined_res));
-end architecture;
-
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use ieee.math_real.all;
-use ieee.float_pkg.all;
-
-architecture sim of fp_min is
+architecture sim of fp_min_0 is
     signal real_a, real_b, math_res, pipelined_res : real;
 begin
     real_a <= to_real(to_float(a));
@@ -147,7 +129,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_max is
+architecture sim of fp_max_0 is
     signal real_a, real_b, math_res, pipelined_res : real;
 begin
     real_a <= to_real(to_float(a));
@@ -167,7 +149,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_sin is
+architecture sim of fp_sin_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= sin(to_real(to_float(a)));
@@ -185,7 +167,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_cos is
+architecture sim of fp_cos_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= cos(to_real(to_float(a)));
@@ -203,7 +185,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_log2 is
+architecture sim of fp_log2_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= log2(to_real(to_float(a)));
@@ -221,7 +203,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_exp2 is
+architecture sim of fp_exp2_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= 2.0 ** to_real(to_float(a));
@@ -239,7 +221,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_lt is
+architecture sim of fp_lt_0 is
     signal logic_res : std_logic;
 begin
     logic_res <= '1' when to_real(to_float(a)) < to_real(to_float(b)) else '0';
@@ -255,7 +237,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_eq is
+architecture sim of fp_eq_0 is
     signal logic_res : std_logic;
 begin
     logic_res <= '1' when to_real(to_float(a)) = to_real(to_float(b)) else '0';
@@ -271,7 +253,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_fix2float is
+architecture sim of fp_fix2float_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= real(to_integer(signed(a)));
@@ -289,7 +271,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_float2fix is
+architecture sim of fp_float2fix_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= to_real(to_float(a));
@@ -308,7 +290,7 @@ use ieee.numeric_std.all;
 use ieee.math_real.all;
 use ieee.float_pkg.all;
 
-architecture sim of fp_rcp is
+architecture sim of fp_rcp_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= 1.0 / to_real(to_float(a)) when to_real(to_float(a)) /= 0.0 else 0.0;
@@ -326,7 +308,7 @@ use IEEE.NUMERIC_STD.ALL;
 use IEEE.MATH_REAL.ALL;
 use IEEE.FLOAT_PKG.ALL;
 
-architecture sim of fp_scalar_product is
+architecture sim of fp_scalar_product_0 is
     signal math_res, pipelined_res : real;
 begin
     math_res <= (to_real(to_float(a0)) * to_real(to_float(b0))) +
