@@ -95,6 +95,7 @@ architecture rtl of top_level is
     -- =========================================================================
     signal pause_req   : std_logic := '0';
     signal step_req    : std_logic := '0';
+    signal resume_req  : std_logic := '0';
     signal paused      : std_logic := '0';  -- current pause state
     signal frame_w_reg : std_logic_vector(15 downto 0) := x"0400";  -- 1024 default
     signal frame_h_reg : std_logic_vector(15 downto 0) := x"0300";  -- 768  default
@@ -188,7 +189,7 @@ begin
 
     -- =========================================================================
     -- Pause state: KEY[0] toggles pause, KEY[1] is single step
-    -- Host can also force pause via pause_req (set by JTAG write)
+    -- Host can also force pause/unpause (set by JTAG write)
     -- =========================================================================
     process(clk)
     begin
@@ -197,9 +198,10 @@ begin
                 paused <= '0';
             elsif key_press(0) = '1' then
                 paused <= not paused;
-            elsif pause_req = '1' then  -- host override
+            elsif pause_req = '1' then
                 paused <= '1';
-                -- pause_req is cleared below
+            elsif resume_req = '1' then
+                paused <= '0';
             end if;
         end if;
     end process;
@@ -249,6 +251,7 @@ begin
             prog_we     <= '0';
             step_req    <= '0';
             pause_req   <= '0';
+            resume_req  <= '0';
             time_ovr_en <= '0';
 
             if reset = '1' then
@@ -260,8 +263,14 @@ begin
                     -- Control/status/uniform region
                     case to_integer(addr(9 downto 2)) is
                         when 0 =>  -- CONTROL
-                            pause_req <= avs_host_writedata(0);
-                            step_req  <= avs_host_writedata(1);
+                            -- [0]=pause, [1]=resume, [2]=step
+                            if avs_host_writedata(0) = '1' then
+                                pause_req <= '1';
+                            end if;
+                            if avs_host_writedata(1) = '1' then
+                                resume_req <= '1';
+                            end if;
+                            step_req <= avs_host_writedata(2);
                         when 2 =>  -- FRAME_W (addr 0x008)
                             frame_w_reg <= avs_host_writedata(15 downto 0);
                         when 3 =>  -- FRAME_H (addr 0x00C)
