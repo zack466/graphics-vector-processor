@@ -259,7 +259,8 @@ def assemble(input_file, output_file):
     # Write output
     with open(output_file, 'w') as f:
         for code in machine_code:
-            f.write(f"0x{code:08X}\n")
+            # f.write(f"0x{code:08X}\n")  # for copying into tcl script
+            f.write(f"{code:08X}\n")
 
 if __name__ == '__main__':
     if len(sys.argv) != 3:

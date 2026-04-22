@@ -3,27 +3,59 @@
 -- COMPONENT: Instruction Fetch Unit (IFU)
 -- =============================================================================
 --
--- PURPOSE:
---   The IFU is the only block that knows which threads within the warp are
---   currently active. It manages four things simultaneously:
+-- The IFU is the only block that knows which threads within the warp are
+-- currently active. It manages four things simultaneously:
 --
---     1. Program Counter (PC): Tracks the next instruction address and drives
---        the instruction memory address bus. On normal sequential execution it
---        increments by 1 each cycle. On branches it jumps to target_addr.
+--   1. Program Counter (PC): Tracks the next instruction address and drives
+--      the instruction memory address bus. On normal sequential execution it
+--      increments by 1 each cycle. On branches it jumps to target_addr.
 --
---     2. Execution Mask (exec_mask_out): A WARP_SIZE-bit vector where each bit
---        represents one thread. '1' = thread is active and should execute the
---        current instruction; '0' = thread is masked off (predicated out or
---        deferred by divergence). The mask is updated by BRA_DIV/SYNC logic.
+--   2. Execution Mask (exec_mask_out): A WARP_SIZE-bit vector where each bit
+--      represents one thread. '1' = thread is active and should execute the
+--      current instruction; '0' = thread is masked off (predicated out or
+--      deferred by divergence). The mask is updated by BRA_DIV/SYNC logic.
 --
---     3. SIMT Divergence Stack: Hardware stack of {reconv_pc, deferred_pc,
---        deferred_mask, outer_mask} entries. Supports up to STACK_DEPTH nested
---        if/else blocks. This is the core of the SIMT control-flow model.
+--   3. SIMT Divergence Stack: Hardware stack of {reconv_pc, deferred_pc,
+--      deferred_mask, outer_mask} entries. Supports up to STACK_DEPTH nested
+--      if/else blocks. This is the core of the SIMT control-flow model.
 --
---     4. Hardware Call Stack: A dedicated stack for storing return addresses 
---        (link registers) to support nested function calls. It operates 
---        independently of the divergence stack since function calls are 
---        warp-wide and do not inherently split the active thread mask.
+--   4. Hardware Call Stack: A dedicated stack for storing return addresses 
+--      (link registers) to support nested function calls. It operates 
+--      independently of the divergence stack since function calls are 
+--      warp-wide and do not inherently split the active thread mask.
+--
+-- Inputs:
+--   clk              - System clock.
+--   reset            - Synchronous active-high reset. Sets PC=0, activates all
+--                      threads (active_mask = all-ones), clears the stack (sp=0).
+--   imem_data        - Raw 32-bit instruction word from memory; passed through
+--                      to instruction_out unchanged (no buffering in the IFU).
+--   imem_valid       - When '1', imem_data is valid. Currently tied high by the
+--                      top-level; included for future stall-capable memory.
+--   stall            - When '1', PC and masks freeze. Driven by the processor
+--                      FSM during execution wait states (EXEC_WAIT, FETCH_1).
+--                      The IFU resumes on the cycle stall goes to '0'.
+--   pc_ctrl          - Branch control record from instruction_decoder. Contains
+--                      branch_type (JMP/BRA_Z/BRA_NZ/BRA_DIV/SSY/SYNC/NONE),
+--                      target_addr (16-bit branch destination), predicate_sel,
+--                      and predicate_mod. Sampled when stall='0'.
+--   predicate_mask   - WARP_SIZE-bit per-thread predicate evaluation result read
+--                      combinationally from the PRF collapse port. Each bit
+--                      reflects one thread's predicate register value for the
+--                      register selected by pc_ctrl.predicate_sel. Sampled on
+--                      the same cycle as pc_ctrl.
+--
+-- Outputs:
+--   imem_addr        - PC driven directly to instruction memory address bus.
+--   instruction_out  - Registered instruction word forwarded to the decode stage.
+--                      (Currently = imem_data, combinationally; the BRAM adds
+--                      the one-cycle latency implicitly.)
+--   exec_mask_out    - Active thread mask for the instruction currently being
+--                      fetched. Driven from fetch_mask_reg, which is updated
+--                      coincident with the PC to track the correct mask.
+--   fetch_valid      - Asserted when a valid instruction is available and the
+--                      pipeline is not stalled. The processor FSM uses this to
+--                      decide when to advance the decode stage.
 --
 -- USAGE:
 --   Instantiated once by warp_unit.vhd. The stall input is driven by the
@@ -51,11 +83,11 @@
 --   NVIDIA SIMT model. The sequence for a simple if/else is:
 --
 --     SSY   <reconv_pc>    -- Record where the warp reconverges after if/else
---     BRA_DIV <taken_pc>  -- Split warp: IF threads jump, ELSE threads deferred
+--     BRA_DIV <taken_pc>   -- Split warp: IF threads jump, ELSE threads deferred
 --     <IF body>
---     SYNC                -- End of IF: switch to ELSE threads
+--     SYNC                 -- End of IF: switch to ELSE threads
 --     <ELSE body>
---     SYNC                -- End of ELSE: pop stack, restore all threads
+--     SYNC                 -- End of ELSE: pop stack, restore all threads
 --     <reconv_pc>:
 --     <post-branch code>
 --
@@ -85,45 +117,7 @@
 --       POP_L            -- Restore caller's return address
 --       BRA_X            -- Return to Caller
 --
--- PORTS:
---   clk              - System clock.
---   reset            - Synchronous active-high reset. Sets PC=0, activates all
---                      threads (active_mask = all-ones), clears the stack (sp=0).
---   imem_addr        - PC driven directly to instruction memory address bus.
---   imem_data        - Raw 32-bit instruction word from memory; passed through
---                      to instruction_out unchanged (no buffering in the IFU).
---   imem_valid       - When '1', imem_data is valid. Currently tied high by the
---                      top-level; included for future stall-capable memory.
---   stall            - When '1', PC and masks freeze. Driven by the processor
---                      FSM during execution wait states (EXEC_WAIT, FETCH_1).
---                      The IFU resumes on the cycle stall goes to '0'.
---   pc_ctrl          - Branch control record from instruction_decoder. Contains
---                      branch_type (JMP/BRA_Z/BRA_NZ/BRA_DIV/SSY/SYNC/NONE),
---                      target_addr (16-bit branch destination), predicate_sel,
---                      and predicate_mod. Sampled when stall='0'.
---   predicate_mask   - WARP_SIZE-bit per-thread predicate evaluation result read
---                      combinationally from the PRF collapse port. Each bit
---                      reflects one thread's predicate register value for the
---                      register selected by pc_ctrl.predicate_sel. Sampled on
---                      the same cycle as pc_ctrl.
---   instruction_out  - Registered instruction word forwarded to the decode stage.
---                      (Currently = imem_data, combinationally; the BRAM adds
---                      the one-cycle latency implicitly.)
---   exec_mask_out    - Active thread mask for the instruction currently being
---                      fetched. Driven from fetch_mask_reg, which is updated
---                      coincident with the PC to track the correct mask.
---   fetch_valid      - Asserted when a valid instruction is available and the
---                      pipeline is not stalled. The processor FSM uses this to
---                      decide when to advance the decode stage.
 --
--- GENERICS:
---   PC_WIDTH         - Width of the program counter and instruction memory address.
---                      Default 16 gives a 64K instruction address space.
---   WARP_SIZE        - Number of threads per warp. Default 32.
---   STACK_DEPTH      - Maximum depth of the SIMT divergence stack (max nested if/else).
---                      Default 16.
---   CALL_STACK_DEPTH - Maximum depth of the function call stack (max nested calls).
---                      Default 8. Each entry holds one PC-width return address.
 -- =============================================================================
 
 library IEEE;
@@ -141,8 +135,8 @@ entity instruction_fetch_unit is
         CALL_STACK_DEPTH : integer := 8   -- Max depth of nested function calls
     );
     port (
-        clk                : in  std_logic;
-        reset              : in  std_logic;
+        clk                : in  std_logic;     -- system clock
+        reset              : in  std_logic;     -- system reset
 
         -- ==========================================
         -- External Instruction Memory Interface
@@ -205,12 +199,15 @@ architecture rtl of instruction_fetch_unit is
     -- pc: current program counter. Drives imem_addr combinationally so the
     -- BRAM sees the new address on the same cycle the PC is updated.
     signal pc              : unsigned(PC_WIDTH-1 downto 0);
+
     -- active_mask: which threads in the warp are currently executing. Updated
     -- by BRA_DIV (may narrow the mask) and SYNC (restores from stack or widens).
     signal active_mask     : std_logic_vector(WARP_SIZE-1 downto 0);
+
     -- stack/sp: the SIMT divergence stack and its stack pointer.
     signal stack           : simt_stack_t;
     signal sp              : integer range 0 to STACK_DEPTH;
+
     -- saved_reconv_pc: holds the reconvergence PC written by SSY until BRA_DIV
     -- pushes it onto the stack. Separate from the stack so SSY can set it
     -- one instruction before BRA_DIV without consuming a stack slot prematurely.
@@ -259,21 +256,27 @@ begin
         -- taken_mask: threads that evaluated the predicate as TRUE (will branch).
         -- Computed as active_mask AND predicate_mask so only live threads count.
         variable taken_mask     : std_logic_vector(WARP_SIZE-1 downto 0);
+
         -- not_taken_mask: threads that evaluated the predicate as FALSE (fall-through).
         variable not_taken_mask : std_logic_vector(WARP_SIZE-1 downto 0);
+
         -- all_taken: TRUE if every active thread will take the branch (uniform branch).
         -- In this case BRA_DIV still pushes a dummy stack entry to preserve the
         -- reconvergence point, but no threads are deferred.
         variable all_taken      : boolean;
+
         -- none_taken: TRUE if no active thread takes the branch.
         -- In this case BRA_DIV falls through and pushes a dummy entry.
         variable none_taken     : boolean;
+
         -- is_divergent: TRUE when BOTH taken_mask and not_taken_mask are non-zero,
         -- meaning different threads want to go to different PCs. This triggers the
         -- real divergence path: push the ELSE (not-taken) path and jump to IF.
         variable is_divergent   : boolean;
+
         -- target_u: pc_ctrl.target_addr resized to PC_WIDTH for arithmetic.
         variable target_u       : unsigned(PC_WIDTH-1 downto 0);
+
         -- next_mask: the execution mask to use for the NEXT instruction. Computed
         -- here so fetch_mask_reg can be loaded in the same clock cycle as the PC.
         variable next_mask      : std_logic_vector(WARP_SIZE-1 downto 0);
@@ -526,6 +529,9 @@ begin
                 -- stack are unchanged.
                 -- =======================================================
                 else
+                    report "PC: " & to_hstring(pc);
+                    report "instruction: " & to_hstring(imem_data);
+                    report "instruction addr: " & to_hstring(imem_addr);
                     pc <= pc + 1;
                 end if;
                 

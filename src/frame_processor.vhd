@@ -1,60 +1,52 @@
 -- ============================================================================
 -- FILE: frame_processor.vhd
--- COMPONENT: frame_processor
+-- COMPONENT: Frame Processor
 -- ============================================================================
--- PURPOSE:
---   Top-level structural entity that wires together every subsystem needed to
---   render a complete frame to DDR3 SDRAM from a single `frame_start` pulse.
---   No datapath logic lives here; this entity is pure wiring.
+-- 
+-- The fully integrated frame processor that computes pixels based on a shader
+-- program and writes it to a framebuffer in memory. Does not contain any logic,
+-- but rather wires together all the necessary sub-components.
 --
--- SUBSYSTEM MAP:
---   u_imem   : instruction_memory  — shared M10K BRAM; all warps run the same
---                                    shader program loaded via prog_* ports.
---   u_sched  : warp_scheduler      — frame-level FSM; iterates warp_offset from
---                                    0 to frame_width*frame_height in steps of 32.
---   u_warp   : warp_unit           — single SIMT warp (IFU, decode, issue, exec,
---                                    VRF, PRF, mixed-width M10K pixel buffer).
---   u_mcu    : mcu_block_transfer  — fetches from warp_unit's pipelined M10K 
---                                    pixel buffer and emits 8 sequential 128-bit 
---                                    Avalon burst beats.
---   u_bridge : avm_burst_bridge    — Avalon-MM burst protocol driver to DDR3.
+-- Inputs:
+--  - clk, reset    : system clock and synchronous active-high reset.
+--  - prog_we       : Write-enable for instruction memory programming.
+--  - prog_wr_addr  : IMEM word address (IMEM_ADDR_WIDTH bits).
+--  - prog_wr_data  : 32-bit instruction word to write.
+--  - frame_width   : Frame width in pixels (16-bit unsigned).
+--  - frame_height  : Frame height in pixels (16-bit unsigned).
+--  - time_ms       : Elapsed time in milliseconds (shader uniform).
+--  - frame_start   : 1-cycle pulse from host to begin rendering a frame.
 --
--- TOPOLOGY:
+-- Outputs:
+--   avm_*      : Avalon-MM 128-bit interface to DDR3 RAM.
+--   frame_done : 1-cycle pulse when all warps have completed.
 --
---   [frame_start / frame_width / frame_height / time_ms]
---       |
---   [u_sched: warp_scheduler]
---       |  warp_start, warp_offset
---       v
---   [u_warp: warp_unit] <──> [u_imem: instruction_memory]
---       |  pixel_buf_valid, pixel_buf_addr
---       |  ── pixel_rd_data (128-bit) ──>
---       |  <── pixel_rd_en, pixel_rd_addr, mem_stall ──
---       v
---   [u_mcu: mcu_block_transfer]
---       |  cmd/tx channels
---       v
---   [u_bridge: avm_burst_bridge]
---       |  avm_* (Avalon-MM master)
---       v
---   [DDR3 SDRAM]
+-- Entities:
+--   u_imem   : instruction_memory  - shared M10K SRAM; contains the current shader
+--                                    program in machine code. Written to via
+--                                    prog_* ports.
+--   u_sched  : warp_scheduler      - frame-level FSM; iterates warp_offset from
+--                                    0 to frame_width*frame_height in steps of 32
+--                                    and triggers warps (32 threads each).
+--   u_warp   : warp_unit           - single SIMT warp (IFU, decode, issue, exec,
+--                                    VRF, PRF). Writes output pixels to
+--                                    a internal pixel buffer.
+--   u_mcu    : mcu_block_transfer  - Fetches pixels from the warp's pixel buffer and
+--                                    emits 8 sequential 128-bit Avalon burst beats
+--                                    to write it entirely to RAM. Since all pixels
+--                                    are adjacent, we automatically get coalescing.
+--   u_bridge : avm_burst_bridge    - Bridges the block transfer memory controller
+--                                    to the Avalon-MM interface using a state
+--                                    machine (simplifies the MCU write interface).
+--   u_pixel_buffer : pixel_buffer_ram - stores a single warp's output pixels in a
+--                                       32 x 32 = 1024 bit buffer so the values
+--                                       can be easily bursted to DDR3 RAM.
 --
--- EXTENSION TO MULTIPLE WARPS:
---   Instantiate N warp_unit entities and extend warp_scheduler to NUM_WARPS=N.
---   The MCU will need an arbiter to multiplex the pixel buffer read interfaces 
---   from multiple warps.
+-- Future work: The current design should be modular enough that we can instantiate
+-- more warp units to do work in parallel. The warp scheduler and MCU just need to
+-- modified to support multiple warps through an arbiter or two. And of course,
+-- the design also still needs to fit onto the FPGA being used.
 --
--- PORT DESCRIPTIONS:
---   clk, reset        : System clock and synchronous active-high reset.
---   avm_* : Avalon-MM master port to DDR3 controller.
---   prog_we           : Write-enable for instruction memory programming.
---   prog_wr_addr      : IMEM word address (IMEM_ADDR_WIDTH bits).
---   prog_wr_data      : 32-bit instruction word to write.
---   frame_start       : 1-cycle pulse from host to begin rendering a frame.
---   frame_width       : Frame width in pixels (16-bit unsigned).
---   frame_height      : Frame height in pixels (16-bit unsigned).
---   time_ms           : Elapsed time in milliseconds (shader uniform).
---   frame_done        : 1-cycle pulse when all warps have completed.
 -- ============================================================================
 
 library IEEE;
@@ -64,19 +56,19 @@ use work.vector_types_pkg.all;
 
 entity frame_processor is
     generic (
-        PC_WIDTH        : integer := 16;
-        IMEM_ADDR_WIDTH : integer := 8;
-        WARP_SIZE       : integer := 32;
-        ADDR_WIDTH      : integer := 32;
-        DATA_WIDTH      : integer := 128;
-        REG_WIDTH       : integer := 4
+        PC_WIDTH        : integer := 16;    -- width of program counter
+        IMEM_ADDR_WIDTH : integer := 8;     -- instruction memory address width (256 instructions max)
+        WARP_SIZE       : integer := 32;    -- number of threads per warp
+        ADDR_WIDTH      : integer := 32;    -- SDRAM address width
+        DATA_WIDTH      : integer := 128;   -- SDRAM data width
+        REG_WIDTH       : integer := 4      -- width of vector register file (16 registers)
     );
     port (
-        clk               : in  std_logic;
-        reset             : in  std_logic;
+        clk               : in  std_logic;  -- system clock
+        reset             : in  std_logic;  -- system reset
 
         -- ==========================================
-        -- Avalon-MM Master (To DDR3 via Burst Bridge)
+        -- Avalon-MM Master to DDR3 RAM, used for framebuffer writes
         -- ==========================================
         avm_address       : out std_logic_vector(ADDR_WIDTH-1 downto 0);
         avm_burstcount    : out std_logic_vector(7 downto 0);
@@ -96,18 +88,20 @@ entity frame_processor is
         prog_wr_data      : in  std_logic_vector(31 downto 0);
 
         -- ==========================================
-        -- Frame Control & Uniform Interface
+        -- Frame Control
         -- ==========================================
-        frame_start       : in  std_logic;
+        frame_start       : in  std_logic;  -- pulsed to trigger for drawing a single frame
+        frame_done        : out std_logic;  -- pulsed to signal done drawing a frame
+
+        -- ==========================================
+        -- Shader Uniforms
+        -- ==========================================
         frame_width       : in  std_logic_vector(15 downto 0);
         frame_height      : in  std_logic_vector(15 downto 0);
         time_ms           : in  std_logic_vector(31 downto 0) := (others => '0');
-        frame_done        : out std_logic;
 
         -- Framebuffer base address: upper 16 bits of the DDR3 byte address used
-        -- by the RETURN instruction.  Passed through warp_scheduler → warp_unit.
-        -- Set to 0x0000 for a single framebuffer; alternate between 0x0000 and a
-        -- second page address to implement double buffering with vsync later.
+        -- by the RETURN instruction.
         fb_base_addr      : in  std_logic_vector(15 downto 0) := (others => '0')
     );
 end entity frame_processor;
@@ -125,11 +119,10 @@ architecture structural of frame_processor is
     -- Scheduler → Warp
     signal sched_warp_start  : std_logic;
     signal sched_warp_offset : std_logic_vector(ADDR_WIDTH-1 downto 0);
-    signal sched_fb_base     : std_logic_vector(15 downto 0); -- fb_base forwarded by scheduler
     signal warp_halted_sig   : std_logic;
     signal sched_frame_done  : std_logic;
 
-    -- Pixel Buffer State (Latency Hiding Sync)
+    -- Pixel Buffer State, used to arbitrate with block transfer MCU
     signal pixel_buf_dirty    : std_logic := '0';
     signal mcu_pixel_done     : std_logic;
 
@@ -184,16 +177,20 @@ begin
                 frame_done <= '0';
 
                 if warp_pixel_valid = '1' then
+                    -- pixel buffer is ready to be output to memory
                     pixel_buf_dirty <= '1';
                 elsif mcu_pixel_done = '1' then
+                    -- pixel buffer has been written to memory, ready for a new frame
                     pixel_buf_dirty <= '0';
                 end if;
 
                 if sched_frame_done = '1' then
+                    -- warp scheduler has finished dispatching all warps
                     frame_done_pending <= '1';
                 end if;
 
                 if frame_done_pending = '1' and (pixel_buf_dirty = '0' or mcu_pixel_done = '1') then
+                    -- frame is done being drawn
                     frame_done <= '1';
                     frame_done_pending <= '0';
                 end if;
@@ -237,9 +234,7 @@ begin
             frame_done   => sched_frame_done,
             warp_start   => sched_warp_start,
             warp_offset  => sched_warp_offset,
-            warp_halted  => warp_halted_sig,
-            fb_base_addr => fb_base_addr,
-            fb_base_out  => sched_fb_base
+            warp_halted  => warp_halted_sig
         );
 
     -- ========================================================================
@@ -250,8 +245,6 @@ begin
             PC_WIDTH        => PC_WIDTH,
             IMEM_ADDR_WIDTH => IMEM_ADDR_WIDTH,
             WARP_SIZE       => WARP_SIZE,
-            ADDR_WIDTH      => ADDR_WIDTH,
-            DATA_WIDTH      => DATA_WIDTH,
             REG_WIDTH       => REG_WIDTH
         )
         port map (
@@ -260,7 +253,7 @@ begin
             imem_data       => imem_rd_data,
             warp_start      => sched_warp_start,
             warp_offset     => sched_warp_offset,
-            fb_base_addr    => sched_fb_base,
+            fb_base_addr    => fb_base_addr,
             warp_halted     => warp_halted_sig,
             warp_break      => open,
             

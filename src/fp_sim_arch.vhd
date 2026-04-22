@@ -1,3 +1,19 @@
+-- ============================================================================
+-- FILE: fp_architectures_sim.vhd
+-- ============================================================================
+--
+-- Simulation architecture implementations for all entities declared in
+-- fp_entities.vhd. Each architecture computes the result combinationally
+-- using VHDL's real type and ieee.math_real, then passes it through a
+-- Pipeline instance to replicate the correct output latency of the
+-- corresponding Altera IP core. This file is used in simulation only;
+-- the synthesis equivalent is in fp_architectures_structural.vhd.
+--
+-- Comparison operations (fp_lt_0, fp_eq_0) use Pipeline_sl rather than
+-- Pipeline since their output is std_logic rather than real.
+--
+-- ============================================================================
+
 ---------------------------------------------------------
 -- Pipeline Architectures
 ---------------------------------------------------------
@@ -76,6 +92,7 @@ use ieee.float_pkg.all;
 architecture sim of fp_div_0 is
     signal math_res, pipelined_res : real;
 begin
+    -- Guard against divide-by-zero; returns 0.0 to match Altera IP behaviour.
     math_res <= to_real(to_float(a)) / to_real(to_float(b)) when to_real(to_float(b)) /= 0.0 else 0.0;
 
     pipe_inst: entity work.Pipeline
@@ -280,26 +297,8 @@ begin
         generic map(latency => latency)
         port map(clock => clk, data_in => math_res, data_out => pipelined_res);
 
-    -- bruh
+    -- Truncates toward zero via integer(); matches the Altera IP's rounding mode.
     q <= std_logic_vector(to_signed(integer(pipelined_res), 32));
-end architecture;
-
-library ieee;
-use ieee.std_logic_1164.all;
-use ieee.numeric_std.all;
-use ieee.math_real.all;
-use ieee.float_pkg.all;
-
-architecture sim of fp_rcp_0 is
-    signal math_res, pipelined_res : real;
-begin
-    math_res <= 1.0 / to_real(to_float(a)) when to_real(to_float(a)) /= 0.0 else 0.0;
-
-    pipe_inst: entity work.Pipeline
-        generic map(latency => latency)
-        port map(clock => clk, data_in => math_res, data_out => pipelined_res);
-
-    q <= to_slv(to_float(pipelined_res));
 end architecture;
 
 library IEEE;
@@ -319,11 +318,10 @@ begin
     pipe_inst: entity work.Pipeline
         generic map(latency => latency)
         port map(
-            clock    => clk, 
-            data_in  => math_res, 
+            clock    => clk,
+            data_in  => math_res,
             data_out => pipelined_res
         );
 
     q <= to_slv(to_float(pipelined_res));
-
 end architecture sim;

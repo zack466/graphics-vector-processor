@@ -1,3 +1,45 @@
+-- ============================================================================
+-- FILE: avm_sim_memory.vhd
+-- COMPONENT: avm_sim_memory
+-- ============================================================================
+--
+-- Simulation model of an Avalon-MM burst slave, used to represent DDR3 memory
+-- in automated testbenches. Introduces randomised waitrequest delays and read
+-- return latencies to stress-test the Avalon master (avm_burst_bridge) under
+-- realistic backpressure conditions.
+--
+-- RAM is initialised with each word set to its own index, giving reads a
+-- predictable pattern for self-checking testbenches.
+--
+-- Inputs:
+--   clk               : System clock.
+--   reset             : Synchronous reset; clears all internal state and
+--                       asserts waitrequest.
+--   avs_address       : Burst start address from the master.
+--   avs_burstcount    : Number of beats in the burst.
+--   avs_write         : Master asserts to issue a write beat.
+--   avs_writedata     : Write payload for the current beat.
+--   avs_byteenable    : Byte-enable mask applied to each write beat.
+--   avs_read          : Master asserts to issue a read request.
+--
+-- Outputs:
+--   avs_readdata      : Read payload returned to the master.
+--   avs_readdatavalid : Asserted for one cycle when avs_readdata is valid.
+--                       Returned with randomised latency after the read request.
+--   avs_waitrequest   : Backpressure signal. Asserted during randomised delay
+--                       periods and when the pending read FIFO is full.
+--
+-- Generics:
+--   ADDR_WIDTH        : Address bus width in bits (default 32).
+--   DATA_WIDTH        : Data bus width in bits (default 128).
+--   MEM_WORDS         : Depth of the simulated RAM in DATA_WIDTH-wide words
+--                       (default 1024).
+--   MAX_DELAY         : Upper bound on randomised waitrequest delay in cycles
+--                       (default 5).
+--   MAX_PENDING_READS : Depth of the in-flight read FIFO. waitrequest is
+--                       asserted when full (default 4).
+--
+-- ============================================================================
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;
 use IEEE.NUMERIC_STD.ALL;
@@ -30,7 +72,9 @@ end entity;
 architecture sim of avm_sim_memory is
 
     type ram_type is array (0 to MEM_WORDS-1) of std_logic_vector(DATA_WIDTH-1 downto 0);
-    
+
+    -- Initialise RAM so word N contains the value N, giving reads a predictable
+    -- pattern that testbenches can use for self-checking.
     function init_ram return ram_type is
         variable temp : ram_type;
     begin
@@ -39,20 +83,21 @@ architecture sim of avm_sim_memory is
         end loop;
         return temp;
     end function;
-    
+
     signal ram : ram_type := init_ram;
 
-    -- Internal state signals
     signal wait_req_int     : std_logic := '1';
     signal write_burst_left : integer := 0;
     signal write_addr       : unsigned(ADDR_WIDTH-1 downto 0);
 
+    -- Pending read FIFO entry: tracks the address, remaining burst beats, and
+    -- the randomised latency before the first beat is returned.
     type pending_read_t is record
         addr       : unsigned(ADDR_WIDTH-1 downto 0);
         burst_left : integer;
         latency    : integer;
     end record;
-    
+
     type read_fifo_t is array (0 to MAX_PENDING_READS-1) of pending_read_t;
 
 begin
@@ -62,27 +107,27 @@ begin
     process
         variable seed1, seed2   : positive := 1;
         variable rand           : real;
-        variable v_wait_counter : integer := 0;
-        
+        variable v_wait_counter : integer := 0;  -- Cycles remaining in current waitrequest delay
+
+        -- Circular FIFO for in-flight read transactions
         variable v_read_fifo    : read_fifo_t;
         variable v_read_head    : integer := 0;
         variable v_read_tail    : integer := 0;
-        variable v_read_count   : integer := 0; 
-        
-        -- Variables for write handling
+        variable v_read_count   : integer := 0;
+
         variable target_idx     : integer;
         variable temp_word      : std_logic_vector(DATA_WIDTH-1 downto 0);
     begin
         wait until rising_edge(clk);
-        
+
         -- ====================================================================
-        -- ERROR CHECKING: Illegal Commands During Reset
+        -- ERROR CHECKING
         -- ====================================================================
         if reset = '1' then
             assert not (avs_write = '1' or avs_read = '1')
                 report "ERROR: Master issued a command while the slave is in reset!"
                 severity error;
-                
+
             v_wait_counter    := 0;
             v_read_head       := 0;
             v_read_tail       := 0;
@@ -91,9 +136,6 @@ begin
             write_burst_left  <= 0;
             avs_readdatavalid <= '0';
         else
-            -- ====================================================================
-            -- ERROR CHECKING: Simultaneous Read/Write Assertion
-            -- ====================================================================
             assert not (avs_read = '1' and avs_write = '1')
                 report "FATAL: Protocol Violation! Read and Write asserted simultaneously."
                 severity failure;
@@ -106,26 +148,30 @@ begin
             end if;
 
             -------------------------------------------------------------------
-            -- 2. READ DATA RETURN LOGIC 
+            -- 2. READ DATA RETURN
+            -- Counts down each entry's latency before returning data. Once the
+            -- latency expires, beats are returned with a 70% probability per
+            -- cycle to simulate DDR3 bandwidth variability.
             -------------------------------------------------------------------
-            avs_readdatavalid <= '0'; 
-            
+            avs_readdatavalid <= '0';
+
             if v_read_count > 0 then
                 if v_read_fifo(v_read_head).latency > 0 then
                     v_read_fifo(v_read_head).latency := v_read_fifo(v_read_head).latency - 1;
                 else
                     uniform(seed1, seed2, rand);
-                    if rand > 0.3 then 
+                    if rand > 0.3 then
                         avs_readdatavalid <= '1';
                         avs_readdata      <= ram(to_integer(v_read_fifo(v_read_head).addr) / (DATA_WIDTH/8) mod MEM_WORDS);
-                        
-                        -- LOG THE RETURNED READ
+
+                        -- Uncomment to log returned read beats:
                         -- report "[AVM MEM READ RET] Addr: 0x" & to_hstring(v_read_fifo(v_read_head).addr) &
                         --        " | Data: 0x" & to_hstring(ram(to_integer(v_read_fifo(v_read_head).addr) / (DATA_WIDTH/8) mod MEM_WORDS)) severity note;
-                        
+
+                        -- Advance address and decrement burst counter for this entry
                         v_read_fifo(v_read_head).addr       := v_read_fifo(v_read_head).addr + (DATA_WIDTH/8);
                         v_read_fifo(v_read_head).burst_left := v_read_fifo(v_read_head).burst_left - 1;
-                        
+
                         if v_read_fifo(v_read_head).burst_left = 0 then
                             v_read_head  := (v_read_head + 1) mod MAX_PENDING_READS;
                             v_read_count := v_read_count - 1;
@@ -135,27 +181,28 @@ begin
             end if;
 
             -------------------------------------------------------------------
-            -- 3. COMMAND ACCEPTANCE LOGIC
+            -- 3. COMMAND ACCEPTANCE
+            -- Commands are only processed on cycles where waitrequest is low.
             -------------------------------------------------------------------
             if wait_req_int = '0' then
-                
-                -- [A] Handle Writes
+
+                -- [A] Write beats: apply byte enables and write to RAM.
+                -- On the first beat of a new burst, latch the address from
+                -- avs_address; subsequent beats use the auto-incrementing write_addr.
                 if avs_write = '1' then
-                    
-                    -- Determine the target index in the RAM array
                     if write_burst_left = 0 then
-                        write_addr <= unsigned(avs_address);
+                        write_addr       <= unsigned(avs_address);
                         write_burst_left <= to_integer(unsigned(avs_burstcount)) - 1;
                         report "[AVM MEM WRITE] Addr: 0x" & to_hstring(avs_address);
                         target_idx := to_integer(unsigned(avs_address)) / (DATA_WIDTH/8) mod MEM_WORDS;
                         write_addr <= unsigned(avs_address) + (DATA_WIDTH/8);
                     else
-                        target_idx := to_integer(write_addr) / (DATA_WIDTH/8) mod MEM_WORDS;
-                        write_addr <= write_addr + (DATA_WIDTH/8);
+                        target_idx       := to_integer(write_addr) / (DATA_WIDTH/8) mod MEM_WORDS;
+                        write_addr       <= write_addr + (DATA_WIDTH/8);
                         write_burst_left <= write_burst_left - 1;
                     end if;
 
-                    -- Fetch current word, apply byte enables, and write back
+                    -- Read-modify-write to honour byte enables
                     temp_word := ram(target_idx);
                     for b in 0 to (DATA_WIDTH/8)-1 loop
                         if avs_byteenable(b) = '1' then
@@ -164,26 +211,26 @@ begin
                     end loop;
                     ram(target_idx) <= temp_word;
 
-                    -- LOG THE WRITE
+                    -- Uncomment to log write beats:
                     -- report "[AVM MEM WRITE] Addr: 0x" & to_hstring(to_unsigned(target_idx * (DATA_WIDTH/8), ADDR_WIDTH)) &
                     --        " | Data: 0x" & to_hstring(temp_word) severity note;
 
-                    -- Randomize delay for next beat
+                    -- Randomise delay before accepting the next beat
                     uniform(seed1, seed2, rand);
                     v_wait_counter := integer(rand * real(MAX_DELAY));
 
-                -- [B] Handle Reads
+                -- [B] Read request: push to FIFO with a randomised return latency.
                 elsif avs_read = '1' then
                     v_read_fifo(v_read_tail).addr       := unsigned(avs_address);
                     v_read_fifo(v_read_tail).burst_left := to_integer(unsigned(avs_burstcount));
-                    
-                    -- LOG THE READ REQUEST
+
+                    -- Uncomment to log read requests:
                     -- report "[AVM MEM READ REQ] Addr: 0x" & to_hstring(unsigned(avs_address)) &
                     --        " | Burst Len: " & integer'image(to_integer(unsigned(avs_burstcount))) severity note;
-                    
+
                     uniform(seed1, seed2, rand);
-                    v_read_fifo(v_read_tail).latency    := integer(rand * real(MAX_DELAY)) + 2; 
-                    
+                    v_read_fifo(v_read_tail).latency := integer(rand * real(MAX_DELAY)) + 2;
+
                     v_read_tail  := (v_read_tail + 1) mod MAX_PENDING_READS;
                     v_read_count := v_read_count + 1;
 
@@ -194,6 +241,7 @@ begin
 
             -------------------------------------------------------------------
             -- 4. WAITREQUEST GENERATION
+            -- Assert when a delay is active or the read FIFO is full.
             -------------------------------------------------------------------
             if v_wait_counter > 0 or v_read_count >= MAX_PENDING_READS then
                 wait_req_int <= '1';

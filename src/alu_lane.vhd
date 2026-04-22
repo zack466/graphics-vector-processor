@@ -1,39 +1,16 @@
 -- =============================================================================
 -- FILE: alu_lane.vhd
--- COMPONENT: Integer ALU Lane (Latency-Padded to Match FPU)
+-- COMPONENT: Integer ALU Lane
 -- =============================================================================
 --
--- WHY THIS COMPONENT EXISTS:
---   In a SIMT processor, each thread lane needs both integer and floating-point
---   execution capability. The ALU lane handles all integer opcodes (IADD, ISUB,
---   IMUL, bitwise, shifts, ICMP comparisons, THREAD_ID, WIDTH, HEIGHT, TIME) and 
---   the immediate-load pseudo-instructions (LDI_LO, LDI_HI).
+-- In a SIMT processor, each thread lane needs both integer and floating-point
+-- execution capability. The ALU lane handles all integer opcodes (IADD, ISUB,
+-- IMUL, bitwise, shifts, ICMP comparisons, THREAD_ID, WIDTH, HEIGHT, TIME) and 
+-- the immediate-load pseudo-instructions (LDI_LO, LDI_HI). This unit provides
+-- those capabilities, and can be used in the same manner as the FPU lanes
+-- since all operations are padded to a latency of MAX_FPU_LATENCY.
 --
---   The central design constraint is that the writeback controller uses a SINGLE
---   uniform pipeline for every instruction type — integer and floating-point
---   alike. This means the ALU result must arrive at the writeback bus exactly
---   FPU_MAX_LATENCY cycles after the instruction is issued, regardless of how
---   long the integer computation actually takes (which is 0 cycles — it is
---   purely combinational). The ALU therefore pads its combinational output
---   through an FPU_MAX_LATENCY-stage shift register to meet that contract.
---
---   The benefit of uniform latency: the writeback controller needs no per-unit
---   muxing, no variable-delay counters, and no issue-slot tracking. Every result
---   arrives on the same beat and the controller just commits it.
---
--- HOW TO USE:
---   - Drive opcode, valid_in, op_a, op_b, imm_data, thread_id, warp_offset,
---     frame_width, frame_height, and time_ms on the same cycle the instruction 
---     is issued to the lane.
---   - Assert is_load='1' for LDI_LO / LDI_HI instructions; this gates the
---     immediate path and suppresses the integer opcode decode.
---   - Outputs result, comp_flag, valid_out appear exactly FPU_MAX_LATENCY
---     cycles later and are valid when valid_out='1'.
---   - comp_flag routes to the Predicate Register File (PRF) write port.
---     The writeback controller should only assert PRF we when comp_flag is
---     meaningful (i.e., when the issued opcode was an ICMP variant).
---
--- PORT DESCRIPTIONS:
+-- Inputs:
 --   clk          : System clock. The delay shift-register is clocked on the
 --                  rising edge.
 --   reset        : Synchronous active-high reset. Flushes all pipeline stages
@@ -62,6 +39,7 @@
 --   frame_height : 16-bit frame height uniform for HEIGHT instruction.
 --   time_ms      : 32-bit time uniform for TIME instruction.
 --
+-- Outputs:
 --   result       : 32-bit integer result, valid FPU_MAX_LATENCY cycles after
 --                  valid_in. For ICMP instructions this field is undefined;
 --                  only comp_flag carries meaningful data.
@@ -72,11 +50,6 @@
 --                  Aligned with FPU valid_out so the writeback controller can
 --                  treat both lanes identically.
 --
--- TIMING / LATENCY:
---   Combinational computation : 0 cycles (raw_res / raw_comp are pure logic).
---   Pipeline padding          : FPU_MAX_LATENCY cycles of registered delay.
---   Total input-to-output     : FPU_MAX_LATENCY cycles (same as FPU lane).
---   Reset recovery            : 1 cycle (pipeline flush is synchronous).
 -- =============================================================================
 
 library IEEE;
@@ -88,14 +61,14 @@ use work.processor_constants_pkg.all;
 
 entity alu_lane is
     port (
-        clk          : in  std_logic;
-        reset        : in  std_logic;
+        clk          : in  std_logic;   -- system clock
+        reset        : in  std_logic;   -- system reset
         
         -- Control
-        opcode       : in  std_logic_vector(5 downto 0);
-        valid_in     : in  std_logic;
-        is_load      : in  std_logic;
-        imm_data     : in  std_logic_vector(15 downto 0); -- For LDI_LO / LDI_HI
+        opcode       : in  std_logic_vector(5 downto 0);    -- opcode from instruction bits
+        valid_in     : in  std_logic;                       -- if input instruction is valid
+        is_load      : in  std_logic;                       -- is a LDI_LO or LDI_HI instruction
+        imm_data     : in  std_logic_vector(15 downto 0);   -- For LDI_LO / LDI_HI
         
         -- Data Inputs (Scalars)
         op_a         : in  word_t;
@@ -104,25 +77,20 @@ entity alu_lane is
         -- Shader Uniforms & Thread ID computation inputs
         thread_id    : in  std_logic_vector(4 downto 0);  -- Current thread index (0-31)
         warp_offset  : in  std_logic_vector(31 downto 0); -- Warp base offset from CSR
-        frame_width  : in  std_logic_vector(15 downto 0);
-        frame_height : in  std_logic_vector(15 downto 0);
-        time_ms      : in  std_logic_vector(31 downto 0);
+        frame_width  : in  std_logic_vector(15 downto 0); -- frame width
+        frame_height : in  std_logic_vector(15 downto 0); -- frame height
+        time_ms      : in  std_logic_vector(31 downto 0); -- elapsed time (ms)
         
         -- Synchronized Outputs (Arrives exactly FPU_MAX_LATENCY cycles later)
         result       : out word_t;
         comp_flag    : out std_logic; -- Routes to Predicate Register File
-        valid_out    : out std_logic
+        valid_out    : out std_logic  -- result is valid
     );
 end entity;
 
 architecture rtl of alu_lane is
 
-    -- WHY FPU_MAX_LATENCY-deep pipeline: the writeback controller services both
-    -- the ALU and FPU with a single timing domain. All results must arrive on
-    -- the same latency beat so that the controller can blindly commit whatever
-    -- appears at the pipeline tail without checking which functional unit
-    -- produced it. The ALU computes in 0 real cycles, then sits in this shift
-    -- register for FPU_MAX_LATENCY cycles to honour the contract.
+    -- FPU_MAX_LATENCY-deep pipeline
     type res_pipe_t is array (1 to FPU_MAX_LATENCY) of word_t;
     signal res_pipe   : res_pipe_t := (others => (others => '0'));
     signal comp_pipe  : std_logic_vector(FPU_MAX_LATENCY downto 1) := (others => '0');
@@ -138,11 +106,6 @@ begin
     -- ========================================================================
     -- ZERO-LATENCY INTEGER COMBINATIONAL LOGIC
     -- ========================================================================
-    -- WHY combinational: integer operations (add, shift, compare) are fast
-    -- enough to complete within a single clock period on the target FPGA.
-    -- Making this a pure process (no clock) means synthesis can optimise the
-    -- logic freely and report timing on the combinational path rather than
-    -- hiding it behind a pipeline register that would cost area for no benefit.
     process(opcode, op_a, op_b, imm_data, thread_id, warp_offset, frame_width, frame_height, time_ms, is_load)
         variable a_uns : unsigned(31 downto 0);
         variable b_uns : unsigned(31 downto 0);
@@ -156,14 +119,11 @@ begin
         a_sgn := signed(op_a);
         b_sgn := signed(op_b);
 
-        -- WHY bottom 5 bits for shift amount: 2^5 = 32 covers the full range
-        -- of meaningful shifts on a 32-bit word. Using only 5 bits also
-        -- matches x86/CUDA shift semantics and avoids synthesis warnings about
-        -- shift amounts wider than the data.
+        -- Use bottom 5 bits for shift amount
         shamt := to_integer(b_uns(4 downto 0));
-        -- WHY 64-bit product: IMUL multiplies two 32-bit values; the product
-        -- can be up to 64 bits. We discard the upper 32 bits (low-32 truncation
-        -- matches C integer multiplication semantics used in shaders).
+
+        -- IMUL multiplies two 32-bit values; the product can be up to 64 bits.
+        -- We discard the upper 32 bits.
         prod  := a_uns * b_uns;
 
         -- Safe defaults: pass op_a through and clear comp. This means an
@@ -174,10 +134,10 @@ begin
         raw_comp <= '0';
 
         if is_load = '1' then
-            -- WHY separate is_load gate: the IMM instruction encoding embeds the
-            -- 4-bit write-mask in opcode[3:0], so the 6-bit opcode overlaps with
-            -- integer ALU opcodes. Using is_load as a priority override ensures
-            -- LDI instructions are never misinterpreted as integer ops.
+            -- The IMM instruction encoding embeds the 4-bit write-mask in
+            -- opcode[3:0], so the 6-bit opcode overlaps with integer ALU
+            -- opcodes. Using is_load as a priority override ensures LDI
+            -- instructions are never misinterpreted as integer ops.
             --
             -- WHY only check opcode[5:4]: bits [3:0] of the opcode carry the
             -- component write-mask (extracted from instruction[29:26] by the
@@ -209,29 +169,15 @@ begin
                 when OP_IAND => raw_res <= op_a and op_b;
                 when OP_IOR  => raw_res <= op_a or op_b;
                 when OP_IXOR => raw_res <= op_a xor op_b;
-                -- WHY three shift variants: ISHL is unsigned left, ISHR is
-                -- logical (unsigned) right, ISAR is arithmetic (signed) right.
-                -- VHDL's shift_right on a signed type produces arithmetic shift
-                -- (sign-extension), which is needed for signed division by power
-                -- of two in shader code.
                 when OP_ISHL => raw_res <= std_logic_vector(shift_left(a_uns, shamt));
                 when OP_ISHR => raw_res <= std_logic_vector(shift_right(a_uns, shamt));
                 when OP_ISAR => raw_res <= std_logic_vector(shift_right(a_sgn, shamt));
 
-                -- WHY raw_comp and not raw_res for ICMP: comparison results are
-                -- 1-bit booleans destined for the PRF, not 32-bit values for the
-                -- VRF. Separating the two output paths (raw_res -> VRF,
-                -- raw_comp -> PRF) lets the writeback controller route them
-                -- independently without inspecting the opcode again at writeback.
                 when OP_ICMP_EQ  => if a_uns = b_uns then raw_comp <= '1'; end if;
                 when OP_ICMP_SLT => if a_sgn < b_sgn then raw_comp <= '1'; end if;
                 when OP_ICMP_ULT => if a_uns < b_uns then raw_comp <= '1'; end if;
 
                 -- Compute absolute thread ID: warp_offset + lane index (0-31).
-                -- WHY here and not in the IFU: THREAD_ID is a per-lane
-                -- instruction that writes a different value into each thread's
-                -- VRF slot. The IFU would need to broadcast 32 different values;
-                -- computing it in each ALU lane is cheaper.
                 when OP_THREAD_ID =>
                     raw_res <= std_logic_vector(
                         unsigned(warp_offset) + resize(unsigned(thread_id), 32)
@@ -261,10 +207,6 @@ begin
     -- ========================================================================
     -- SEQUENTIAL PIPELINE SHIFT
     -- ========================================================================
-    -- WHY a single shift-register loop instead of individual flip-flop chains:
-    -- the generate-style for loop produces a regular, easily-retimed structure.
-    -- Synthesis can pipeline the shift register across multiple clock regions
-    -- or merge adjacent stages if timing permits.
     process(clk)
     begin
         if rising_edge(clk) then
@@ -275,9 +217,6 @@ begin
                 comp_pipe  <= (others => '0');
             else
                 -- Inject combinational result into stage 1 on every clock.
-                -- Even when valid_in='0', we still shift to keep the pipeline
-                -- flushed; the valid bit gates whether the writeback controller
-                -- acts on the data arriving at stage FPU_MAX_LATENCY.
                 valid_pipe(1) <= valid_in;
                 res_pipe(1)   <= raw_res;
                 comp_pipe(1)  <= raw_comp;
@@ -292,10 +231,7 @@ begin
         end if;
     end process;
 
-    -- WHY direct tap at FPU_MAX_LATENCY: all three outputs are wired to the
-    -- deepest stage of the shift register so they emerge simultaneously and
-    -- the writeback controller sees a coherent (result, comp_flag, valid_out)
-    -- triple without any output muxing or re-alignment logic.
+    -- Pipelined outputs
     result    <= res_pipe(FPU_MAX_LATENCY);
     comp_flag <= comp_pipe(FPU_MAX_LATENCY);
     valid_out <= valid_pipe(FPU_MAX_LATENCY);

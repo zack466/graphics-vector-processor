@@ -2,7 +2,7 @@
 -- FILE: processor_constants_pkg.vhd
 -- PACKAGE: processor_constants_pkg
 -- ============================================================================
--- PURPOSE:
+--
 --   Central repository for every magic number, encoding constant, and
 --   pre-decoded control record type used by the SIMT vector processor.
 --   Concentrating these definitions here achieves two goals:
@@ -64,11 +64,6 @@
 --                 neat 32-cycle burst rather than staggered by unit latency.
 --                 This uniform commit window simplifies the writeback mux.
 --
--- HOW TO USE THIS PACKAGE:
---   Add "use work.processor_constants_pkg.all;" after the library clause in
---   any entity that needs instruction encoding constants or control records.
---   Do not redeclare constants or add entity-local aliases — always reference
---   the canonical names from this package to avoid divergence.
 -- ============================================================================
 
 library IEEE;
@@ -100,11 +95,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- SWIZZLE MODES
     -- ========================================================================
-    -- WHY 3 bits: the swizzle field encodes only broadcast (splat) modes here,
-    -- not arbitrary per-component permutations.  Full GLSL-style .xyzw swizzles
-    -- would need 8 bits (2 bits × 4 components); restricting to splat modes
-    -- saves instruction encoding bits and covers the most common use case
-    -- (broadcasting a scalar — e.g. a uniform constant — across all vector lanes).
     constant SWIZ_PASS      : std_logic_vector(2 downto 0) := "000"; -- Passthrough (.xyzw) — identity
     constant SWIZ_X         : std_logic_vector(2 downto 0) := "100"; -- Splat X (.xxxx) — broadcast component 0
     constant SWIZ_Y         : std_logic_vector(2 downto 0) := "101"; -- Splat Y (.yyyy) — broadcast component 1
@@ -135,11 +125,6 @@ package processor_constants_pkg is
     constant OP_MOV     : std_logic_vector(5 downto 0) := "010010"; -- Register move: rd = rs1 (with write mask)
 
     -- Predicate Logic Opcodes
-    -- WHY these are FPU-type instructions (INST_TYPE_FPU) rather than ALU:
-    --   Predicate registers are 4 bits wide and share the same 9-bit address
-    --   space as VRF.  Routing PAND/POR/PXOR through the FPU pipeline (with
-    --   the is_logic_op flag) allows them to use the existing PRF writeback
-    --   path without a dedicated predicate ALU.
     constant OP_PAND    : std_logic_vector(5 downto 0) := "011000"; -- Predicate AND: pd = ps1 & ps2 (component-wise)
     constant OP_POR     : std_logic_vector(5 downto 0) := "011001"; -- Predicate OR:  pd = ps1 | ps2
     constant OP_PXOR    : std_logic_vector(5 downto 0) := "011010"; -- Predicate XOR: pd = ps1 ^ ps2
@@ -147,16 +132,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- SYSTEM OPCODES [31:26] (When Type == 0110)
     -- ========================================================================
-    -- WHY system opcodes cluster at the top of the opcode space ("11xxxx"):
-    --   Setting bits[31:30]="11" (the two MSBs of the opcode field) makes it
-    --   visually obvious during instruction hex dumps that a word is a system
-    --   instruction.  It also leaves the lower half of the space free for future
-    --   SYS-type instructions that are not halt/interrupt operations.
-    -- WHY OP_FLUSH goes through the issuer (EXEC_WAIT path) rather than acting
-    --   immediately: FLUSH must send a sentinel token through the entire 28-stage
-    --   FPU pipeline to ensure all in-flight results have committed to the VRF
-    --   before the barrier completes.  The issuer + exec_flush_active mechanism
-    --   implements this without a dedicated stall counter in the FSM.
     constant OP_FLUSH   : std_logic_vector(5 downto 0) := "111110"; -- Pipeline memory barrier: drain all in-flight ops
     constant OP_RETURN  : std_logic_vector(5 downto 0) := "111111"; -- End of kernel: halt processor (csr_run <= 0)
     constant OP_BREAK   : std_logic_vector(5 downto 0) := "111100"; -- Debug breakpoint: halt + set break_hit flag
@@ -165,21 +140,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- CONTROL FLOW OPCODES [31:26] (When Type == 0001)
     -- ========================================================================
-    -- WHY CTRL instructions go directly to ADVANCE_PC (no issuer involvement):
-    --   Branch decisions are warp-wide, not per-thread.  The IFU computes the
-    --   next PC combinationally from active_pc_ctrl during ADVANCE_PC.  There
-    --   is nothing for the issuer or execution unit to do for CTRL instructions.
-    -- WHY OP_BRA_DIV (divergent branch) is distinct from OP_BRA_Z / OP_BRA_NZ:
-    --   A divergent branch pushes the "true path" thread mask onto the SIMT
-    --   divergence stack and continues with the "false path" mask.  BRA_Z/NZ
-    --   are convergent branches that only need a single taken/not-taken bit;
-    --   they do not interact with the divergence stack.
-    -- WHY OP_SSY / OP_SYNC exist as separate instructions:
-    --   SSY (Set Sync) pushes the post-divergence meetup PC onto the stack so
-    --   that both divergent paths know where to converge.  SYNC (Synchronize)
-    --   pops the stack and resumes with the union of both thread masks.
-    --   Having explicit stack push/pop instructions allows software to control
-    --   nesting depth and meetup points precisely.
     constant OP_JMP     : std_logic_vector(5 downto 0) := "110000"; -- Unconditional jump to target_addr
     constant OP_BRA_Z   : std_logic_vector(5 downto 0) := "110001"; -- Branch if warp predicate evaluates to zero
     constant OP_BRA_NZ  : std_logic_vector(5 downto 0) := "110010"; -- Branch if warp predicate evaluates to non-zero
@@ -194,11 +154,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- WRITEBACK MUX SELECTORS
     -- ========================================================================
-    -- WHY three selectors (not a flag per unit): the three execution pipelines
-    -- (FPU, RED, ALU) have different output bus widths and latency padding.
-    -- A 2-bit mux selector is cheaper to pipeline through FPU_MAX_LATENCY
-    -- stages than three individual enable bits, and prevents two units from
-    -- simultaneously claiming the writeback port.
     constant WB_MUX_FPU : std_logic_vector(1 downto 0) := "00"; -- Route FPU output to VRF
     constant WB_MUX_RED : std_logic_vector(1 downto 0) := "01"; -- Route reduction unit output to VRF
     constant WB_MUX_ALU : std_logic_vector(1 downto 0) := "10"; -- Route ALU output to VRF
@@ -206,14 +161,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- REDUCTION UNIT MODES (Used when Type == 0010)
     -- ========================================================================
-    -- WHY four modes rather than a general multiply-accumulate:
-    --   These four cover the most common inner-product operations in graphics
-    --   and signal processing shaders (dot product for lighting, squared
-    --   magnitude for normalization, component sum for area integrals, absolute
-    --   sum for Manhattan distance).  A general MACC would require a separate
-    --   multiplier input mux and increase the critical path of the reduction
-    --   pipeline.  The four fixed modes are implemented efficiently in Altera's
-    --   dot-product IP core.
     constant RED_MODE_DOT     : std_logic_vector(1 downto 0) := "00"; -- Dot product: sum(rs1[i] * rs2[i])
     constant RED_MODE_SQ_MAG  : std_logic_vector(1 downto 0) := "01"; -- Squared magnitude: sum(rs1[i] * rs1[i])
     constant RED_MODE_SUM     : std_logic_vector(1 downto 0) := "10"; -- Component sum: sum(rs1[i])
@@ -222,24 +169,11 @@ package processor_constants_pkg is
     -- ========================================================================
     -- CALL STACK DEPTH
     -- ========================================================================
-    -- Maximum number of nested function calls supported by the per-warp call
-    -- stack in the IFU.  8 levels is sufficient for typical shader workloads.
     constant CALL_STACK_DEPTH : integer := 8;
 
     -- ========================================================================
     -- CONDENSED BRANCH TYPES & PREDICATE MODIFIERS
     -- ========================================================================
-    -- WHY condensed branch types (BR_*) in addition to the raw OP_* opcodes:
-    --   The IFU needs to evaluate branch conditions and update the PC using a
-    --   simple case statement.  Comparing against 6-bit opcodes would give a
-    --   large case with many unused values.  The decoder pre-translates each
-    --   CTRL opcode into a 4-bit BR_* code stored in pc_ctrl_t.branch_type,
-    --   keeping the IFU's combinational logic small and fast on the critical path.
-    -- WHY BR_NONE = "0000": makes the default (reset) state of pc_ctrl_t a
-    --   no-branch, which is correct for sequential execution and for non-CTRL
-    --   instructions whose dec_pc fields are irrelevant.
-    -- WHY 4 bits: the 7 original codes plus 4 new call-stack codes (BRA_L,
-    --   BRA_X, PUSH_L, POP_L) require 11 values, needing a 4-bit field.
     constant BR_NONE    : std_logic_vector(3 downto 0) := "0000"; -- No branch; PC increments normally
     constant BR_JMP     : std_logic_vector(3 downto 0) := "0001"; -- Unconditional jump
     constant BR_BRA_Z   : std_logic_vector(3 downto 0) := "0010"; -- Branch if predicate is zero
@@ -252,12 +186,7 @@ package processor_constants_pkg is
     constant BR_PUSH_L  : std_logic_vector(3 downto 0) := "1001"; -- Push link register onto call stack
     constant BR_POP_L   : std_logic_vector(3 downto 0) := "1010"; -- Pop call stack into link register
 
-    -- WHY four predicate modifiers rather than just ANY/ALL:
-    --   Shaders commonly need to branch on a single specific predicate component
-    --   (e.g. "if alpha > 0" = PRED_MOD_A on the alpha component) without
-    --   requiring all four components to meet the condition.  X and A
-    --   (component 0 and component 3) are the most useful single-component
-    --   cases for scalar and alpha conditions respectively.
+    -- Predicate modifiers
     constant PRED_MOD_ANY : std_logic_vector(1 downto 0) := "00"; -- Branch taken if any component of predicate == 1
     constant PRED_MOD_ALL : std_logic_vector(1 downto 0) := "01"; -- Branch taken if all components of predicate == 1
     constant PRED_MOD_X   : std_logic_vector(1 downto 0) := "10"; -- Branch taken if X (component 0) of predicate == 1
@@ -266,18 +195,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- INTEGER ALU OPCODES [31:26] (When Type == 0011)
     -- ========================================================================
-    -- WHY OP_IADD = "000000" collides with OP_NOP: the INST_TYPE field (bits[3:0])
-    -- disambiguates — "000000" with INST_TYPE_ALU is IADD; with INST_TYPE_FPU
-    -- it is NOP.  The ALU and FPU are separate functional units, so the same
-    -- numeric opcode is safe to reuse across types.
-    -- WHY OP_ISHL/ISHR (logical shift) and OP_ISAR (arithmetic shift right)
-    -- are separate: logical shift fills vacated bits with 0; arithmetic shift
-    -- right sign-extends, which is needed for signed integer division by powers
-    -- of two.  Keeping them as separate opcodes avoids a sign/unsigned flag bit.
-    -- WHY OP_THREAD_ID is an ALU instruction: it produces a per-thread integer
-    -- result (warp_offset + thread_id) that belongs in the VRF as an integer,
-    -- not a float.  Routing it through the ALU pipeline (not FPU) avoids an
-    -- unnecessary int-to-float conversion.
     constant OP_IADD      : std_logic_vector(5 downto 0) := "000000"; -- Integer add: rd = rs1 + rs2
     constant OP_ISUB      : std_logic_vector(5 downto 0) := "000001"; -- Integer subtract: rd = rs1 - rs2
     constant OP_IAND      : std_logic_vector(5 downto 0) := "000010"; -- Bitwise AND
@@ -301,76 +218,13 @@ package processor_constants_pkg is
     -- ========================================================================
     -- IMMEDIATE OPCODES (When Type == INST_TYPE_IMM = "0100")
     -- ========================================================================
-    -- WHY two instructions (LDI_LO / LDI_HI) rather than one 32-bit load:
-    --   The instruction word is only 32 bits wide.  After reserving 4 bits for
-    --   INST_TYPE, 4 for the destination register, 16 for the immediate value,
-    --   and 4 for the component write-mask, only 4 bits remain for an opcode —
-    --   enough to encode two variants (LO / HI).  LDI_LO loads the lower 16 bits
-    --   of a register; LDI_HI loads the upper 16 bits while preserving the lower.
-    --   Together they allow any 32-bit constant in two instructions.
-    --
-    -- IMM instruction word layout:
-    --   [31:30] = LDI sub-opcode  (2 bits: "00" = LDI_LO, "01" = LDI_HI)
-    --   [29:26] = write_mask      (4 bits: W Z Y X, same convention as ALU/FPU)
-    --   [25:10] = imm16           (16-bit immediate value)
-    --   [9:8]   = reserved
-    --   [7:4]   = rd              (4-bit destination register index)
-    --   [3:0]   = inst_type       (INST_TYPE_IMM = "0100")
-    --
-    -- The 6-bit internal_opcode seen by the ALU lane equals instruction[31:26]:
-    --   opcode[5:4] = LDI sub-op   (determines LO vs HI path in alu_lane)
-    --   opcode[3:0] = write_mask   (carried along; alu_lane ignores these bits)
-    --
-    -- These canonical constants have write_mask = "0000" (all-zero nibble).
-    -- The assembler ORs the actual 4-bit mask from the destination operand.
     constant OP_LDI_LO  : std_logic_vector(5 downto 0) := "000000"; -- LDI_LO: sub-op bits[5:4]="00"
     constant OP_LDI_HI  : std_logic_vector(5 downto 0) := "010000"; -- LDI_HI: sub-op bits[5:4]="01"
 
     -- ========================================================================
-    -- CSR (CONTROL STATUS REGISTER) ADDRESS MAP (3-Bit)
-    -- ========================================================================
-    -- WHY a 3-bit address space (8 registers): this maps directly to Quartus
-    -- Platform Designer's Avalon-MM slave port, which uses a word-address
-    -- register select.  3 bits gives 8 registers; the current design uses 7.
-    -- Increasing to 4 bits would require regenerating the Platform Designer
-    -- component; 3 bits is sufficient for the current feature set.
-    -- WHY W1C (write-1-to-clear) for IRQ_ACK and BREAK: allows the host to
-    -- atomically clear a flag in a single write without needing a prior read.
-    -- This prevents a race condition where a new event could set the flag
-    -- between a read and a write-0 operation.
-    constant CSR_ADDR_RUN         : std_logic_vector(2 downto 0) := "000"; -- [R/W]   bit[0]: 1=run, 0=halt
-    constant CSR_ADDR_START_PC    : std_logic_vector(2 downto 0) := "001"; -- [W]     bits[15:0]: force PC to this address on next ADVANCE_PC
-    constant CSR_ADDR_IRQ_ACK     : std_logic_vector(2 downto 0) := "010"; -- [R/W1C] bit[0]: read=irq_pending, write-1-to-clear
-    constant CSR_ADDR_BREAK       : std_logic_vector(2 downto 0) := "011"; -- [R/W1C] bit[0]: read=break_hit, write-1-to-clear
-    constant CSR_ADDR_CURR_PC     : std_logic_vector(2 downto 0) := "100"; -- [R]     bits[15:0]: current IFU program counter
-    constant CSR_ADDR_EXEC_MASK   : std_logic_vector(2 downto 0) := "101"; -- [R]     bits[31:0]: active thread execution mask from IFU
-    constant CSR_ADDR_WARP_OFFSET : std_logic_vector(2 downto 0) := "110"; -- [R/W]   bits[31:0]: base thread ID added by THREAD_ID instruction
-
-    -- ========================================================================
     -- CONTROL RECORDS (Expanded explicitly to remove downstream decoding)
     -- ========================================================================
-    -- WHY use records instead of raw std_logic_vector buses:
-    --   Passing decoded control fields as named record members means the
-    --   compiler catches any field mismatch (wrong width, wrong name) at
-    --   elaboration time.  A flat slv bus would require every connected entity
-    --   to know which bits carry which field — a fragile convention that breaks
-    --   silently when the encoding changes.
-    -- WHY separate records per instruction class rather than one big record:
-    --   Different instruction classes encode the same bit positions differently.
-    --   For example, FPU has three source registers while ALU has two; MEM has
-    --   a base address field where ALU has an immediate.  One unified record
-    --   would need all fields to be always present, wasting logic when unused
-    --   fields must be driven to constants.  Separate records let the decoder
-    --   express exactly what each class needs; the top-level mux selects the
-    --   right one before the issuer.
-
     -- fpu_ctrl_t: decoded fields for INST_TYPE_FPU instructions.
-    -- cmp_invert: when '1', the comparison result is logically inverted before
-    --   writing to the predicate register (implements >=, !=, etc.).
-    -- cmp_swap: when '1', operands rs1 and rs2 are swapped before comparison
-    --   (implements >, <= without needing separate opcodes for each direction).
-    -- is_logic_op: distinguishes PAND/POR/PXOR (predicate ops) from arithmetic
-    --   FPU ops so the execution unit can route to the predicate write path.
     type fpu_ctrl_t is record
         opcode          : std_logic_vector(5 downto 0);
         rs1_addr_local  : std_logic_vector(3 downto 0);
@@ -390,12 +244,6 @@ package processor_constants_pkg is
     end record;
 
     -- red_ctrl_t: decoded fields for INST_TYPE_RED (reduction) instructions.
-    -- WHY no rs3 field: the reduction unit only accumulates rs1 and rs2; it
-    --   does not support a third source operand.
-    -- WHY red_mask is separate from write_mask: write_mask controls which VRF
-    --   components are written; red_mask controls which vector components are
-    --   included in the reduction accumulation (e.g. 3-component vs 4-component
-    --   dot product).
     type red_ctrl_t is record
         rs1_addr_local  : std_logic_vector(3 downto 0);
         rs2_addr_local  : std_logic_vector(3 downto 0);
@@ -409,12 +257,6 @@ package processor_constants_pkg is
     end record;
 
     -- pc_ctrl_t: decoded fields for INST_TYPE_CTRL instructions.
-    -- This record is evaluated by the IFU during ADVANCE_PC to compute the
-    -- next PC.  It is also injected by the processor top level (active_pc_ctrl)
-    -- when do_force_pc='1' to implement host-driven PC repositioning.
-    -- predicate_sel: which predicate register (by local index) holds the
-    --   branch condition; the PRF evaluates it combinationally into prf_mask_out.
-    -- predicate_mod: PRED_MOD_* constant controlling the collapse function.
     type pc_ctrl_t is record
         branch_type     : std_logic_vector(3 downto 0);  -- BR_* constant (4-bit; supports 11 branch types)
         target_addr     : std_logic_vector(15 downto 0); -- Instruction-word-encoded branch target (PC-relative or absolute)
@@ -423,13 +265,6 @@ package processor_constants_pkg is
     end record;
 
     -- alu_ctrl_t: decoded fields for INST_TYPE_ALU and INST_TYPE_IMM.
-    -- WHY no rs3 field: the integer ALU is a 2-source unit; no ALU instruction
-    --   uses a third register operand.
-    -- is_load: '1' for INST_TYPE_IMM instructions.  When set, the execution
-    --   unit substitutes imm_data for the rs2 read value on the operand path,
-    --   making the 16-bit immediate act as a literal second operand.
-    -- imm_data: 16-bit immediate from the instruction word; only valid when
-    --   INST_TYPE_IMM; zero for INST_TYPE_ALU.
     type alu_ctrl_t is record
         opcode          : std_logic_vector(5 downto 0);
         rs1_addr_local  : std_logic_vector(3 downto 0);
@@ -448,16 +283,12 @@ package processor_constants_pkg is
     -- ========================================================================
     -- UNIFIED EXECUTION PIPELINE RECORD
     -- ========================================================================
-    -- WHY exec_ctrl_t is a superset of both fpu_ctrl_t and alu_ctrl_t fields:
-    --   The instruction_issue entity and execution_unit share a single record
-    --   type for simplicity.  The decoder-mux in the processor top level
-    --   populates only the relevant fields for each instruction class; the
-    --   unused fields default to safe values ('0' / all-zeros).  This avoids
-    --   the need for polymorphism or multiple port map variants on the issuer.
-    -- WHY rs*_addr_local fields exist even though the issuer expands them to
-    --   global addresses: the issuer reads these local indices to compute the
-    --   global {thread_id, reg_idx} address.  After the issuer, local addresses
-    --   are no longer needed (iss_exec_record zeroes them out).
+    -- exec_ctrl_t is a superset of both fpu_ctrl_t and alu_ctrl_t fields:
+    -- The instruction_issue entity and execution_unit share a single record
+    -- type for simplicity. The decoder-mux in the processor top level
+    -- populates only the relevant fields for each instruction class; the
+    -- unused fields default to safe values ('0' / all-zeros). This avoids
+    -- the need for polymorphism or multiple port map variants on the issuer.
     type exec_ctrl_t is record
         opcode          : std_logic_vector(5 downto 0);
         rs1_addr_local  : std_logic_vector(3 downto 0);
@@ -481,13 +312,6 @@ package processor_constants_pkg is
     -- ========================================================================
     -- HARDWARE LATENCY CONSTANTS
     -- ========================================================================
-    -- WHY these are constants in the package rather than local generics on each
-    -- entity: the latency values must be consistent between the execution unit
-    -- (which builds the delay-line padding) and the FSM/issuer (which determine
-    -- how long to wait in EXEC_WAIT).  A package constant is a single source of
-    -- truth; if the IP core configuration changes (e.g., pipeline stages are
-    -- adjusted in Quartus IP parameter editor), only this file needs updating.
-    --
     -- CRITICAL: Each constant must exactly match the pipeline depth reported by
     -- the corresponding Altera/Intel Floating-Point IP core at synthesis.  If a
     -- core's latency changes after regeneration, the writeback will be delayed
@@ -513,10 +337,7 @@ package processor_constants_pkg is
 
     -- FPU_MAX_LATENCY: The normalizing pipeline depth (length of slowest
     -- operation). Every other unit has a shift-register delay appended to pad
-    -- its output to this same latency.  This ensures that for any single
-    -- instruction, all 32 thread results arrive at the VRF write port in
-    -- a contiguous 32-cycle burst starting exactly FPU_MAX_LATENCY cycles
-    -- after issue of thread 0.
+    -- its output to this same latency.
     constant FPU_MAX_LATENCY : integer := LAT_FSIN; -- Tied to bottleneck op; update if IP changes
 
 end package;

@@ -23,14 +23,14 @@ architecture sim of tb_issuer_writeback_integration is
     -- ========================================================================
     signal exec_ctrl_in    : exec_ctrl_t;
     signal valid_in        : std_logic := '0';
-    
+
     signal current_thread  : std_logic_vector(4 downto 0);
     signal iss_rs1_addr    : std_logic_vector(8 downto 0);
     signal iss_rs2_addr    : std_logic_vector(8 downto 0);
     signal iss_rs3_addr    : std_logic_vector(8 downto 0);
     signal iss_rd_addr     : std_logic_vector(8 downto 0);
     signal iss_valid       : std_logic;
-    
+
     -- The new unified execution control record from the issuer
     signal iss_exec_record : exec_ctrl_t;
 
@@ -39,17 +39,17 @@ architecture sim of tb_issuer_writeback_integration is
     -- ========================================================================
     signal vrf_rs1_data, vrf_rs2_data, vrf_rs3_data : vector_t;
     signal prf_rs1_data, prf_rs2_data               : std_logic_vector(3 downto 0);
-    
+
     signal s1_opcode       : std_logic_vector(5 downto 0);
     signal s1_valid        : std_logic;
     signal s1_cmp_inv      : std_logic;
     signal s1_cmp_swap     : std_logic;
     signal s1_is_logic_op  : std_logic;
-    
+
     -- Stage 1 Immediate Load signals
     signal s1_is_load      : std_logic := '0';
     signal s1_imm_data     : std_logic_vector(15 downto 0) := (others => '0');
-    
+
     signal s1_swiz_a       : swizzle_sel_t;
     signal s1_swiz_b       : swizzle_sel_t;
     signal s1_prf_rs1      : std_logic_vector(3 downto 0) := "0000";
@@ -61,7 +61,7 @@ architecture sim of tb_issuer_writeback_integration is
     signal s1_wb_mux       : std_logic_vector(1 downto 0) := "00";
     signal s1_vrf_we       : std_logic := '0';
     signal s1_prf_we       : std_logic := '0';
-    
+
     signal swiz_a_out, swiz_b_out                   : vector_t;
 
     -- ========================================================================
@@ -69,11 +69,11 @@ architecture sim of tb_issuer_writeback_integration is
     -- ========================================================================
     signal fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_w : word_t;
     signal comp_flag_x, comp_flag_y, comp_flag_z, comp_flag_w : std_logic;
-    signal fpu_valid_x : std_logic; 
-    
+    signal fpu_valid_x : std_logic;
+
     signal alu_res     : word_t;
     signal alu_valid   : std_logic;
-    
+
     signal vrf_wb_data : vector_t;
     signal prf_wb_data : std_logic_vector(3 downto 0);
 
@@ -84,16 +84,41 @@ architecture sim of tb_issuer_writeback_integration is
     signal wb_prf_we   : std_logic;
 
     -- ========================================================================
-    -- MCU / IFU VERIFICATION PORTS
+    -- TESTBENCH VRF ACCESS (replaces the old MCU port)
     -- ========================================================================
-    signal mcu_rd_addr, mcu_wr_addr : std_logic_vector(8 downto 0) := (others => '0');
-    signal mcu_rd_data, mcu_wr_data : vector_t := (others => (others => '0'));
-    signal mcu_we                   : std_logic := '0';
-    signal mcu_mask                 : std_logic_vector(3 downto 0) := "0000";
-    
+    -- The VRF no longer has a dedicated MCU port, so the TB muxes its
+    -- initialization writes and verification reads onto Port A:
+    --   * tb_init_mode  = '1' : TB drives VRF write port directly.
+    --   * tb_verify_mode= '1' : TB drives VRF rs1 read port directly; the
+    --                           returned vrf_rs1_data is used for verification.
+    -- During normal execution both modes are '0' and the issuer / writeback
+    -- controller own Port A as usual.
+    signal tb_init_mode   : std_logic := '0';
+    signal tb_verify_mode : std_logic := '0';
+
+    -- TB-driven write stimulus (init mode)
+    signal tb_wr_addr  : std_logic_vector(8 downto 0) := (others => '0');
+    signal tb_wr_data  : vector_t := (others => (others => '0'));
+    signal tb_we       : std_logic := '0';
+    signal tb_wr_mask  : std_logic_vector(3 downto 0) := "0000";
+
+    -- TB-driven read stimulus (verify mode)
+    signal tb_rd_addr  : std_logic_vector(8 downto 0) := (others => '0');
+
+    -- Muxed signals that actually drive the VRF Port A
+    signal vrf_wr_addr : std_logic_vector(8 downto 0);
+    signal vrf_wr_data : vector_t;
+    signal vrf_we      : std_logic;
+    signal vrf_wr_mask : std_logic_vector(3 downto 0);
+    signal vrf_rs1_addr_muxed : std_logic_vector(8 downto 0);
+
+    -- IFU verification ports (unchanged)
     signal ifu_pred_sel : std_logic_vector(3 downto 0) := "0000";
     signal ifu_pred_mod : std_logic_vector(1 downto 0) := "00";
     signal ifu_mask_out : std_logic_vector(31 downto 0);
+
+    -- Convenience alias: verification reads come back on rs1_data.
+    alias  tb_rd_data : vector_t is vrf_rs1_data;
 
 begin
 
@@ -104,16 +129,29 @@ begin
     end process;
 
     -- ========================================================================
+    -- PORT A MUXES
+    -- ========================================================================
+    -- Write: TB overrides writeback controller in init mode
+    vrf_wr_addr <= tb_wr_addr  when tb_init_mode = '1' else wb_rd_addr;
+    vrf_wr_data <= tb_wr_data  when tb_init_mode = '1' else vrf_wb_data;
+    vrf_we      <= tb_we       when tb_init_mode = '1' else wb_vrf_we;
+    vrf_wr_mask <= tb_wr_mask  when tb_init_mode = '1' else wb_mask;
+
+    -- Read (rs1 only): TB overrides issuer in verify mode.  rs2/rs3 stay wired
+    -- to the issuer; they are don't-cares while the pipeline is idle.
+    vrf_rs1_addr_muxed <= tb_rd_addr when tb_verify_mode = '1' else iss_rs1_addr;
+
+    -- ========================================================================
     -- INSTANTIATIONS
     -- ========================================================================
     u_issuer: entity work.instruction_issue
         generic map ( THREAD_WIDTH => 5, REG_WIDTH => 4 )
         port map (
-            clk => clk, reset => reset, 
-            exec_ctrl_in => exec_ctrl_in, 
+            clk => clk, reset => reset,
+            exec_ctrl_in => exec_ctrl_in,
             valid_in => valid_in,
-            current_thread => current_thread, 
-            rs1_addr_global => iss_rs1_addr, rs2_addr_global => iss_rs2_addr, 
+            current_thread => current_thread,
+            rs1_addr_global => iss_rs1_addr, rs2_addr_global => iss_rs2_addr,
             rs3_addr_global => iss_rs3_addr, rd_addr_global => iss_rd_addr,
             exec_ctrl_out => iss_exec_record,
             issue_valid => iss_valid
@@ -138,13 +176,16 @@ begin
         generic map ( ADDR_WIDTH => 9 )
         port map (
             clk => clk, reset => reset,
-            rs1_addr => iss_rs1_addr, rs2_addr => iss_rs2_addr, rs3_addr => iss_rs3_addr,
-            rs1_data => vrf_rs1_data, rs2_data => vrf_rs2_data, rs3_data => vrf_rs3_data,
-            wr_addr_A => wb_rd_addr, wr_data_A => vrf_wb_data,
-            write_mask_A => wb_mask, we_A => wb_vrf_we,
-            rd_addr_B => mcu_rd_addr, rd_data_B => mcu_rd_data,
-            wr_addr_B => mcu_wr_addr, wr_data_B => mcu_wr_data,
-            write_mask_B => mcu_mask, we_B => mcu_we
+            rs1_addr => vrf_rs1_addr_muxed,
+            rs2_addr => iss_rs2_addr,
+            rs3_addr => iss_rs3_addr,
+            rs1_data => vrf_rs1_data,
+            rs2_data => vrf_rs2_data,
+            rs3_data => vrf_rs3_data,
+            wr_addr_A    => vrf_wr_addr,
+            wr_data_A    => vrf_wr_data,
+            write_mask_A => vrf_wr_mask,
+            we_A         => vrf_we
         );
 
     u_prf: entity work.predicate_reg_file
@@ -161,12 +202,12 @@ begin
     u_swizzle: entity work.swizzle_network
         port map (
             is_logic_op => s1_is_logic_op,
-            vec_a_in    => vrf_rs1_data, 
+            vec_a_in    => vrf_rs1_data,
             prf_a_in    => s1_prf_rs1,
             swiz_sel_a  => s1_swiz_a,
             vec_a_out   => swiz_a_out,
-            
-            vec_b_in    => vrf_rs2_data, 
+
+            vec_b_in    => vrf_rs2_data,
             prf_b_in    => s1_prf_rs2,
             swiz_sel_b  => s1_swiz_b,
             vec_b_out   => swiz_b_out
@@ -219,10 +260,10 @@ begin
                 s1_cmp_inv     <= iss_exec_record.cmp_invert;
                 s1_cmp_swap    <= iss_exec_record.cmp_swap;
                 s1_is_logic_op <= iss_exec_record.is_logic_op;
-                
+
                 s1_is_load     <= iss_exec_record.is_load;
                 s1_imm_data    <= iss_exec_record.imm_data;
-                
+
                 s1_swiz_a      <= iss_exec_record.swiz_sel_a;
                 s1_swiz_b      <= iss_exec_record.swiz_sel_b;
                 s1_prf_rs1     <= prf_rs1_data;
@@ -246,15 +287,15 @@ begin
         -- Base Initialization using exec_ctrl_t
         exec_ctrl_in.opcode <= OP_NOP; exec_ctrl_in.rs1_addr_local <= "0000"; exec_ctrl_in.rs2_addr_local <= "0000";
         exec_ctrl_in.rs3_addr_local <= "0000"; exec_ctrl_in.rd_addr_local <= "0000"; exec_ctrl_in.write_mask <= "0000";
-        
+
         exec_ctrl_in.swiz_sel_a <= SWIZ_PASS;
         exec_ctrl_in.swiz_sel_b <= SWIZ_PASS;
         exec_ctrl_in.swiz_sel_c <= SWIZ_PASS;
-        
-        exec_ctrl_in.wb_mux_sel <= WB_MUX_FPU; 
+
+        exec_ctrl_in.wb_mux_sel <= WB_MUX_FPU;
         exec_ctrl_in.cmp_invert <= '0'; exec_ctrl_in.cmp_swap <= '0';
         exec_ctrl_in.is_logic_op <= '0'; exec_ctrl_in.vrf_we <= '0'; exec_ctrl_in.prf_we <= '0';
-        exec_ctrl_in.is_load    <= '0'; 
+        exec_ctrl_in.is_load    <= '0';
         exec_ctrl_in.imm_data   <= (others => '0');
 
         wait until rising_edge(clk);
@@ -262,28 +303,30 @@ begin
         wait until rising_edge(clk);
 
         -- ====================================================================
-        -- PHASE 1: Load Initial Data via MCU Port
+        -- PHASE 1: Load Initial Data via TB-driven Port A writes
         -- ====================================================================
         report ">> PHASE 1: Initializing Vector Registers (v0=Floats, v1=10.0, v3=Integers)";
+        tb_init_mode <= '1';
         for i in 0 to 31 loop
-            mcu_wr_addr    <= std_logic_vector(to_unsigned(i, 5)) & "0000";
-            mcu_wr_data(0) <= to_slv(to_float(real(i * 4 + 0))); 
-            mcu_wr_data(1) <= to_slv(to_float(real(i * 4 + 1))); 
-            mcu_wr_data(2) <= to_slv(to_float(real(i * 4 + 2))); 
-            mcu_wr_data(3) <= to_slv(to_float(real(i * 4 + 3))); 
-            mcu_mask       <= "1111";
-            mcu_we         <= '1';
-            wait until rising_edge(clk);
-            
-            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0001";
-            mcu_wr_data <= (others => x"41200000"); -- Float representation of 10.0
+            tb_wr_addr    <= std_logic_vector(to_unsigned(i, 5)) & "0000";
+            tb_wr_data(0) <= to_slv(to_float(real(i * 4 + 0)));
+            tb_wr_data(1) <= to_slv(to_float(real(i * 4 + 1)));
+            tb_wr_data(2) <= to_slv(to_float(real(i * 4 + 2)));
+            tb_wr_data(3) <= to_slv(to_float(real(i * 4 + 3)));
+            tb_wr_mask    <= "1111";
+            tb_we         <= '1';
             wait until rising_edge(clk);
 
-            mcu_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
-            mcu_wr_data <= (others => std_logic_vector(to_unsigned(i * 2, 32))); 
+            tb_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0001";
+            tb_wr_data <= (others => x"41200000"); -- Float representation of 10.0
+            wait until rising_edge(clk);
+
+            tb_wr_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
+            tb_wr_data <= (others => std_logic_vector(to_unsigned(i * 2, 32)));
             wait until rising_edge(clk);
         end loop;
-        mcu_we <= '0';
+        tb_we        <= '0';
+        tb_init_mode <= '0';
 
         -- ====================================================================
         -- PHASE 2: Issue SIMT Math Instruction (FPU)
@@ -294,15 +337,15 @@ begin
         exec_ctrl_in.rs2_addr_local <= "0001"; -- v1
         exec_ctrl_in.rd_addr_local  <= "0010"; -- Store in v2
         exec_ctrl_in.write_mask     <= "1111";
-        
+
         exec_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
         exec_ctrl_in.vrf_we         <= '1';
         exec_ctrl_in.prf_we         <= '0';
         exec_ctrl_in.is_logic_op    <= '0';
-        
+
         valid_in <= '1';
         wait until rising_edge(clk);
-        valid_in <= '0'; 
+        valid_in <= '0';
 
         report ">> Waiting for FADD pipelined execution to complete...";
         for i in 1 to 75 loop wait until rising_edge(clk); end loop;
@@ -316,15 +359,15 @@ begin
         exec_ctrl_in.rs2_addr_local <= "0001"; -- v1
         exec_ctrl_in.rd_addr_local  <= "0000"; -- Store in predicate p0
         exec_ctrl_in.write_mask     <= "1111";
-        
+
         exec_ctrl_in.wb_mux_sel     <= WB_MUX_FPU;
         exec_ctrl_in.vrf_we         <= '0';
         exec_ctrl_in.prf_we         <= '1';
         exec_ctrl_in.is_logic_op    <= '0';
-        
+
         valid_in <= '1';
         wait until rising_edge(clk);
-        valid_in <= '0'; 
+        valid_in <= '0';
 
         report ">> Waiting for FCMP pipelined execution to complete...";
         for i in 1 to 75 loop wait until rising_edge(clk); end loop;
@@ -333,17 +376,19 @@ begin
         -- PHASE 4: Verify Vector Reg File (Math Results)
         -- ====================================================================
         report ">> PHASE 4: Verifying VRF Writeback Results (FPU)";
+        tb_verify_mode <= '1';
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0010";
-            wait until rising_edge(clk); 
-            wait until falling_edge(clk); 
-            
-            assert to_real(to_float(mcu_rd_data(0))) = real(i * 4 + 0) + 10.0 report "Thread " & integer'image(i) & " X mismatch!" severity error;
-            assert to_real(to_float(mcu_rd_data(1))) = real(i * 4 + 1) + 10.0 report "Thread " & integer'image(i) & " Y mismatch!" severity error;
-            assert to_real(to_float(mcu_rd_data(2))) = real(i * 4 + 2) + 10.0 report "Thread " & integer'image(i) & " Z mismatch!" severity error;
-            assert to_real(to_float(mcu_rd_data(3))) = real(i * 4 + 3) + 10.0 report "Thread " & integer'image(i) & " W mismatch!" severity error;
+            tb_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0010";
+            wait until rising_edge(clk);
+            wait until falling_edge(clk);
+
+            assert to_real(to_float(tb_rd_data(0))) = real(i * 4 + 0) + 10.0 report "Thread " & integer'image(i) & " X mismatch!" severity error;
+            assert to_real(to_float(tb_rd_data(1))) = real(i * 4 + 1) + 10.0 report "Thread " & integer'image(i) & " Y mismatch!" severity error;
+            assert to_real(to_float(tb_rd_data(2))) = real(i * 4 + 2) + 10.0 report "Thread " & integer'image(i) & " Z mismatch!" severity error;
+            assert to_real(to_float(tb_rd_data(3))) = real(i * 4 + 3) + 10.0 report "Thread " & integer'image(i) & " W mismatch!" severity error;
             wait until rising_edge(clk);
         end loop;
+        tb_verify_mode <= '0';
 
         -- ====================================================================
         -- PHASE 5: Verify Predicate Reg File & IFU Collapsing
@@ -376,15 +421,15 @@ begin
         exec_ctrl_in.rs2_addr_local <= "0011"; -- v3
         exec_ctrl_in.rd_addr_local  <= "0011"; -- Overwrite v3
         exec_ctrl_in.write_mask     <= "0001"; -- Scalar write to X only
-        
+
         exec_ctrl_in.wb_mux_sel     <= WB_MUX_ALU;
         exec_ctrl_in.vrf_we         <= '1';
         exec_ctrl_in.prf_we         <= '0';
         exec_ctrl_in.is_logic_op    <= '0';
-        
+
         valid_in <= '1';
         wait until rising_edge(clk);
-        valid_in <= '0'; 
+        valid_in <= '0';
 
         report ">> Waiting for IADD pipelined execution to complete...";
         for i in 1 to 75 loop wait until rising_edge(clk); end loop;
@@ -393,15 +438,17 @@ begin
         -- PHASE 7: Verify Vector Reg File (ALU Results)
         -- ====================================================================
         report ">> PHASE 7: Verifying VRF Writeback Results (ALU)";
+        tb_verify_mode <= '1';
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
-            wait until rising_edge(clk); 
-            wait until falling_edge(clk); 
-            
-            assert to_integer(unsigned(mcu_rd_data(0))) = i * 4 report "Thread " & integer'image(i) & " ALU X mismatch!" severity error;
-            
+            tb_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
+            wait until rising_edge(clk);
+            wait until falling_edge(clk);
+
+            assert to_integer(unsigned(tb_rd_data(0))) = i * 4 report "Thread " & integer'image(i) & " ALU X mismatch!" severity error;
+
             wait until rising_edge(clk);
         end loop;
+        tb_verify_mode <= '0';
 
         -- ====================================================================
         -- PHASE 8: Issue SIMT Immediate Load (v3.y = x"0000BEEF")
@@ -416,10 +463,10 @@ begin
         exec_ctrl_in.vrf_we      <= '1';
         exec_ctrl_in.prf_we      <= '0';
         exec_ctrl_in.is_logic_op <= '0';
-        
+
         valid_in <= '1';
         wait until rising_edge(clk);
-        valid_in <= '0'; 
+        valid_in <= '0';
         exec_ctrl_in.is_load <= '0'; -- Ensure it is cleared for future instructions
 
         report ">> Waiting for LDI pipelined execution to complete...";
@@ -429,15 +476,17 @@ begin
         -- PHASE 9: Verify Vector Reg File (Immediate Results)
         -- ====================================================================
         report ">> PHASE 9: Verifying VRF Writeback Results (Immediates)";
+        tb_verify_mode <= '1';
         for i in 0 to 31 loop
-            mcu_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
-            wait until rising_edge(clk); 
-            wait until falling_edge(clk); 
-            
-            assert mcu_rd_data(1) = x"0000BEEF" report "Thread " & integer'image(i) & " ALU Y mismatch (Immediate)!" severity error;
-            
+            tb_rd_addr <= std_logic_vector(to_unsigned(i, 5)) & "0011";
+            wait until rising_edge(clk);
+            wait until falling_edge(clk);
+
+            assert tb_rd_data(1) = x"0000BEEF" report "Thread " & integer'image(i) & " ALU Y mismatch (Immediate)!" severity error;
+
             wait until rising_edge(clk);
         end loop;
+        tb_verify_mode <= '0';
 
         report ">> INTEGRATION TEST COMPLETE: FPU, PRF, and ALU Pipelines are synced!";
         std.env.stop;

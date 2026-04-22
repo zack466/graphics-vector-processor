@@ -1,24 +1,44 @@
 -- ============================================================================
--- instruction_issue.vhd — SIMT Barrel Scheduler / Instruction Issuer
+-- FILE: instruction_issue.vhd
+-- COMPONENT: Instruction Issuer / Barrel Scheduler
 -- ============================================================================
 --
--- WHY THIS COMPONENT EXISTS
--- -------------------------
--- In a SIMT (Single Instruction, Multiple Threads) processor, every instruction
--- must execute independently for each of the 32 threads.  Rather than replicating
--- 32 execution lanes (expensive in area), this design uses a single execution
--- pipeline that is time-multiplexed across all 32 threads.  The instruction
--- issuer is the "barrel" that drives that time-multiplexing: it takes one
--- decoded instruction and replays it 32 consecutive cycles, once per thread,
--- sweeping the thread index from 0 to 31.
+-- A barrel scheduler that takes in a single instruction and issues it to each
+-- of the 32 threads in sequence, effectively like a barrel processor. This is
+-- so that a single pipelined execution unit can be used to execute 32
+-- instructions concurrently, at a rate of one per clock. This works by simply
+-- prefixing the vector register source/destination addresses with the thread
+-- id so they all operate on non-overlapping sections of the vector register
+-- file.
 --
 -- The processor FSM enters EXEC_WAIT after dispatching an instruction and waits
 -- for issue_valid to drop to '0'.  This means the FSM cannot fetch the next
 -- instruction until all 32 threads of the current one have been issued —
 -- preserving the in-order, single-issue contract of the barrel scheduler.
 --
--- HOW TO USE
--- ----------
+-- Inputs:
+--  - clk             : System clock
+--  - reset           : Synchronous active-high reset. Sets count=32 (idle) and
+--                      clears latched_ctrl to NOP.
+--  - exec_ctrl_in    : Fully decoded instruction control record from the decode stage.
+--                      Sampled only when valid_in='1'.
+--  - valid_in        : Pulse (one cycle wide) that signals a new instruction has
+--                     arrived.  Drives thread-0 issue immediately on the same cycle.
+-- Outputs:
+--  - current_thread  : 5-bit thread index being issued this cycle (0..31).
+--  - rs1_addr_global : 9-bit global address of source register 1 for current thread.
+--  - rs2_addr_global : 9-bit global address of source register 2 for current thread.
+--  - rs3_addr_global : 9-bit global address of source register 3 for current thread.
+--  - rd_addr_global  : 9-bit global address of destination register for current thread.
+--  - exec_ctrl_out   : Forwarded execution control record. The issuer passes this 
+--                      through directly (muxing between the live input on cycle 0 
+--                      and the latched copy on cycles 1-31) so the execution unit 
+--                      receives identical control parameters for every thread.
+--  - issue_valid     : '1' while any thread of the current instruction is being
+--                      issued.  Held high for 32 cycles (1 for FLUSH).  The
+--                      processor FSM spins in EXEC_WAIT until this falls to '0'.
+--
+-- Usage:
 -- 1. Assert valid_in='1' for exactly ONE clock cycle with a fully decoded
 --    exec_ctrl_t record on exec_ctrl_in.  Thread 0 is issued on that very cycle
 --    (count is reset to 1 so the combinational output already sees thread 0).
@@ -30,43 +50,13 @@
 --    sets count=32 instead of 1, so FLUSH takes only 1 cycle — it carries no
 --    per-thread register addresses, so replay is unnecessary.
 --
--- GLOBAL ADDRESS FORMATION
--- ------------------------
+-- Register Address Formation:
 -- The VRF and PRF use 9-bit addresses: {thread_id[4:0], reg[3:0]}.
 -- The issuer forms these by concatenating current_thread_int with each local
 -- 4-bit register field from the latched control record.  This means every
 -- register "slot" 0-15 appears 32 times in the flat register file, once per
 -- thread, with no extra hardware needed for bank selection.
 --
--- PORT DESCRIPTIONS
--- -----------------
--- clk             : System clock.  All registered logic is rising-edge triggered.
--- reset           : Synchronous active-high reset.  Sets count=32 (idle) and
---                   clears latched_ctrl to NOP.
--- exec_ctrl_in    : Fully decoded instruction control record from the decode stage.
---                   Sampled only when valid_in='1'.
--- valid_in        : Pulse (one cycle wide) that signals a new instruction has
---                   arrived.  Drives thread-0 issue immediately on the same cycle.
--- current_thread  : 5-bit thread index being issued this cycle (0..31).
--- rs1_addr_global : 9-bit global address of source register 1 for current thread.
--- rs2_addr_global : 9-bit global address of source register 2 for current thread.
--- rs3_addr_global : 9-bit global address of source register 3 for current thread.
--- rd_addr_global  : 9-bit global address of destination register for current thread.
--- exec_ctrl_out   : Forwarded execution control record. The issuer passes this 
---                   through directly (muxing between the live input on cycle 0 
---                   and the latched copy on cycles 1-31) so the execution unit 
---                   receives identical control parameters for every thread.
--- issue_valid     : '1' while any thread of the current instruction is being
---                   issued.  Held high for 32 cycles (1 for FLUSH).  The
---                   processor FSM spins in EXEC_WAIT until this falls to '0'.
---
--- TIMING / LATENCY
--- ----------------
--- Throughput : 1 instruction per 32 cycles (1 cycle for FLUSH).
--- Latency    : Thread 0 is issued combinationally on the same cycle as
---              valid_in='1'.  Threads 1-31 follow on the next 31 rising edges.
--- issue_valid deasserts on the cycle AFTER thread 31 is issued (count reaches
--- 32 on a rising edge; the combinational check count<32 then evaluates false).
 -- ============================================================================
 
 library IEEE;
@@ -82,20 +72,22 @@ entity instruction_issue is
         REG_WIDTH    : integer := 4   -- 16 vector registers per thread
     );
     port (
-        clk             : in  std_logic;
-        reset           : in  std_logic;
-        exec_ctrl_in    : in  exec_ctrl_t;
-        valid_in        : in  std_logic;
+        clk             : in  std_logic;    -- system clock
+        reset           : in  std_logic;    -- system reset
+        exec_ctrl_in    : in  exec_ctrl_t;  -- input raw execution control
+        valid_in        : in  std_logic;    -- pulsed when instruction is valid
         
+        -- Current thread ID of instruction being issued
         current_thread  : out std_logic_vector(THREAD_WIDTH-1 downto 0);
+
+        -- Thread-aware register source/destination addresses
         rs1_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rs2_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rs3_addr_global : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         rd_addr_global  : out std_logic_vector((THREAD_WIDTH + REG_WIDTH) - 1 downto 0);
         
-        exec_ctrl_out   : out exec_ctrl_t;
-        
-        issue_valid     : out std_logic 
+        exec_ctrl_out   : out exec_ctrl_t;  -- control signals forwarded to execution unit
+        issue_valid     : out std_logic     -- output is valid
     );
 end entity;
 
@@ -141,6 +133,7 @@ begin
                 -- until a valid_in pulse resets count to 0 or 1.
                 count <= to_unsigned(32, 6);
 
+                -- Reset defaults
                 latched_ctrl.opcode         <= OP_NOP;
                 latched_ctrl.rs1_addr_local <= "0000"; latched_ctrl.rs2_addr_local <= "0000";
                 latched_ctrl.rs3_addr_local <= "0000"; latched_ctrl.rd_addr_local  <= "0000";
@@ -154,6 +147,7 @@ begin
                 latched_ctrl.imm_data       <= (others => '0');
             else
                 if valid_in = '1' then
+
                     -- OP_FLUSH is a pipeline-control token, not a data instruction.
                     -- It carries no per-thread register addresses, so replaying it
                     -- 32 times would waste 31 cycles. Setting count=32 here means 
@@ -165,13 +159,13 @@ begin
                         -- thread 0 is handled combinationally this cycle. Starting 
                         -- count at 1 means the registered path picks up at thread 1 
                         -- on the next edge, giving the full 32-thread replay.
-                        -- NOTE: OP_RETURN *must* do the full 32 cycles so the 
-                        -- execution unit can snoop the data and fill the pixel buffer.
                         count <= to_unsigned(1, 6);
                     end if;
+
                     -- Latch the incoming control record so it survives after the
                     -- decode stage de-asserts valid_in.
                     latched_ctrl <= exec_ctrl_in;
+
                 elsif count < 32 then
                     -- Replay in progress: advance to the next thread.
                     -- When count reaches 32 the issue_valid combinational expression

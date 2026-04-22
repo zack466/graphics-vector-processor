@@ -3,15 +3,7 @@
 --
 -- PURPOSE:
 --   Defines the canonical scalar and vector primitive types shared across every
---   entity in the SIMT vector processor.  Centralising them here avoids
---   duplicated type declarations and ensures that every entity speaks the same
---   bit-width language — a mismatch would otherwise be a silent functional bug
---   caught only at simulation time.
---
--- USAGE:
---   Add the following two lines to any entity that needs these types:
---       library work;
---       use work.vector_types_pkg.all;
+--   entity in the SIMT vector processor.
 --
 -- TYPES DEFINED:
 --   word_t        -- 32-bit scalar value.  Used for individual ALU operands,
@@ -29,10 +21,6 @@
 --                    std_logic_vector so it can be sliced directly from the
 --                    instruction word without a numeric conversion.
 --
--- DESIGN NOTES:
---   vector_t is declared as a VHDL array type (not a subtype) because VHDL
---   does not allow array subtypes with unconstrained element types.  Using a
---   named type also makes port and signal declarations self-documenting.
 --------------------------------------------------------------------------------
 library IEEE;
 use IEEE.STD_LOGIC_1164.ALL;

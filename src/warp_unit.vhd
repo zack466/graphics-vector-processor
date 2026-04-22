@@ -2,45 +2,49 @@
 -- FILE: warp_unit.vhd
 -- COMPONENT: warp_unit
 -- ============================================================================
--- PURPOSE:
---   Self-contained execution unit for a single SIMT warp.  Encapsulates all
---   per-warp state: instruction fetch (IFU + PC + divergence stack), decode,
---   32-thread issue, FPU/ALU/RED execution, VRF, PRF, and the pipelined M10K
---   pixel buffer that accumulates packed RGBA pixels during OP_RETURN.
 --
---   warp_unit intentionally has NO host CSR interface and NO embedded Avalon
---   memory controller.  The host-facing control (frame iteration, warp_offset
---   sequencing) is the responsibility of warp_scheduler.  The Avalon burst
---   write is the responsibility of mcu_block_transfer + avm_burst_bridge at
---   the frame_processor level.  This separation allows the scheduler to
---   context-switch between multiple warp_unit instances (latency hiding) and
---   allows the MCU to service multiple warps' pixel buffers independently.
+-- Self-contained execution unit for a single SIMT warp. Encapsulates all
+-- per-warp state: instruction fetch unit, decode unit, 32-thread instruction
+-- issuer, execution unit, vector register file (VRF), and predicate register
+-- file (PRF).
 --
--- INSTRUCTION MEMORY:
---   The IFU drives imem_addr (a PC-width address) outward.  The caller
---   (frame_processor or a testbench) owns the instruction memory and connects
---   imem_data back.  All warps share the same program image, so a single
---   IMEM at the frame_processor level serves all warp_unit instances.
+-- Inputs:
+--  - clk, reset        : system clock and synchronous active-high reset.
+--  - frame_width       : Frame width in pixels (16-bit unsigned).
+--  - frame_height      : Frame height in pixels (16-bit unsigned).
+--  - time_ms           : Elapsed time in milliseconds (shader uniform).
+--  - imem_data         : current instruction 
+--  - warp_start        : 1-cycle pulse to trigger execution from PC = 0
+--  - warp_offset       : pixel index for pixel address calculation (DDR3 RAM)
+--  - fb_base_address   : upper 16 bites of framebuffer base address (DDR3 RAM)
+--  - pixel_buf_dirty   : stall if top-level buffer is busy (MCU hasn't written to memory yet)
 --
--- WARP CONTROL:
---   warp_start  : 1-cycle pulse that starts execution.  The warp latches
---                 warp_offset on the same cycle and begins fetching.
---   warp_halted : level signal, '1' while the warp FSM is in HALTED state.
---                 Deasserts as soon as the warp starts running (the cycle
---                 after warp_start).  Re-asserts when OP_RETURN executes.
---   warp_break  : 1-cycle registered pulse when OP_BREAK executes.
+-- Outputs:
+--  - imem_addr         : address of current instruction to read
+--  - warp_halted       : '1' while FSM is in HALTED state
+--  - warp_break        : 1-cycle pulse when OP_BREAK executes
+--  - pixel_buf_valid   : 1-cycle trigger: buffer full
+--  - pixel_buf_addr    : computed DDR3 byte address of pixels being computed
+--  - pixel_wr_en       : pixel buffer write enable
+--  - pixel_wr_addr     : pixel buffer write address
+--  - pixel_wr_data     : pixel buffer write data
 --
--- PIXEL BUFFER HANDSHAKE:
---   The warp_unit does NOT contain an Avalon master. Instead, it exposes a
---   synchronous read interface to the internal M10K pixel buffer for the MCU:
---     pixel_buf_valid : 1-cycle pulse after EXEC_WAIT completes for OP_RETURN.
---     pixel_buf_addr  : computed DDR3 byte addr: (fb_base_addr << 16) + warp_offset*4.
---     mem_stall       : Input from MCU; holds FSM in MEM_WAIT until burst completes.
---     pixel_rd_en     : MCU read enable to fetch from the M10K RAM.
---     pixel_rd_addr   : MCU read address (0 to 7) to sweep through the 8 burst beats.
---     pixel_rd_data   : Output 128-bit pixel data (4 packed pixels per beat).
---
--- PROCESSOR FSM STATES AND RATIONALE:
+-- Entities:
+--   u_ifu      : instruction_fetch_unit    - contains program counter (PC) and updates
+--                                            in response to branch instructions.
+--   u_decode   : instruction_decoder       - combinatorial instruction decoder
+--   u_issue    : instruction_issue         - issues instructions in sequence to each
+--                                            thread, from 0 to 31.
+--   u_exec     : execution_unit            - pipelined execution unit containing logic
+--                                            for computing floating-point and integer
+--                                            computations, writes results back into
+--                                            vector register file.
+--   u_vrf      : vector_reg_file           - contains 128-bit vector registers for
+--                                            each thread.
+--   u_prf      : predicate_reg_file        - contains 4-bit predicates for each thread,
+--                                            used by conditional instructions.
+
+-- FSM STATES:
 --   HALTED        : Idle state. Waits for `running='1'` (triggered by the external
 --                   warp_start pulse). If do_reset_pc is set when starting, skips
 --                   directly to ADVANCE_PC to force a jump to PC=0 before fetching.
@@ -113,19 +117,12 @@
 --
 -- 4. EXECUTION & LATENCY PADDING (Execution Unit - Stage 2..N)
 --    The operands enter the specific functional unit (FPU lane, ALU lane, etc.).
---    Because different IP cores have different latencies (e.g., FADD takes 14 
---    cycles, FSQRT takes 28, ALU takes 2), every pipeline is padded with 
---    shift registers to exactly match `FPU_MAX_LATENCY`. 
---    This guarantees that the 32 results pop out of the execution unit in a 
---    perfect, contiguous 32-cycle burst, exactly FPU_MAX_LATENCY cycles after 
---    they were issued.
---
--- 5. WRITEBACK
---    The synchronized results hit the `writeback_controller`, which routes them 
---    to the VRF or PRF using the 9-bit global destination address delayed by 
---    the same shift-register pipeline. 
---    Once the 32nd thread's result is written, `exec_flush_active` drops to '0',
---    allowing the FSM to exit `EXEC_WAIT` and advance the PC.
+--    Because different IP cores have different latencies, every pipeline is
+--    padded with shift registers to exactly match `FPU_MAX_LATENCY`. This
+--    guarantees that the 32 results pop out of the execution unit in a perfect,
+--    contiguous 32-cycle burst, exactly FPU_MAX_LATENCY cycles after they were
+--    issued. The execution unit automatically writes back results into
+--    the vector register file.
 --
 -- INSTRUCTION CLASS EXCEPTIONS:
 -- Not all instructions follow the standard 32-cycle math datapath:
@@ -136,26 +133,18 @@
 --     ADVANCE_PC, and the IFU immediately updates the Program Counter and 
 --     Divergence Stack.
 --
--- * RED (Reduction Math):
---     Sweeps through 32 threads like standard math, but instead of writing 32 
---     independent results, it feeds the operands into an accumulator IP core. 
---     Only the final accumulated result is written back to the VRF.
---
 -- * SYS / FLUSH:
 --     The issuer recognizes FLUSH and instantly fast-tracks its internal 
 --     counter to 32, finishing issuance in 1 cycle (saving 31 dead cycles). 
---     However, the FSM remains stuck in EXEC_WAIT until `exec_flush_active` 
---     drops to '0', ensuring the 28-stage pipeline is entirely drained of 
---     previous instructions before continuing.
+--     It inserts a sentinel instruction into the execution unit and
+--     un-pauses once it reads this instruction back.
 --
 -- * SYS / RETURN:
---     Issues all 32 threads through the pipeline. Instead of doing math, the 
---     execution unit acts as a passthrough, snooping the source register and 
---     synchronously writing it into the M10K `pixel_buffer_ram`. Once complete, 
---     the FSM enters `MEM_WAIT` until the MCU flushes the buffer to DDR3, then 
---     halts. The DDR3 address uses fb_base_addr from warp_scheduler (not an
---     embedded immediate), enabling double-buffering without changing the
---     shader program.
+--     Inserts a placeholder instruction into the execution unit to read the
+--     desired register. Instead of writing back the results, the component
+--     values are packed into a 32-bit pixel value and then written into the
+--     external pixel buffer. Once complete, the FSM enters `MEM_WAIT` until
+--     the MCU flushes the buffer to DDR3, then halts.
 --
 -- ============================================================================
 
@@ -168,19 +157,17 @@ use work.processor_constants_pkg.all;
 
 entity warp_unit is
     generic (
-        PC_WIDTH        : integer := 16;
-        IMEM_ADDR_WIDTH : integer := 8;
-        WARP_SIZE       : integer := 32;
-        ADDR_WIDTH      : integer := 32;
-        DATA_WIDTH      : integer := 128;
-        REG_WIDTH       : integer := 4
+        PC_WIDTH        : integer := 16;    -- width of program counter
+        IMEM_ADDR_WIDTH : integer := 8;     -- width of instruction memory
+        WARP_SIZE       : integer := 32;    -- number of threads per warp
+        REG_WIDTH       : integer := 4      -- width of vector register file, 16 registers
     );
     port (
-        clk             : in  std_logic;
-        reset           : in  std_logic;
+        clk             : in  std_logic;    -- system clock
+        reset           : in  std_logic;    -- system reset
 
         -- ==========================================
-        -- Instruction Memory Read Port (IMEM is external / shared)
+        -- Instruction Memory Read Port (IMEM is external)
         -- ==========================================
         imem_addr       : out std_logic_vector(PC_WIDTH-1 downto 0);
         imem_data       : in  std_logic_vector(31 downto 0);
@@ -195,20 +182,20 @@ entity warp_unit is
         warp_break      : out std_logic;   -- 1-cycle pulse when OP_BREAK executes
         
         -- Shader Uniforms
-        frame_width     : in  std_logic_vector(15 downto 0);
-        frame_height    : in  std_logic_vector(15 downto 0);
-        time_ms         : in  std_logic_vector(31 downto 0);
+        frame_width     : in  std_logic_vector(15 downto 0);    -- frame width in pixels
+        frame_height    : in  std_logic_vector(15 downto 0);    -- frame height in pixels
+        time_ms         : in  std_logic_vector(31 downto 0);    -- elapsed time in ms
 
         -- ==========================================
         -- Pixel Buffer Output (to frame_processor top-level)
         -- ==========================================
-        pixel_buf_valid : out std_logic;                       -- 1-cycle trigger: buffer full
-        pixel_buf_addr  : out std_logic_vector(31 downto 0);   -- computed DDR3 byte address
-        pixel_buf_dirty : in  std_logic;                       -- stall if top-level buffer is busy
+        pixel_buf_valid : out std_logic;                        -- 1-cycle trigger: buffer full
+        pixel_buf_addr  : out std_logic_vector(31 downto 0);    -- computed DDR3 byte address
+        pixel_buf_dirty : in  std_logic;                        -- stall if top-level buffer is busy
         
-        pixel_wr_en     : out std_logic;
-        pixel_wr_addr   : out std_logic_vector(4 downto 0);
-        pixel_wr_data   : out std_logic_vector(31 downto 0)
+        pixel_wr_en     : out std_logic;                        -- pixel buffer write enable
+        pixel_wr_addr   : out std_logic_vector(4 downto 0);     -- pixel buffer write address
+        pixel_wr_data   : out std_logic_vector(31 downto 0)     -- pixel buffer write data
     );
 end entity warp_unit;
 
@@ -223,12 +210,14 @@ architecture structural of warp_unit is
     -- ========================================================================
     -- WARP CONTROL REGISTERS
     -- ========================================================================
-    -- running: replaces csr_run.  Set by warp_start, cleared by OP_RETURN.
+    -- Set by warp_start, cleared by OP_RETURN.
     signal running         : std_logic := '0';
+
     -- reg_warp_offset: latched from warp_offset on warp_start.
     signal reg_warp_offset : std_logic_vector(31 downto 0) := (others => '0');
+
     -- do_reset_pc: set by warp_start, cleared after ADVANCE_PC applies the
-    -- PC=0 jump.  Ensures every warp run starts from the first instruction
+    -- PC=0 jump. Ensures every warp run starts from the first instruction
     -- regardless of where the previous run's PC was left.
     signal do_reset_pc     : std_logic := '0';
 
@@ -287,36 +276,27 @@ architecture structural of warp_unit is
     -- Intermediate packing signal for pixel_buffer_ram
     signal packed_pixel_data        : std_logic_vector(31 downto 0);
 
-    -- Computed physical DDR3 address:
-    -- base_addr << 16 + reg_warp_offset * 4 (bytes per pixel).
-    -- For OP_RETURN: base_addr comes from fb_base_addr (set by warp_scheduler,
-    --   enables double-buffering by toggling between two framebuffer addresses).
-    signal mem_phys_base : std_logic_vector(15 downto 0);
-    signal mem_phys_addr : std_logic_vector(31 downto 0);
-
 begin
-
     -- ========================================================================
-    -- DDR3 ADDRESS CALCULATION
+    -- System output
     -- ========================================================================
-    -- Select base: RETURN uses fb_base_addr from the scheduler (supports double-
-    -- buffering)
-    mem_phys_base <= fb_base_addr;
-    mem_phys_addr <= std_logic_vector(
-        unsigned(std_logic_vector'(mem_phys_base & x"0000")) +
-        unsigned(std_logic_vector'(reg_warp_offset(29 downto 0) & "00"))
-    );
-
-    -- ========================================================================
-    -- PIXEL BUFFER OUTPUT WIRING
-    -- ========================================================================
-    pixel_buf_addr  <= mem_phys_addr;
 
     -- Expose IMEM address upward (IFU drives it, frame_processor wires it to shared IMEM)
     imem_addr <= ifu_imem_addr;
 
     -- warp_halted: level signal reflecting FSM state
     warp_halted <= '1' when state = HALTED else '0';
+
+    -- ========================================================================
+    -- DDR3 Address Calculation
+    -- ========================================================================
+    -- Uses the framebuffer base address, and adds the offset depending on the
+    -- warp offset. Pixel index is multiplied by four since each pixel is
+    -- 32-bits (4 bytes), and RAM is byte addressed.
+    pixel_buf_addr <= std_logic_vector(
+        unsigned(std_logic_vector'(fb_base_addr & x"0000")) +
+        unsigned(std_logic_vector'(reg_warp_offset(29 downto 0) & "00"))
+    );
 
     -- ========================================================================
     -- PIXEL BUFFER OUTPUTS
@@ -330,10 +310,11 @@ begin
                          exec_mem_store_data(1)(7 downto 0) &
                          exec_mem_store_data(0)(7 downto 0);
 
+    -- Forwards memory controls from execution unit for RETURN instruction,
+    -- writes contents of a register to the pixel buffer.
     pixel_wr_en   <= exec_mem_store_valid;
     pixel_wr_addr <= exec_mem_store_thread_id;
     pixel_wr_data <= packed_pixel_data;
-
 
     -- ========================================================================
     -- WARP CONTROL REGISTERS
@@ -366,6 +347,7 @@ begin
                 -- OP_RETURN: halt the warp
                 if state = DECODE and ifu_inst_out(3 downto 0) = INST_TYPE_SYS and
                    ifu_inst_out(31 downto 26) = OP_RETURN and pixel_buf_dirty = '0' then
+                       report "RETURN!";
                     running <= '0';
                 end if;
 
@@ -431,6 +413,7 @@ begin
                     next_state <= HALTED;
 
                 elsif v_inst_type = INST_TYPE_SYS then
+                    -- Handles system instructions
                     if ifu_inst_out(31 downto 26) = OP_RETURN then
                         if pixel_buf_dirty = '1' then
                             -- Stall until the top-level pixel buffer is ready
@@ -489,38 +472,15 @@ begin
     end process;
 
     -- ========================================================================
-    -- DECODER RECORD MULTIPLEXER
+    -- Combinatorial Decoder Record Multiplexer
     -- ========================================================================
-    -- WHY this mux exists here rather than inside the issuer or decoder:
-    --   The instruction_decoder produces parallel, incompatible record types
-    --   (fpu_ctrl_t, alu_ctrl_t, red_ctrl_t) because each instruction class
-    --   packs its bits differently. The issuer and execution unit consume a
-    --   single unified exec_ctrl_t. Merging here (at the top level) keeps
-    --   the decoder and the issuer completely orthogonal.
+    -- The instruction_decoder produces parallel, incompatible record types
+    -- (fpu_ctrl_t, alu_ctrl_t, red_ctrl_t) because each instruction class
+    -- packs its bits differently. The issuer and execution unit consume
+    -- a single unified exec_ctrl_t, which is used to control the execution
+    -- unit. Merging here (at the top level) keeps the decoder and the issuer
+    -- completely orthogonal.
     --
-    -- WHY dec_fpu is the default (not an "unknown" value):
-    --   SYS instructions (like FLUSH) go through the issuer. Their opcode
-    --   field is in bits[31:26], which dec_fpu correctly exposes. All WE
-    --   fields in dec_fpu are '0' for SYS instructions, so using dec_fpu as
-    --   the default causes no accidental writebacks.
-    --
-    -- WHY ALU and IMM share the same branch:
-    --   Both use dec_alu fields. The IMM class differs only in that
-    --   dec_alu.is_load='1' and imm_data carries the payload. Note that
-    --   shader uniforms (WIDTH, HEIGHT, TIME) also flow through the ALU
-    --   branch because they are executed as integer scalar operations.
-    --
-    -- WHY RED does not override rs3_addr_local:
-    --   The reduction unit only reads rs1 and rs2; rs3 is unused (left as
-    --   the dec_fpu default, which is '0').
-    --
-    -- WHY SYS has a special override for OP_RETURN:
-    --   OP_RETURN encodes the pixel buffer source register in bits [7:4]
-    --   of the instruction word. The default FPU decoder would incorrectly
-    --   extract rs1 from bits [17:14]. This block explicitly intercepts
-    --   OP_RETURN, maps bits [7:4] to rs1_addr_local, and forces all write
-    --   enables to '0' so the execution unit safely snoops the register
-    --   for the M10K pixel buffer without corrupting the VRF.
     process(ifu_inst_out, dec_fpu, dec_alu, dec_red)
         variable v_type : std_logic_vector(3 downto 0);
     begin
@@ -545,6 +505,7 @@ begin
         exec_mux_ctrl.is_load        <= '0';
         exec_mux_ctrl.imm_data       <= (others => '0');
 
+        -- ALU instruction (including immediate loads)
         if v_type = INST_TYPE_ALU or v_type = INST_TYPE_IMM then
             exec_mux_ctrl.opcode         <= dec_alu.opcode;
             exec_mux_ctrl.rs1_addr_local <= dec_alu.rs1_addr_local;
@@ -559,6 +520,7 @@ begin
             exec_mux_ctrl.is_load        <= dec_alu.is_load;
             exec_mux_ctrl.imm_data       <= dec_alu.imm_data;
 
+        -- reduction operation
         elsif v_type = INST_TYPE_RED then
             exec_mux_ctrl.rs1_addr_local <= dec_red.rs1_addr_local;
             exec_mux_ctrl.rs2_addr_local <= dec_red.rs2_addr_local;
@@ -572,10 +534,10 @@ begin
             -- reads bits[25:22] = rd_addr, producing the wrong component mask.
             exec_mux_ctrl.write_mask     <= dec_red.red_mask;
 
+        -- System instructions
         elsif v_type = INST_TYPE_SYS then
             if ifu_inst_out(31 downto 26) = OP_RETURN then
-                -- RETURN reg: Uses standard FPU decoder extraction for rs1 from bits[17:14].
-                -- WE fields stay '0' (no writeback).
+                -- No writeback for RETURN instruction
                 exec_mux_ctrl.vrf_we         <= '0';
                 exec_mux_ctrl.prf_we         <= '0';
             end if;
@@ -597,6 +559,7 @@ begin
         predicate_sel => "0000", predicate_mod => PRED_MOD_ANY
     ) when do_reset_pc = '1' else dec_pc;
 
+    -- Instruction fetch unit
     u_ifu : entity work.instruction_fetch_unit
         generic map ( PC_WIDTH => PC_WIDTH, WARP_SIZE => WARP_SIZE )
         port map (
@@ -612,7 +575,7 @@ begin
             fetch_valid     => ifu_fetch_valid
         );
 
-    -- Purely combinational instruction decoder
+    -- combinational instruction decoder
     u_decode : entity work.instruction_decoder
         port map (
             instruction => ifu_inst_out, fpu_ctrl => dec_fpu, red_ctrl => dec_red,
@@ -667,10 +630,7 @@ begin
             rs3_addr => iss_rs3_global, rs1_data => vrf_rs1_data,
             rs2_data => vrf_rs2_data, rs3_data => vrf_rs3_data,
             wr_addr_A => exec_wb_rd_addr, wr_data_A => exec_wb_vrf_data,
-            write_mask_A => exec_wb_mask, we_A => exec_wb_vrf_we,
-            rd_addr_B => (others => '0'), rd_data_B => open,
-            wr_addr_B => (others => '0'), wr_data_B => (others => (others => '0')),
-            write_mask_B => "1111", we_B => '0'
+            write_mask_A => exec_wb_mask, we_A => exec_wb_vrf_we
         );
 
     -- Predicate register file: 512 entries, same address space as VRF

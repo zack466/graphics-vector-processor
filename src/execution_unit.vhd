@@ -1,47 +1,18 @@
 -- =============================================================================
 -- FILE: execution_unit.vhd
--- COMPONENT: Execution Unit (Top-Level Execution Datapath)
+-- COMPONENT: Execution Unit
 -- =============================================================================
 --
--- PURPOSE:
---   This is the top-level wiring hub for the entire execution datapath. It does
---   not contain any arithmetic logic itself; instead, it instantiates and
---   connects the following sub-units:
+-- This unit is responsible for "executing" all FPU, ALU, and reduction
+-- operations in a deeply-pipelined manner. All instructions are padded to the
+-- same latency using shift registers. Each instruction reads from the vector
+-- register file, is input into the pipeline, and then is written back when it
+-- exits the pipeline. Since the barrel scheduler inputs instructions one
+-- thread at a time, and since the maximum instruction latency (FPU_MAX_LATENCY)
+-- is less than 32, there will never be RAW hazards between registers of the
+-- same thread.
 --
---     - writeback_controller : Delays WB control signals to align with pipeline
---                              output latency, then drives rd_addr/we/mask.
---     - swizzle_network      : Permutes/broadcasts vector components before they
---                              reach functional units, implementing SIMT swizzle.
---     - fpu_lane (x4)        : Four independent single-precision floating-point
---                              pipelines, one per XYZW vector component.
---     - alu_lane             : Scalar integer ALU (also handles LDI immediates,
---                              THREAD_ID, RESOLUTION, and TIME uniforms).
---     - vector_reduction_unit: Reduces a vector to a scalar (e.g. dot product).
---
---   It also owns the FLUSH token tracking logic (flush_shift_reg), which tells
---   the processor FSM when it is safe to advance past EXEC_WAIT.
---
--- USAGE:
---   Instantiated once by warp_unit.vhd. The pipeline has two explicit register
---   stages before functional units start:
---     S1 (N+1): VRF read data arrives (1-cycle registered read). Control signals
---               are registered into s1_*. Swizzle runs combinationally this cycle.
---     S2 (N+2): Swizzle outputs and all S1 controls are registered into s2_*.
---               Functional units start here with fully stable, registered inputs.
---   The writeback_controller is driven from S2, so its depth equals FPU_MAX_LATENCY
---   exactly — no off-by-one correction required.
---
--- TIMING / LATENCY:
---   - Cycle N  : valid_in asserted; VRF addresses driven; S1 control regs capture.
---   - Cycle N+1: VRF data stable; s1_valid='1'; swizzle runs combinationally.
---                S2 registers capture swiz_a/b_out, s2_ctrl, s2_rd_addr, etc.
---   - Cycle N+2: s2_valid='1'; fpu_en/alu_en/red_en fire; functional units start.
---                writeback_controller loads its pipe(0) this cycle.
---   - Cycle N+2+FPU_MAX_LATENCY: FPU result valid; wb_* outputs aligned.
---   - flush_active_out stays high from the cycle a FLUSH token enters S1 until
---     all preceding writes have committed (FPU_MAX_LATENCY cycles after S1).
---
--- PORTS:
+-- Inputs:
 --   clk               - System clock. All state updates on rising edge.
 --   reset             - Synchronous active-high reset. Clears s1_valid and
 --                       flush_shift_reg; functional units handle their own reset.
@@ -68,8 +39,6 @@
 --   prf_rs1_data      - 4-bit predicate source 1 from PRF (one bit per thread
 --                       component). Used by swizzle_network for logic ops.
 --   prf_rs2_data      - 4-bit predicate source 2 from PRF.
---
---   -- Shader Uniforms --
 --   warp_offset_in    - 32-bit warp base address; forwarded to ALU lane so
 --                       THREAD_ID instruction can compute absolute thread addresses.
 --   thread_id_in      - 5-bit local thread index within the warp; forwarded to
@@ -78,7 +47,7 @@
 --   frame_height_in   - 16-bit integer; forwarded to ALU lane for RESOLUTION.
 --   time_ms_in        - 32-bit integer; forwarded to ALU lane for TIME.
 --
---   -- Writeback --
+-- Outputs:
 --   wb_rd_addr_out    - 9-bit destination address, delayed by writeback_controller
 --                       to align with functional-unit output.
 --   wb_vrf_data_out   - 128-bit result data to write back to VRF. Each component
@@ -97,6 +66,36 @@
 --                       processor FSM must hold EXEC_WAIT until this is LOW,
 --                       guaranteeing all prior writes have retired before any
 --                       post-flush instruction issues.
+--
+-- Each instruction follows the pipeline:
+--  1. Vector register file is queried for the source registers of the instruction
+--  2. The vectors are swizzled by the swizzle network
+--  3. The swizzled vectors are muxed into the FPU lane, ALU lane, or reduction
+--     unit depending on the instruction.
+--  4. A set number of clocks later, the result is demuxed from the FPU/ALU/RED
+--     lanes, and written back into the register vector file.
+--
+-- Entities:
+--     - writeback_controller : Delays WB control signals to align with pipeline
+--                              output latency, then drives rd_addr/we/mask.
+--     - swizzle_network      : Permutes/broadcasts vector components before they
+--                              reach functional units, implementing SIMT swizzle.
+--     - fpu_lane (x4)        : Four independent single-precision floating-point
+--                              pipelines, one per XYZW vector component.
+--     - alu_lane             : Scalar integer ALU (also handles LDI immediates,
+--                              THREAD_ID, RESOLUTION, and TIME uniforms).
+--     - vector_reduction_unit: Reduces a vector to a scalar (e.g. dot product).
+--
+-- Timing:
+--   - Cycle N  : valid_in asserted; VRF addresses driven; S1 control regs capture.
+--   - Cycle N+1: VRF data stable; s1_valid='1'; swizzle runs combinationally.
+--                S2 registers capture swiz_a/b_out, s2_ctrl, s2_rd_addr, etc.
+--   - Cycle N+2: s2_valid='1'; fpu_en/alu_en/red_en fire; functional units start.
+--                writeback_controller loads its pipe(0) this cycle.
+--   - Cycle N+2+FPU_MAX_LATENCY: FPU result valid; wb_* outputs aligned.
+--   - flush_active_out stays high from the cycle a FLUSH token enters S1 until
+--     all preceding writes have committed (FPU_MAX_LATENCY cycles after S1).
+--
 -- =============================================================================
 
 library IEEE;
@@ -108,28 +107,32 @@ use work.processor_constants_pkg.all;
 
 entity execution_unit is
     port (
-        clk               : in  std_logic;
-        reset             : in  std_logic;
+        clk               : in  std_logic;  -- system clock
+        reset             : in  std_logic;  -- system reset
 
-        exec_ctrl_in      : in  exec_ctrl_t;
-        valid_in          : in  std_logic;
-        inst_type_in      : in  std_logic_vector(3 downto 0);
-        red_mode_in       : in  std_logic_vector(1 downto 0);
-        red_mask_in       : in  std_logic_vector(3 downto 0);
-        rd_addr_global_in : in  std_logic_vector(8 downto 0);
+        -- Input instruction to execute
+        exec_ctrl_in      : in  exec_ctrl_t;                    -- execution control signals
+        valid_in          : in  std_logic;                      -- valid instruction
+        inst_type_in      : in  std_logic_vector(3 downto 0);   -- instruction type
+        red_mode_in       : in  std_logic_vector(1 downto 0);   -- reduction mode
+        red_mask_in       : in  std_logic_vector(3 downto 0);   -- reduction mask
+        rd_addr_global_in : in  std_logic_vector(8 downto 0);   -- destination register
 
+        -- Inputs from vector/predicate register file for the current instruction
         vrf_rs1_data      : in  vector_t;
         vrf_rs2_data      : in  vector_t;
         vrf_rs3_data      : in  vector_t;
         prf_rs1_data      : in  std_logic_vector(3 downto 0);
         prf_rs2_data      : in  std_logic_vector(3 downto 0);
 
+        -- Input shader uniforms
         warp_offset_in    : in  std_logic_vector(31 downto 0);
         thread_id_in      : in  std_logic_vector(4 downto 0);
         frame_width_in    : in  std_logic_vector(15 downto 0);
         frame_height_in   : in  std_logic_vector(15 downto 0);
         time_ms_in        : in  std_logic_vector(31 downto 0);
 
+        -- Writeback signals, forwarded to the vector/predicate register files
         wb_rd_addr_out    : out std_logic_vector(8 downto 0);
         wb_vrf_data_out   : out vector_t;
         wb_prf_data_out   : out std_logic_vector(3 downto 0);
@@ -137,7 +140,7 @@ entity execution_unit is
         wb_prf_we_out     : out std_logic;
         wb_mask_out       : out std_logic_vector(3 downto 0);
         
-        -- Memory block transfer snooping
+        -- Memory snooping, used to fill pixel buffer for the warp
         mem_store_valid   : out std_logic;
         mem_store_data    : out vector_t;
         mem_store_thread_id : out std_logic_vector(4 downto 0);
@@ -150,17 +153,13 @@ end entity execution_unit;
 architecture rtl of execution_unit is
 
     -- -------------------------------------------------------------------------
-    -- S1 and S2 Pipeline Registers
+    -- Stage 1 (S1) and Stage 2 (S2) Pipeline Registers
     -- -------------------------------------------------------------------------
     signal s1_ctrl        : exec_ctrl_t;
     signal s1_valid       : std_logic := '0';
     signal s1_inst_type   : std_logic_vector(3 downto 0);
     signal s1_red_mode    : std_logic_vector(1 downto 0);
     signal s1_red_mask    : std_logic_vector(3 downto 0);
-    -- NOTE: s1_prf_rs1 / s1_prf_rs2 removed. predicate_reg_file now has
-    -- 1-cycle registered reads (M10K), so prf_rs1_data / prf_rs2_data arrive
-    -- at S1 already aligned with vrf_rs*_data and are fed directly to the
-    -- swizzle network without an extra pipeline register.
     signal s1_thread_id   : std_logic_vector(4 downto 0) := (others => '0');
     signal s1_warp_offset : std_logic_vector(31 downto 0) := (others => '0');
     signal s1_frame_width : std_logic_vector(15 downto 0) := (others => '0');
@@ -189,15 +188,17 @@ architecture rtl of execution_unit is
     signal is_flush_stage1 : std_logic;
     signal flush_shift_reg : std_logic_vector(FPU_MAX_LATENCY-1 downto 0) := (others => '0');
 
+    -- Swizzle unit outputs
     signal swiz_a_out      : vector_t;
     signal swiz_b_out      : vector_t;
 
+    -- Whether to enable the FPU/RED/ALU pipelines
     signal fpu_en          : std_logic;
     signal red_en          : std_logic;
     signal alu_en          : std_logic;
 
     -- Per-lane FPU results
-    signal fpu_res_x, fpu_res_y, fpu_res_z, fpu_res_w : word_t;
+    signal fpu_res_x,   fpu_res_y,   fpu_res_z,   fpu_res_w   : word_t;
     signal comp_flag_x, comp_flag_y, comp_flag_z, comp_flag_w : std_logic;
 
     -- Reduction result
@@ -267,12 +268,17 @@ begin
         end if;
     end process;
 
+    -- Detect when system has been fully flushed
     flush_active_out <= '1' when (flush_shift_reg /= ZERO_FLUSH_REG) or (is_flush_stage1 = '1') else '0';
 
+    -- Which pipeline should receive a "valid" input bit this clock
     fpu_en <= '1' when (s2_valid = '1' and s2_inst_type = INST_TYPE_FPU) else '0';
     red_en <= '1' when (s2_valid = '1' and s2_inst_type = INST_TYPE_RED) else '0';
     alu_en <= '1' when (s2_valid = '1' and (s2_inst_type = INST_TYPE_ALU or s2_inst_type = INST_TYPE_IMM)) else '0';
 
+    -- Write back controller, simply delays the writeback signal so it
+    -- coincides with when the result returns from the fpu lanes / alu lane
+    -- / reduction unit.
     u_wb_ctrl: entity work.writeback_controller
         port map (
             clk => clk, reset => reset, iss_rd_addr => s2_rd_addr,
@@ -291,29 +297,45 @@ begin
             vec_b_in => vrf_rs2_data, prf_b_in => prf_rs2_data, swiz_sel_b => s1_ctrl.swiz_sel_b, vec_b_out => swiz_b_out
         );
 
-    u_lane_x: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(0), op_b=>s2_swiz_b(0), op_c=>s2_rs3(0), result=>fpu_res_x, valid_out=>open, comp_flag=>comp_flag_x, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
-    u_lane_y: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(1), op_b=>s2_swiz_b(1), op_c=>s2_rs3(1), result=>fpu_res_y, valid_out=>open, comp_flag=>comp_flag_y, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
-    u_lane_z: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(2), op_b=>s2_swiz_b(2), op_c=>s2_rs3(2), result=>fpu_res_z, valid_out=>open, comp_flag=>comp_flag_z, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
-    u_lane_w: entity work.fpu_lane port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en, op_a=>s2_swiz_a(3), op_b=>s2_swiz_b(3), op_c=>s2_rs3(3), result=>fpu_res_w, valid_out=>open, comp_flag=>comp_flag_w, cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
+    -- Four parallel FPU lanes, which perform the same operation on each
+    -- component of the input vector register in parallel. Takes the output of
+    -- the swizzle unit.
+    u_lane_x: entity work.fpu_lane
+        port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en,
+                  op_a=>s2_swiz_a(0), op_b=>s2_swiz_b(0), op_c=>s2_rs3(0),
+                  result=>fpu_res_x, valid_out=>open, comp_flag=>comp_flag_x,
+                  cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
 
+    u_lane_y: entity work.fpu_lane
+        port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en,
+                  op_a=>s2_swiz_a(1), op_b=>s2_swiz_b(1), op_c=>s2_rs3(1),
+                  result=>fpu_res_y, valid_out=>open, comp_flag=>comp_flag_y,
+                  cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
+
+    u_lane_z: entity work.fpu_lane
+        port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en,
+                  op_a=>s2_swiz_a(2), op_b=>s2_swiz_b(2), op_c=>s2_rs3(2),
+                  result=>fpu_res_z, valid_out=>open, comp_flag=>comp_flag_z,
+                  cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
+
+    u_lane_w: entity work.fpu_lane
+        port map (clk=>clk, reset=>reset, opcode=>s2_ctrl.opcode, valid_in=>fpu_en,
+                  op_a=>s2_swiz_a(3), op_b=>s2_swiz_b(3), op_c=>s2_rs3(3),
+                  result=>fpu_res_w, valid_out=>open, comp_flag=>comp_flag_w,
+                  cmp_invert=>s2_ctrl.cmp_invert, cmp_swap=>s2_ctrl.cmp_swap);
+
+    -- Reduction unit, responsible for summing along input vector register
+    -- components
     u_reduction: entity work.vector_reduction_unit
         port map (
             clk => clk, reset => reset, valid_in => red_en, vec_a => s2_swiz_a, vec_b => s2_swiz_b,
             reduce_mask => s2_red_mask, red_mode => s2_red_mode, result => red_res_scalar, valid_out => open
         );
 
-    -- alu_lane: scalar integer ALU. Operates ONLY on component 0 of the swizzled
-    -- buses (swiz_a_out(0), swiz_b_out(0)).
-    -- WHY only component 0: integer operations are inherently scalar in this ISA.
-    -- The same alu_res is written back to all four VRF components (see writeback
-    -- mux below); the write_mask then selects which components are actually updated.
-    --
-    -- is_load='1' (set by the decoder for INST_TYPE_IMM) tells the ALU to switch
-    -- from a two-register operation to an immediate-load (LDI_LO/LDI_HI) decode.
-    -- imm_data carries the 16-bit immediate value from the instruction word.
-    --
-    -- thread_id, warp_offset, frame_width, frame_height, and time_ms support 
-    -- shader uniforms. These route external constants directly into the ALU.
+    -- Scalar integer ALU. Operates ONLY on component 0 of the swizzled buses
+    -- (swiz_a_out(0), swiz_b_out(0)), and can write back to each component. Is
+    -- also used to implement the immediate load instructions and shader
+    -- uniform instructions (THREADID, HEIGHT, WIDTH, TIME).
     u_alu: entity work.alu_lane
         port map (
             clk          => clk, 
@@ -352,7 +374,6 @@ begin
                           alu_res;
 
     -- PRF writeback data mux:
-    -- WHY two different packing strategies:
     --   ALU comparison (ICMP): integer compare is scalar → all four predicate bits
     --     get the same alu_comp_flag. Every active thread component sees an
     --     identical comparison result (e.g. all bits = 1 if condition is true).
@@ -362,15 +383,9 @@ begin
     wb_prf_data_out <= (alu_comp_flag & alu_comp_flag & alu_comp_flag & alu_comp_flag) when wb_mux_sel_out = WB_MUX_ALU else
                        (comp_flag_w & comp_flag_z & comp_flag_y & comp_flag_x);
 
-    -- ========================================================================
-    -- MEMORY BLOCK TRANSFER SNOOPING
-    -- ========================================================================
-    -- Provide valid memory data to memory unit during execution of OP_RETURN.
-    -- OP_RETURN doesn't write back to VRF via the writeback_controller, so it
-    -- is routed directly from the S1 stage to the memory unit. Reads a source
-    -- register and packs it into the pixel buffer.
-    mem_store_valid <= '1' when (s1_valid = '1' and s1_ctrl.opcode = OP_RETURN) else '0';
-    mem_store_data <= vrf_rs1_data;
+    -- Provide valid memory data to the pixel buffer during execution of OP_RETURN.
+    mem_store_valid     <= '1' when (s1_valid = '1' and s1_ctrl.opcode = OP_RETURN) else '0';
+    mem_store_data      <= vrf_rs1_data;
     mem_store_thread_id <= s1_thread_id;
 
 end architecture rtl;

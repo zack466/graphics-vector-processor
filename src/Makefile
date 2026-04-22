@@ -1,9 +1,8 @@
 # Source files (Order matters: Entities/Packages must precede Architectures)
 SOURCES = vector_types.vhd \
 		  processor_constants_pkg.vhd \
-		  sync_fifo.vhd \
 		  pixel_buffer_ram.vhd \
-		  fp_sim_entities.vhd fp_sim_arch.vhd \
+		  fp_entities.vhd fp_sim_arch.vhd \
 		  vector_reg_file.vhd swizzle_network.vhd \
 		  fpu_lane.vhd alu_lane.vhd instruction_issue.vhd \
 		  predicate_reg_file.vhd \
@@ -18,8 +17,7 @@ SOURCES = vector_types.vhd \
 		  instruction_decoder.vhd \
 		  warp_unit.vhd \
 		  warp_scheduler.vhd \
-		  frame_processor.vhd \
-		  gpu_qsys_wrapper.vhd
+		  frame_processor.vhd
 
 # Testbench files
 TESTBENCH_SOURCES = tb_fp_sim.vhd \
@@ -34,8 +32,7 @@ TESTBENCH_SOURCES = tb_fp_sim.vhd \
 					tb_avm.vhd tb_mcu_block_transfer.vhd \
 					tb_warp_unit.vhd tb_warp_scheduler.vhd \
 				tb_frame_processor.vhd tb_frame_processor_automated.vhd \
-			tb_call_stack.vhd \
-			tb_gpu_qsys_wrapper.vhd
+			tb_call_stack.vhd
 
 # Testbench executable names
 TESTBENCHES = tb_fp_sim tb_vector_reg_file tb_swizzle_network tb_fpu_lane tb_alu_lane \
@@ -45,7 +42,7 @@ TESTBENCHES = tb_fp_sim tb_vector_reg_file tb_swizzle_network tb_fpu_lane tb_alu
 			  tb_avm tb_avm_sim_memory tb_mcu_block_transfer \
 			  tb_warp_unit tb_warp_scheduler \
 		  tb_frame_processor tb_frame_processor_automated \
-	  tb_call_stack tb_gpu_qsys_wrapper
+	  tb_call_stack
 
 WAVEFORM = waveform.ghw
 

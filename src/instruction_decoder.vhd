@@ -3,45 +3,48 @@
 -- COMPONENT: Instruction Decoder
 -- =============================================================================
 --
--- PURPOSE:
---   Purely combinational instruction decode. Given a 32-bit instruction word,
---   it produces five decoded control records that fan out to different pipeline
---   units: FPU, reduction, ALU, and PC (branch). There is no state and
---   no registered outputs; every output changes within the same clock cycle as
---   the input instruction word changes.
+-- Purely combinational instruction decode. Given a 32-bit instruction word, it
+-- produces five decoded control records that fan out to different pipeline
+-- units: FPU, reduction, ALU, and PC (branch). There is no state and no
+-- registered outputs; every output changes within the same clock cycle as the
+-- input instruction word changes.
 --
--- USAGE:
---   Instantiated once by warp_unit.vhd. The instruction word should be stable
---   before the processor FSM samples the decoded outputs on a rising edge.
---   All outputs are combinational; the caller is responsible for registering
---   them when pipeline stages require it.
+-- Inputs:
+--   instruction - 32-bit raw instruction word from instruction memory.
 --
--- TIMING / LATENCY:
---   Zero cycles. All outputs are combinational functions of the input.
---   The critical path runs from instruction[31:26] through the opcode case
---   statement to the fpu_ctrl/alu_ctrl outputs.
+-- Outputs:
+--   fpu_ctrl    - Decoded FPU control record. Also carries SYS opcodes.
+--   red_ctrl    - Decoded reduction control record.
+--   alu_ctrl    - Decoded integer ALU control record. Also carries IMM ops.
+--   pc_ctrl     - Decoded branch/jump control record.
+--
 --
 -- INSTRUCTION WORD BIT FIELD LAYOUT (by instruction type):
 --
 --   [3:0]  = inst_type  (common to all formats, selects the decode branch)
 --   [31:26] = opcode    (common to all formats)
 --
+-- Floating-Point Operation (does math on vector registers in parallel)
 --   FPU  : [31:26]=opcode  [25:22]=write_mask  [21:18]=rd    [17:14]=rs1
 --          [13:10]=rs2     [9:7]=swiz_a         [6]=cmp_inv  [5]=cmp_swap
 --          (rs3 not encoded; reserved for future FMA extension)
 --
+-- Reduction Operation (sums along vector register compon):
 --   RED  : [31:30]=mode    [29:26]=mask         [25:22]=rd    [21:18]=rs1
 --          [17:14]=rs2     [13:11]=swiz_a       [10:8]=swiz_b
 --          (mode overlaps the top 2 bits of opcode because RED only needs
 --           2 mode bits and has no further opcode variation)
 --
+-- Branch Operations (modifies PC):
 --   CTRL : [31:26]=opcode  [25:10]=target_addr(16b) [9:6]=pred_sel
 --          [5:4]=pred_mod
 --
+-- ALU Operations (treats registers as integers):
 --   ALU  : [31:26]=opcode  [25:22]=write_mask   [21:18]=rd    [17:14]=rs1
 --          [13:10]=rs2     [9:7]=swiz_a         [6:4]=reserved
 --          (no rs3, no cmp fields — integer ops are simpler than FPU)
 --
+-- Immediate Load Instructions:
 --   IMM  : [31:30]=LDI_subop  [29:26]=write_mask  [25:10]=imm16  [9:8]=reserved
 --          [7:4]=rd
 --          (LDI_subop: "00"=LDI_LO, "01"=LDI_HI; decoded by alu_lane on opcode[5:4])
@@ -49,17 +52,12 @@
 --          (rs1_addr is set equal to rd_addr so the ALU can read the current
 --           destination value; needed by LDI_HI to preserve the lower 16 bits)
 --
+-- System instructions:
 --   SYS  : [31:26]=opcode  [25:4]=reserved       [3:0]=type
 --          (FLUSH/RETURN/BREAK/INT: opcode is routed through v_fpu because
 --           warp_unit.vhd's exec_mux uses dec_fpu.opcode as the default path;
 --           no register reads or writes are needed for these tokens)
 --
--- PORTS:
---   instruction - 32-bit raw instruction word from instruction memory.
---   fpu_ctrl    - Decoded FPU control record. Also carries SYS opcodes.
---   red_ctrl    - Decoded reduction control record.
---   alu_ctrl    - Decoded integer ALU control record. Also carries IMM ops.
---   pc_ctrl     - Decoded branch/jump control record.
 -- =============================================================================
 
 library IEEE;
@@ -102,12 +100,7 @@ begin
         variable v_alu : alu_ctrl_t;
     begin
         -- ====================================================================
-        -- 1. INITIALIZE VARIABLES WITH SAFE DEFAULTS (Prevents latches)
-        -- WHY: VHDL synthesis infers a latch for any signal that does not have
-        -- an assignment on every path through a combinational process. By
-        -- pre-loading every field with a benign default (NOP opcodes, zero
-        -- addresses, all WEs deasserted), we guarantee no latches regardless
-        -- of which inst_type branch is taken.
+        -- INITIALIZE VARIABLES WITH SAFE DEFAULTS (Prevents latches)
         -- ====================================================================
         v_fpu.opcode         := OP_NOP;
         v_fpu.rs1_addr_local := "0000";
@@ -154,7 +147,7 @@ begin
         v_alu.imm_data       := (others => '0');
 
         -- ====================================================================
-        -- 2. DECODE BASED ON INSTRUCTION TYPE
+        -- DECODE BASED ON INSTRUCTION TYPE
         -- ====================================================================
         if inst_type = INST_TYPE_FPU then
             -- ----------------------------------------------------------------
@@ -261,6 +254,7 @@ begin
             -- the IFU generic). It is the branch destination for JMP/BRA, the
             -- reconvergence point for SSY, or the not-taken fallthrough for SYNC.
             v_pc.target_addr   := instruction(25 downto 10);
+
             -- predicate_sel chooses which PRF register to evaluate for conditional
             -- branches (BRA_Z, BRA_NZ). predicate_mod controls whether ANY or ALL
             -- active threads must satisfy the predicate to take the branch.
@@ -271,15 +265,19 @@ begin
                 when OP_JMP     => v_pc.branch_type := BR_JMP;
                 when OP_BRA_Z   => v_pc.branch_type := BR_BRA_Z;
                 when OP_BRA_NZ  => v_pc.branch_type := BR_BRA_NZ;
+
                 -- BRA_DIV: divergent branch that may split the active thread mask.
                 -- Handled by the IFU's SIMT stack logic; see instruction_fetch_unit.vhd.
                 when OP_BRA_DIV => v_pc.branch_type := BR_BRA_DIV;
+
                 -- SSY: "Set Sync Point" — records the reconvergence PC before a
                 -- BRA_DIV so the SIMT stack knows where to rejoin the warp.
                 when OP_SSY     => v_pc.branch_type := BR_SSY;
+
                 -- SYNC: reconvergence instruction. The IFU uses the SIMT stack
                 -- entry to decide whether this is the end of IF or ELSE.
                 when OP_SYNC    => v_pc.branch_type := BR_SYNC;
+
                 -- Function call / return instructions (link register + call stack):
                 when OP_BRA_L   => v_pc.branch_type := BR_BRA_L;
                 when OP_BRA_X   => v_pc.branch_type := BR_BRA_X;
@@ -375,12 +373,7 @@ begin
         end if;
 
         -- ====================================================================
-        -- 3. ASSIGN VARIABLES TO OUTPUT PORTS
-        -- WHY use variables then assign at the end rather than assigning ports
-        -- directly inside each branch: VHDL concurrent signal assignments in a
-        -- process require all branches to assign every signal to avoid latches.
-        -- Using variables makes the "assign once at the bottom" pattern clean
-        -- and ensures the compiler can see full coverage trivially.
+        -- ASSIGN VARIABLES TO OUTPUT PORTS
         -- ====================================================================
         fpu_ctrl <= v_fpu;
         red_ctrl <= v_red;

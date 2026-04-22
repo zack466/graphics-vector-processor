@@ -5,9 +5,7 @@
 * (in progress) review documentation manually and verify that it is accurate
 * delete program.hex and other aux files so automated test doesn't get confused if run by itself
 * ALM usage:
-  * (in progress) ensure predicate register file uses M10K, not ALMs, takes around 4000 ALMs but should definitely be way less.
   * sin/cos take up by far the most ALMs per entity (~600-700 each)
-* fix some of the shaders (is the resolution hardcoded???) or warp offset is wrong?
 * might be difficult, but try to duplicate the cores and have them work on parallel tasks using a warp scheduler (fitting may be hard). Or just one warp that utilizes latency hiding should be ok.
 * MOV doesn't work???
 * update shaders:

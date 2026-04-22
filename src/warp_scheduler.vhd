@@ -1,54 +1,53 @@
 -- ============================================================================
+-- FILE: warp_scheduler.vhd
 -- COMPONENT: warp_scheduler
 -- ============================================================================
--- PURPOSE:
---   Frame-level FSM that iterates warp_offset from 0 to (total_pixels - 1)
---   in steps of WARP_SIZE, driving a single warp_unit through every pixel
---   block needed to render a complete frame.  A single `frame_start` pulse
---   triggers the full iteration; `frame_done` pulses when the last warp
---   completes.
 --
---   Designed for extensibility to multiple concurrent warps (latency hiding):
---   the warp_start / warp_halted ports are indexed arrays whose size is the
---   NUM_WARPS generic.  The single-warp instantiation uses NUM_WARPS=1.
+-- Frame-level FSM that iterates warp_offset from 0 to (total_pixels - 1)
+-- in steps of WARP_SIZE, driving a single warp_unit through every pixel
+-- block needed to render a complete frame. A single `frame_start` pulse
+-- triggers the full iteration; `frame_done` pulses when the last warp
+-- completes. For the current system, triggers pixels 0-31, then 32-63, etc.
+--
+-- Designed for extensibility to multiple concurrent warps (latency hiding):
+-- the warp_start / warp_halted ports are indexed arrays whose size is the
+-- NUM_WARPS generic.  The single-warp instantiation uses NUM_WARPS=1.
+--
+-- Inputs:
+--  - clk, reset    : system clock and synchronous active-high reset.
+--  - frame_start   : pulsed to trigger a frame draw
+--  - frame_width   : pixels per row of frame
+--  - frame_heigh   : number of rows per frame
+--  - warp_halted   : if target warp is halted (ready to compute more pixels)
+
+-- Outputs:
+--  - frame_done    : pulsed when frame is done being drawn
+--  - warp_start    : pulsed to trigger a warp
+--  - warp_offset   : thread offset of current warp
 --
 -- FSM STATES:
 --
---   IDLE       Wait for frame_start.  On entry: latch total_pixels =
---              frame_width * frame_height and reset next_offset = 0.
+--   IDLE         Wait for frame_start. On entry: latch total_pixels =
+--                frame_width * frame_height and reset next_offset = 0.
 --
---   DISPATCH      Assert warp_start(0)='1' for exactly one cycle with
---                warp_offset(0) = next_offset.  Advance next_offset by WARP_SIZE.
+--   DISPATCH     Assert warp_start(0)='1' for exactly one cycle with
+--                warp_offset(0) = next_offset. Advance next_offset by WARP_SIZE.
 --
---   WAIT_RUNNING  Wait for warp_halted(0)='0' (warp has started executing).
+--   WAIT_RUNNING Wait for warp_halted(0)='0' (warp has started executing).
 --                This state is necessary because warp_halted is still '1'
 --                immediately after DISPATCH — the warp takes one or two cycles
 --                to transition out of HALTED after warp_start fires.  Without
 --                this state, WAIT_HALT would see the old '1' and exit instantly.
 --
---   WAIT_HALT     Wait for warp_halted(0)='1' (warp FSM returned to HALTED
+--   WAIT_HALT    Wait for warp_halted(0)='1' (warp FSM returned to HALTED
 --                after OP_RETURN).  The warp's MEM_WAIT already blocks until
 --                the full burst completes, so no separate MCU-done check is
 --                needed.
 --                - next_offset < total_pixels  → DISPATCH (next warp block)
 --                - next_offset >= total_pixels → DONE
 --
---   DONE          Assert frame_done='1' for one cycle; return to IDLE.
+--   DONE         Assert frame_done='1' for one cycle; return to IDLE.
 --
--- TIMING NOTES:
---   - frame_start must be a 1-cycle pulse; holding it will not re-trigger
---     the FSM while it is already running.
---   - warp_start is a 1-cycle pulse; the warp_unit latches warp_offset on
---     the same cycle.
---   - total_pixels is registered from frame_width * frame_height on the same
---     cycle frame_start is detected.  The multiply is a DSP-inferred unsigned
---     multiply (16×16 → 32 bits).
---   - frame_done is a 1-cycle pulse, not a level signal.
---
--- EXTENSION TO MULTIPLE WARPS (Change 3):
---   Set NUM_WARPS > 1.  The DISPATCH state should send warp_start to any idle
---   warp slot and WAIT_HALT should track which slots are done.  All internal
---   next_offset logic carries over unchanged.
 -- ============================================================================
 
 library IEEE;
@@ -61,8 +60,8 @@ entity warp_scheduler is
         ADDR_WIDTH : integer := 32
     );
     port (
-        clk          : in  std_logic;
-        reset        : in  std_logic;
+        clk          : in  std_logic;   -- system clock
+        reset        : in  std_logic;   -- system reset
 
         -- Frame control
         frame_start  : in  std_logic;   -- 1-cycle pulse: begin rendering a frame
@@ -73,12 +72,7 @@ entity warp_scheduler is
         -- Warp 0 control (NUM_WARPS=1 for now; extend to arrays for Change 3)
         warp_start   : out std_logic;
         warp_offset  : out std_logic_vector(ADDR_WIDTH-1 downto 0);
-        warp_halted  : in  std_logic;   -- '1' while warp FSM is in HALTED state
-
-        -- Framebuffer addressing (passed through to warp_unit unchanged; future
-        -- double-buffering logic will toggle this between two base addresses here)
-        fb_base_addr : in  std_logic_vector(15 downto 0);  -- input from frame_processor
-        fb_base_out  : out std_logic_vector(15 downto 0)   -- forwarded to warp_unit
+        warp_halted  : in  std_logic    -- '1' while warp FSM is in HALTED state
     );
 end entity warp_scheduler;
 
@@ -94,10 +88,6 @@ architecture rtl of warp_scheduler is
     signal next_offset  : unsigned(31 downto 0) := (others => '0');
 
 begin
-
-    -- Pass fb_base_addr through unchanged.  In a future double-buffering
-    -- extension the scheduler would toggle between two addresses here.
-    fb_base_out <= fb_base_addr;
 
     process(clk)
     begin

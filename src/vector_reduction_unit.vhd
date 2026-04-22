@@ -1,25 +1,15 @@
 -- ============================================================================
--- vector_reduction_unit.vhd — 4-Component Floating-Point Reduction Unit
+-- FILE: vector_reduction_unit.vhd
+-- COMPONENT: 4-Component Floating-Point Reduction Unit
 -- ============================================================================
 --
--- WHY THIS COMPONENT EXISTS
--- -------------------------
 -- Standard vector instructions operate component-wise (x op x, y op y, …),
--- producing a 4-wide result.  Certain operations in 3D graphics and physics
+-- producing a 4-wide result. Certain operations in 3D graphics and physics
 -- require collapsing a 4-component vector into a single scalar: dot products,
 -- magnitudes, and L1-norms all involve this "horizontal" reduction.  Rather
 -- than serialising the reduction over multiple instructions (4 multiplies +
 -- 3 adds = 7 dependent ops), this unit exposes a single instruction that
 -- computes the entire sum-of-products in hardware in one FPU_MAX_LATENCY pass.
---
--- All four modes are implemented by conditioning the inputs to a single shared
--- fp_scalar_product IP core: four pairwise multiplications followed by a
--- balanced adder tree.  This reuse keeps the synthesis area small — one IP
--- instance serves all modes through combinational input steering.
---
--- The result is a scalar float that is broadcast: all four components of the
--- destination VRF entry are written with the same value.  Downstream shader
--- code can then swizzle the scalar to any component position it needs.
 --
 -- SUPPORTED MODES (red_mode encoding from processor_constants_pkg)
 -- ---------------------------------------------------------------
@@ -46,46 +36,26 @@
 -- programmer compute, e.g., a 3D dot product by masking the W component:
 --   reduce_mask = "0111" (X,Y,Z active, W masked out).
 --
--- HOW TO USE
--- ----------
--- 1. Drive vec_a, vec_b, reduce_mask, and red_mode combinationally from the
---    read stage of the pipeline (they feed a purely combinational conditioning
---    process before reaching the IP core).
--- 2. Assert valid_in='1' for the first cycle of each new operation.
--- 3. After FPU_MAX_LATENCY cycles, valid_out='1' and result contains the
---    scalar float.  Connect result to all four lanes of the destination VRF
---    write data bus to achieve the broadcast.
 --
--- PORT DESCRIPTIONS
--- -----------------
--- clk         : System clock.  All registers are rising-edge triggered.
--- reset       : Synchronous active-high reset.  Flushes the valid shift
---               register.
--- valid_in    : Asserted for one cycle when a new reduction is presented on
---               vec_a/vec_b.  Enters the valid shift register at index 0.
--- vec_a       : First 4-component input vector (array of four 32-bit floats).
--- vec_b       : Second 4-component input vector.  Ignored for SQ_MAG, SUM,
---               and ABS_SUM modes (cond_b is overwritten by mode steering).
--- reduce_mask : 4-bit component enable mask.  Bit i='0' forces component i
---               to 0.0f, excluding it from the sum.
--- red_mode    : 2-bit mode selector.  See SUPPORTED MODES above.
--- result      : Scalar float output.  Valid FPU_MAX_LATENCY cycles after
---               valid_in.  Should be broadcast to all four VRF write lanes.
--- valid_out   : '1' exactly FPU_MAX_LATENCY cycles after valid_in, aligned
---               with result.  Used by the writeback controller to gate writes.
+-- Inputs:
+--  - clk         : System clock.  All registers are rising-edge triggered.
+--  - reset       : Synchronous active-high reset.  Flushes the valid shift
+--                  register.
+--  - valid_in    : Asserted for one cycle when a new reduction is presented on
+--                  vec_a/vec_b.  Enters the valid shift register at index 0.
+--  - vec_a       : First 4-component input vector (array of four 32-bit floats).
+--  - vec_b       : Second 4-component input vector.  Ignored for SQ_MAG, SUM,
+--                  and ABS_SUM modes (cond_b is overwritten by mode steering).
+--  - reduce_mask : 4-bit component enable mask.  Bit i='0' forces component i
+--                  to 0.0f, excluding it from the sum.
+--  - red_mode    : 2-bit mode selector.  See SUPPORTED MODES above.
 --
--- TIMING / LATENCY
--- ----------------
--- Combinational input conditioning  :   0 cycles  (same cycle as vec_a/b)
--- fp_scalar_product IP core         :   LAT_REDUCT cycles
--- Result capture + padding pipeline :   FPU_MAX_LATENCY - LAT_REDUCT cycles
--- Total input-to-output latency     :   FPU_MAX_LATENCY cycles
+-- Outputs:
+--  - result      : Scalar float output.  Valid FPU_MAX_LATENCY cycles after
+--                  valid_in.  Should be broadcast to all four VRF write lanes.
+--  - valid_out   : '1' exactly FPU_MAX_LATENCY cycles after valid_in, aligned
+--                  with result.  Used by the writeback controller to gate writes.
 --
--- WHY PAD TO FPU_MAX_LATENCY?
--- The writeback controller uses a single FPU_MAX_LATENCY-deep shift register
--- for rd_addr and WE.  All execution units must present their results at the
--- same pipeline depth so the single controller works uniformly.  The padding
--- pipeline (res_pipe) bridges the gap when LAT_REDUCT < FPU_MAX_LATENCY.
 -- ============================================================================
 
 library IEEE;
@@ -97,8 +67,8 @@ use work.processor_constants_pkg.all;
 
 entity vector_reduction_unit is
     port (
-        clk         : in  std_logic;
-        reset       : in  std_logic;
+        clk         : in  std_logic;    -- system clock
+        reset       : in  std_logic;    -- system reset
         
         -- Data Inputs
         valid_in    : in  std_logic;
@@ -106,7 +76,7 @@ entity vector_reduction_unit is
         vec_b       : in  vector_t;
         
         -- Reduction Modifiers
-        reduce_mask : in  std_logic_vector(3 downto 0); 
+        reduce_mask : in  std_logic_vector(3 downto 0); -- Mask directly from instruction
         red_mode    : in  std_logic_vector(1 downto 0); -- Mode directly from instruction
         
         -- Output
@@ -156,11 +126,6 @@ begin
     -- ========================================================================
     -- 1. COMBINATIONAL INPUT CONDITIONING
     -- ========================================================================
-    -- WHY combinational (not registered)?  The inputs vec_a/vec_b come
-    -- directly from the VRF read ports which are already registered by the
-    -- VRF itself.  Adding another register stage here would increase the
-    -- effective latency by one cycle, requiring FPU_MAX_LATENCY to be bumped
-    -- accordingly.  Keeping this stage combinational holds the latency budget.
     process(vec_a, vec_b, reduce_mask, red_mode)
         variable temp_a, temp_b : word_t;
     begin
@@ -202,11 +167,6 @@ begin
             end case;
 
             -- Apply Component Masking.
-            -- WHY zero both A and B (not just one)?  Setting a(i)=0 alone would
-            -- compute 0*b(i)=0 in IEEE 754, which is correct — but if b(i) is
-            -- NaN or Inf, the result could be NaN.  Zeroing both operands
-            -- guarantees the IP core sees a clean 0*0=0 for masked components,
-            -- regardless of what is in the register file for that lane.
             if reduce_mask(i) = '1' then
                 cond_a(i) <= temp_a;
                 cond_b(i) <= temp_b;
@@ -221,11 +181,6 @@ begin
     -- ========================================================================
     -- 2. HARDWARE IP INSTANTIATION
     -- ========================================================================
-    -- NOTE: must be modified for synthesis (IP core name/generics may differ
-    -- between Quartus versions and device families).
-    -- en is tied to '1': the IP core runs every cycle.  The barrel scheduler
-    -- feeds new data every cycle (one thread per cycle), so there is no reason
-    -- to gate the IP core — doing so would add control complexity for no gain.
     u_scalar_product : entity work.fp_scalar_product_0
         generic map (latency => LAT_REDUCT)
         port map (
@@ -258,20 +213,6 @@ begin
                 end loop;
 
                 -- Shift the result padding pipeline.
-                -- WHY this two-part logic?  The IP core produces raw_result at
-                -- stage LAT_REDUCT.  If LAT_REDUCT < FPU_MAX_LATENCY (i.e., the
-                -- reduction unit is faster than the FPU lanes), the result must
-                -- wait in res_pipe until the writeback controller's tap at
-                -- FPU_MAX_LATENCY aligns with it.
-                --
-                -- The loop handles this by:
-                --  (a) Defaulting each stage to shift from the previous stage.
-                --  (b) Overriding stage (LAT_REDUCT+1) with raw_result when
-                --      i-1 == LAT_REDUCT — this is the "injection point" where
-                --      the IP output enters the padding pipeline.
-                -- Stages 2..LAT_REDUCT are never reached if LAT_REDUCT=0, but
-                -- the loop still works correctly because the if-condition fires
-                -- at i=1 (0 = i-1 = 1-1).
                 for i in 1 to FPU_MAX_LATENCY loop
                     if i = 1 then
                         -- Stage 1 default: fill with zeros until the IP result
@@ -282,9 +223,6 @@ begin
                     end if;
 
                     -- Inject the IP core output at the correct stage.
-                    -- This if statement will fire exactly once per loop iteration
-                    -- when i-1 == LAT_REDUCT, capturing raw_result into the
-                    -- pipeline at the cycle it becomes valid.
                     if LAT_REDUCT = i - 1 then
                         res_pipe(i) <= raw_result;
                     end if;
@@ -308,9 +246,7 @@ begin
         end if;
     end process;
 
-    -- valid_out is in phase with result — both are FPU_MAX_LATENCY cycles
-    -- behind valid_in, providing a uniform timing interface to the writeback
-    -- controller regardless of which reduction mode was selected.
+    -- valid_out pulses on the same clock cycle the combinational output is stable.
     valid_out <= valid_pipe(FPU_MAX_LATENCY);
 
 end architecture rtl;

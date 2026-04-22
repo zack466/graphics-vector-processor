@@ -1,14 +1,43 @@
 -- ============================================================================
+-- FILE: mcu_block_transfer.vhd
 -- COMPONENT: mcu_block_transfer
 -- ============================================================================
--- PURPOSE:
---   Memory Control Unit for warp-wide block stores. Serves as the pipeline
---   between the warp's M10K pixel buffer and the Avalon burst bridge.
 --
---   Because the M10K RAM has a 1-cycle read latency, this MCU manages a 
---   1-cycle pipeline. It connects the Avalon `tx_ready` directly back to the 
---   RAM's `rd_en` signal. If the memory bridge stalls, the M10K read pipeline 
---   freezes holding the active word steady without losing data.
+-- Memory Control Unit for warp-wide block stores. Serves as the pipeline
+-- between the warp's M10K pixel buffer and the Avalon burst bridge.
+-- Continually checks for if the pixel buffer has been filled, and then
+-- immediately bursts it to DDR3 RAM.
+--
+-- Because the M10K RAM has a 1-cycle read latency, this MCU manages a
+-- 1-cycle pipeline. It connects the Avalon `tx_ready` directly back to the
+-- RAM's `rd_en` signal. If the memory bridge stalls, the M10K read pipeline
+-- freezes holding the active word steady without losing data.
+--
+-- Inputs:
+--   clk              : System clock.
+--   reset            : Synchronous reset; clears FSM state and all counters.
+--   pixel_buf_valid  : Asserted by the warp unit when the pixel buffer is full
+--                      and ready to be flushed to DDR3.
+--   base_addr        : DDR3 destination address for the burst. Latched on the
+--                      rising edge of pixel_buf_valid.
+--   pixel_rd_data    : 128-bit read data from the warp's M10K pixel buffer.
+--   cmd_ready        : Avalon burst bridge asserts when it can accept a new
+--                      command on the command channel.
+--   tx_ready         : Avalon burst bridge asserts when it can accept a write
+--                      beat on the TX data channel.
+--
+-- Outputs:
+--   pixel_buf_done   : Single-cycle pulse asserted when the 8-beat burst
+--                      completes, signalling the warp unit to refill the buffer.
+--   pixel_rd_en      : Read enable to the M10K pixel buffer.
+--   pixel_rd_addr    : 3-bit read address into the M10K pixel buffer (beats 0-7).
+--   cmd_valid        : Avalon command channel valid. Held high until cmd_ready.
+--   cmd_is_store     : Tied high; this MCU only performs stores.
+--   cmd_addr         : Burst destination address (driven from latched base_addr).
+--   cmd_burst_len    : Burst length, fixed at 8 beats (32 pixels at 128-bit width).
+--   tx_data          : 128-bit write data, wired straight through from pixel_rd_data.
+--   tx_byte_en       : Byte enables, all bits asserted (full-width writes only).
+--   tx_valid         : Avalon TX channel valid. Held high for the duration of the burst.
 --
 -- ============================================================================
 

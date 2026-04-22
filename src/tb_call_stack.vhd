@@ -131,8 +131,7 @@ begin
         generic map (
             PC_WIDTH        => PC_WIDTH,
             IMEM_ADDR_WIDTH => IMEM_ADDR_WIDTH,
-            WARP_SIZE       => WARP_SIZE,
-            DATA_WIDTH      => DATA_WIDTH
+            WARP_SIZE       => WARP_SIZE
         )
         port map (
             clk             => clk,

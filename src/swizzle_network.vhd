@@ -1,23 +1,12 @@
-library IEEE;
-use IEEE.STD_LOGIC_1164.ALL;
-use IEEE.NUMERIC_STD.ALL;
-
-use work.vector_types_pkg.all;
-use work.processor_constants_pkg.all;
-
---------------------------------------------------------------------------------
--- Swizzle Network
+-- =============================================================================
+-- FILE: swizzle_network.vhd
+-- COMPONENT: Swizzle Network
+-- =============================================================================
 --
 -- This combinational block is responsible for routing and broadcasting vector
 -- components for standard operations. To reduce routing pressure on the FPGA,
 -- it only supports identity passthrough (.xyzw) or single-component broadcast 
 -- (splatting) across the entire vector (e.g., .xxxx, .yyyy).
---
--- Features:
---   - Two independent swizzle channels (A and B).
---   - Integrates Predicate Logic Op routing. If 'is_logic_op' is active, the 
---     network hijacks the inputs and feeds zero-padded predicate bits instead, 
---     allowing bitwise operations to utilize the swizzle routing.
 --
 -- Inputs:
 --   is_logic_op : When '1', zeroes out the standard vectors and uses 'prf_in'.
@@ -28,10 +17,14 @@ use work.processor_constants_pkg.all;
 -- Outputs:
 --   vec_a_out   : 128-bit routed vector ready for the execution pipelines.
 -- 
--- Timing Constraints:
---   This entity is purely combinational (0 cycle latency). All multiplexing
---   and routing resolves in the same clock cycle it is evaluated.
 --------------------------------------------------------------------------------
+
+library IEEE;
+use IEEE.STD_LOGIC_1164.ALL;
+use IEEE.NUMERIC_STD.ALL;
+
+use work.vector_types_pkg.all;
+use work.processor_constants_pkg.all;
 
 entity swizzle_network is
     port (
